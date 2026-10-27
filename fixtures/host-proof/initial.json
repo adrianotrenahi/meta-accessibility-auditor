@@ -1,0 +1,71 @@
+{
+  "protocol": "access-walk/host-v1",
+  "provenance": "saved-engine-records",
+  "run": {
+    "id": "5e0c7eb1-b021-40a8-ba4f-0c27c58631c3",
+    "goal": "Add the canvas bag and open the basket, stopping before review.",
+    "url": "http://127.0.0.1:4340/shop/?case=broken",
+    "state": "running",
+    "mode": "offline",
+    "createdAt": "2026-10-27T12:07:43.551Z",
+    "stopReason": null
+  },
+  "sequence": 1,
+  "captures": [
+    {
+      "id": "bf56ace6-2277-4c43-9896-e6e6802b0067",
+      "sequence": 1,
+      "imageHash": "d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac",
+      "imageAvailable": true,
+      "imageFile": "images/d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac.png",
+      "width": 1440,
+      "height": 900,
+      "url": "http://127.0.0.1:4340/shop/?case=broken",
+      "title": "Everyday Market · controlled demo",
+      "stable": true,
+      "createdAt": "2026-10-27T12:07:44.068Z"
+    }
+  ],
+  "findings": [
+    {
+      "id": "69e0f1b5-6cca-4f3c-b8d9-d8dec4d2a814",
+      "candidateHash": "68c21e5f35a9045392ec08629ceca298352c5e03b48f62ee1c3a19262539a9a9",
+      "reviewHash": "1295f33ca973996fca29c907861355f25b1ffb1a6435c841dff74b8e31b94ea8",
+      "reviewProvenance": "saved-example",
+      "title": "The add-to-basket button has no accessible name",
+      "detail": "The original product page exposes an unnamed button. The saved automatic button-name measurement supports this naming finding; no spoken output is inferred.",
+      "recommendation": "Give the button a useful accessible name such as Add to basket.",
+      "criterion": "C02",
+      "basis": "measured",
+      "severity": "serious",
+      "captureIds": [
+        "bf56ace6-2277-4c43-9896-e6e6802b0067"
+      ],
+      "sourceIds": [
+        "bf56ace6-2277-4c43-9896-e6e6802b0067",
+        "42273ac4-dfbf-4632-86c8-772a3cbe5df0"
+      ],
+      "anchor": {
+        "captureId": "bf56ace6-2277-4c43-9896-e6e6802b0067",
+        "elementId": "e2",
+        "box": {
+          "x": 740,
+          "y": 555.25,
+          "width": 57.890625,
+          "height": 48
+        }
+      }
+    }
+  ],
+  "coverage": {
+    "scope": "limited",
+    "score": null,
+    "realVoiceOver": "not-established",
+    "sam": "not-established"
+  },
+  "limits": [],
+  "cost": {
+    "usageEstimateUsd": 0,
+    "heldUnknownUsd": 0
+  }
+}

@@ -32,7 +32,7 @@ The connector must handle:
 
 A customer starts an audit through the same Cavioo funnel, watches the website in the same browser layout, sees reviewed bubbles using the same pin/card styling and opens the same report. For example, a finding about an unnamed Add to basket button opens that exact product screenshot in Cavioo's existing evidence viewer. It does not open a separate Access Walk report.
 
-The public repository must hold the new engine, compatible connector interfaces, tests and controlled examples as they are implemented. The connector and its compatibility fixtures do not exist yet. Cavioo's pre-existing components remain private and are imported by the Cavioo host. Standalone proofs must run without Cavioo credentials, source or production-service calls. The video and submission identify the existing Cavioo interface and components as prior work, and the new engine and integration as event work.
+The public repository must hold the new engine, compatible connector interfaces, tests and controlled examples as they are implemented. The first versioned saved-record export and controlled compatibility fixtures now exist. The private host proof consumes them through actual Cavioo components; it does not yet connect production jobs or the setup funnel. Cavioo's pre-existing components remain private and are imported by the Cavioo host. Standalone proofs must run without Cavioo credentials, source or production-service calls. The video and submission identify the existing Cavioo interface and components as prior work, and the new engine and integration as event work.
 
 ## Still pending
 
@@ -41,3 +41,40 @@ The public repository must hold the new engine, compatible connector interfaces,
 - **Codex:** compare desktop and 320px views with the existing layout; verify image fitting, pin positions, keyboard/focus behaviour, loading, partial and failed states, duplicate/out-of-order delivery, reconnects and discarded runs. Real VoiceOver proof remains outstanding.
 - **Codex:** preserve the shared original-record architecture and fix the recorded evidence-size, duplication, visual wording and missing-target gaps. The connector must not hide those problems.
 - **Adriano:** inspect the unchanged Cavioo experience after the development proof. Production wiring or activation remains a separate reviewed change; another paid run needs new bounded approval. The $150 allowance and $3 run ceiling are unchanged.
+
+
+## First offline proof on 27 October
+
+The compatibility plan is merged. Coding resumed with `access-walk/host-v1`, a
+strict saved-record export and ordered replay fixtures. The private reader maps
+those records to existing progress, screen and finding readers; the private proof
+imports the actual browser, pin, bubble, screen strip, report and screenshot viewer.
+It does not copy their code into this repository.
+
+The proof uses seven original captures from six real keyboard actions on the
+controlled shop, one saved accepted finding and intermediate states where the
+review becomes stale and the finding disappears. Desktop and 320px checks cover
+exact pin geometry, keyboard bubble opening, stale-review withdrawal, no shop pin
+on the basket, an unscored report, explicit incomplete assessment and the correct
+original image. Repeated/out-of-order delivery and changed originals are tested
+at the host boundary. Original PNG bytes/dimensions are checked by the private
+fixture host. No model calls, credit spend, production calls or database writes
+are involved. The private proof's phone bubble is placed outside the frame's
+clipping boundary while reusing the existing finding component.
+
+This is presentation compatibility for saved records. Real setup → job dispatch,
+authenticated access, continuous browser frames, customer controls, confirmed
+discard and cleanup, production persistence, full scoring and native-reader report
+objects remain unimplemented/unproved. The private wrapper's proof controls and
+local framework shims do not establish the full authenticated product flow or
+full-page visual identity. VoiceOver, SAM, model quality and publication timing
+require their own evidence; a replay does not establish any of them. The green
+standalone viewer remains an engineering harness.
+
+
+Saved-state delivery has a durable revision that advances for run state and
+spending changes even when no new evidence record is added. An unreadable or
+rewritten original is marked unavailable; only claims that depend on it are
+withheld, and unrelated intact originals remain readable. Originals keep their
+identity when availability changes. The controlled proof uses a temporary local
+store; `npm run proof:host -- --port 4341` selects a different free port if needed.

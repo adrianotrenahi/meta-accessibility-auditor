@@ -1,0 +1,205 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Store } from '../src/store.js';
+import { exportHostSnapshot } from '../src/host-export.js';
+import { applyHostSnapshot, hostSnapshotSchema } from '../src/host-contract.js';
+
+function sample() {
+  const dir = mkdtempSync(join(tmpdir(), 'walk-host-')),
+    store = new Store(dir);
+  const run = store.create('Controlled proof', 'https://controlled.example/', 'offline');
+  const asset = store.asset(run.id, 'original.png', Buffer.from('original image bytes'));
+  const capture = store.append(run.id, 'capture', 'browser', {
+    imageFile: asset.file,
+    imageHash: asset.hash,
+    width: 1440,
+    height: 900,
+    url: run.url,
+    title: 'Product',
+    stable: true,
+    elements: [{ id: 'e1', box: { x: 40, y: 50, width: 60, height: 30 } }],
+  });
+  const candidate = store.append(
+    run.id,
+    'candidate',
+    'saved_analyst_response',
+    {
+      title: 'Unnamed button',
+      detail: 'Measured missing name.',
+      recommendation: 'Add a useful name.',
+      criterion: 'C02',
+      basis: 'measured',
+      severity: 'serious',
+      targetId: 'e1',
+      privateMemo: 'DO_NOT_EXPORT',
+    },
+    [capture.id],
+  );
+  function review(verdict = 'keep') {
+    const read = store.snapshot(run.id, 'reviewer');
+    return store.append(
+      run.id,
+      'review',
+      'saved_reviewer_response',
+      {
+        candidateId: candidate.id,
+        candidateHash: candidate.hash,
+        verdict,
+        title: candidate.payload.title,
+        sources: [capture.id],
+        readSnapshotId: read.read.id,
+      },
+      [candidate.id, capture.id, read.read.id],
+    );
+  }
+  return {
+    store,
+    run,
+    capture,
+    candidate,
+    review,
+    close: () => {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+test('Host export contains accepted exact versions and original image identity, without model internals', () => {
+  const x = sample();
+  try {
+    assert.equal(exportHostSnapshot(x.store, x.run.id).snapshot.findings.length, 0);
+    const review = x.review();
+    x.store.append(x.run.id, 'model_response', 'analyst', { privatePrompt: 'DO_NOT_EXPORT' });
+    const { snapshot, assets } = exportHostSnapshot(x.store, x.run.id);
+    assert.equal(snapshot.findings[0].candidateHash, x.candidate.hash);
+    assert.equal(snapshot.findings[0].reviewHash, review.hash);
+    assert.equal(snapshot.findings[0].anchor?.captureId, x.capture.id);
+    assert.deepEqual(snapshot.findings[0].anchor?.box, { x: 40, y: 50, width: 60, height: 30 });
+    assert(assets.has(snapshot.captures[0].imageFile));
+    assert(!JSON.stringify(snapshot).includes('DO_NOT_EXPORT'));
+    assert.equal(snapshot.coverage.score, null);
+    assert.equal(snapshot.coverage.realVoiceOver, 'not-established');
+    assert.equal(snapshot.findings[0].reviewProvenance, 'saved-example');
+  } finally {
+    x.close();
+  }
+});
+
+test('A later rejection withdraws a finding, and duplicate or stale delivery cannot restore it', () => {
+  const x = sample();
+  try {
+    x.review();
+    const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+    x.review('reject');
+    const withdrawn = exportHostSnapshot(x.store, x.run.id).snapshot;
+    const current = applyHostSnapshot(first, withdrawn);
+    assert.equal(current.findings.length, 0);
+    assert.equal(applyHostSnapshot(current, first), current);
+    assert.equal(applyHostSnapshot(current, withdrawn), current);
+  } finally {
+    x.close();
+  }
+});
+
+test('Cross-run delivery, changed originals, foreign anchors and extra private fields are refused', () => {
+  const x = sample();
+  try {
+    x.review();
+    const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.throws(
+      () =>
+        applyHostSnapshot(first, {
+          ...first,
+          run: { ...first.run, id: 'other' },
+          sequence: first.sequence + 1,
+        }),
+      /different run/,
+    );
+    assert.throws(
+      () =>
+        applyHostSnapshot(first, {
+          ...first,
+          sequence: first.sequence + 1,
+          captures: first.captures.map((c) => ({ ...c, title: 'Wrong original' })),
+        }),
+      /cannot be changed/,
+    );
+    const wrongAnchor = structuredClone(first);
+    wrongAnchor.findings[0].anchor!.captureId = 'foreign';
+    assert.equal(hostSnapshotSchema.safeParse(wrongAnchor).success, false);
+    assert.equal(
+      hostSnapshotSchema.safeParse({ ...first, privateKey: 'DO_NOT_EXPORT' }).success,
+      false,
+    );
+    const wrongImage = structuredClone(first);
+    wrongImage.captures[0].imageFile = '../.env';
+    assert.equal(hostSnapshotSchema.safeParse(wrongImage).success, false);
+  } finally {
+    x.close();
+  }
+});
+
+test('Run completion, recovery and cost changes advance the persisted host revision without new evidence', () => {
+  const x = sample();
+  try {
+    const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.equal(exportHostSnapshot(x.store, x.run.id).snapshot.sequence, first.sequence);
+    x.store.finish(x.run.id, 'partial', 'Stopped at a safe boundary');
+    const ended = exportHostSnapshot(x.store, x.run.id).snapshot;
+    const reopened = new Store(x.store.dir);
+    try {
+      assert.equal(exportHostSnapshot(reopened, x.run.id).snapshot.sequence, ended.sequence);
+    } finally {
+      reopened.close();
+    }
+    assert(ended.sequence > first.sequence);
+    assert.equal(applyHostSnapshot(first, ended).run.state, 'partial');
+    const run = x.store.create('Recovery', 'https://controlled.example/', 'offline');
+    const before = exportHostSnapshot(x.store, run.id).snapshot;
+    x.store.recoverInterrupted();
+    const after = exportHostSnapshot(x.store, run.id).snapshot;
+    assert(after.sequence > before.sequence);
+    assert.equal(applyHostSnapshot(before, after).run.state, 'interrupted');
+    x.store.db
+      .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
+      .run('test-charge', run.id, 'analyst', 100, null, 'unknown', new Date().toISOString());
+    const cost = exportHostSnapshot(x.store, run.id).snapshot;
+    assert(cost.sequence > after.sequence);
+    assert.equal(cost.cost.heldUnknownUsd, 0.0001);
+  } finally {
+    x.close();
+  }
+});
+
+test('One unavailable screenshot withholds its claim without hiding unrelated intact evidence', () => {
+  const x = sample();
+  try {
+    x.review();
+    const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+    const broken = x.store.append(
+      x.run.id,
+      'capture',
+      'browser',
+      { ...x.capture.payload, imageFile: 'missing.png' },
+      [],
+    );
+    x.review();
+    const later = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.equal(later.captures.find((c) => c.id === broken.id)?.imageAvailable, false);
+    assert.equal(later.findings.length, 1);
+    assert(later.limits.some((line) => line.includes('unavailable')));
+    assert.equal(applyHostSnapshot(first, later).captures.length, 2);
+    rmSync(join(x.store.dir, x.run.id, x.capture.payload.imageFile));
+    const missing = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.equal(missing.findings.length, 0);
+    assert.equal(missing.captures[0].imageAvailable, false);
+    assert(missing.sequence > later.sequence);
+    assert.equal(applyHostSnapshot(later, missing).captures.length, 2);
+  } finally {
+    x.close();
+  }
+});

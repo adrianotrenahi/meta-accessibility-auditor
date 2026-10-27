@@ -15,7 +15,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS records(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,run_id TEXT NOT NULL REFERENCES runs(id),kind TEXT NOT NULL,author TEXT NOT NULL,body TEXT NOT NULL,sources TEXT NOT NULL,hash TEXT NOT NULL,created TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id),role TEXT NOT NULL,reserved INTEGER NOT NULL,actual INTEGER,status TEXT NOT NULL,created TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS records_run ON records(run_id,seq);`);
+      CREATE INDEX IF NOT EXISTS records_run ON records(run_id,seq);
+      CREATE TABLE IF NOT EXISTS host_versions(run_id TEXT PRIMARY KEY REFERENCES runs(id), hash TEXT NOT NULL, version INTEGER NOT NULL);`);
   }
   recoverInterrupted() {
     for (const run of this.runs())
@@ -57,6 +58,27 @@ export class Store {
     r.state = state;
     r.stopReason = reason;
     this.db.prepare('UPDATE runs SET body=? WHERE id=?').run(JSON.stringify(r), id);
+  }
+  /** Durable delivery revision covers state/cost changes as well as evidence. */
+  hostRevision(runId: string, hash: string): number {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.run(runId);
+      const previous = this.db
+        .prepare('SELECT hash,version FROM host_versions WHERE run_id=?')
+        .get(runId) as { hash: string; version: number } | undefined;
+      const version = previous?.hash === hash ? previous.version : (previous?.version ?? 0) + 1;
+      this.db
+        .prepare(
+          'INSERT INTO host_versions VALUES(?,?,?) ON CONFLICT(run_id) DO UPDATE SET hash=excluded.hash,version=excluded.version',
+        )
+        .run(runId, hash, version);
+      this.db.exec('COMMIT');
+      return version;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   append(
     runId: string,
