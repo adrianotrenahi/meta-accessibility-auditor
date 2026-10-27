@@ -25,7 +25,16 @@ function capture(id: string, selector = '#add') {
   return record(id, 'capture', {
     url: 'http://127.0.0.1:4317/shop/',
     elements: [
-      { id: 'e0', selector, tag: 'button', role: 'button', name: '', text: '+', type: '' },
+      {
+        id: 'e0',
+        selector,
+        contextFingerprint: 'a'.repeat(64),
+        tag: 'button',
+        role: 'button',
+        name: '',
+        text: '+',
+        type: '',
+      },
     ],
   });
 }
@@ -182,4 +191,78 @@ test('Missing source or target identity and legacy claims do not merge by shared
     groupPublished(candidates.map(finding), [original, ambiguous, ...candidates]).length,
     6,
   );
+});
+
+test('Positional slots in separate captures never establish a persistent control identity', () => {
+  for (const selector of [
+    'article:nth-of-type(1) > button:nth-of-type(1)',
+    '#products > button:nth-of-type(1)',
+  ]) {
+    const first = capture('first', selector),
+      replacement = capture('replacement', selector);
+    const before = candidate('before-product-replacement', first.id);
+    const after = candidate('after-product-replacement', replacement.id);
+    assert.equal(
+      groupPublished([finding(before), finding(after)], [first, replacement, before, after]).length,
+      2,
+      'The same list position, URL, label and even matching container markup do not establish persistence.',
+    );
+    const repeated = candidate('same-original-again', first.id, { basis: 'mixed' });
+    assert.equal(
+      groupPublished([finding(before), finding(repeated)], [first, before, repeated]).length,
+      1,
+      'The exact same captured control may still group repeated accepted claims.',
+    );
+  }
+});
+
+test('A reused own ID with different original context cannot merge different products', () => {
+  const first = capture('first'),
+    replacement = capture('replacement');
+  replacement.payload.elements[0].contextFingerprint = 'b'.repeat(64);
+  const before = candidate('before-product-replacement', first.id);
+  const after = candidate('after-product-replacement', replacement.id);
+  assert.equal(
+    groupPublished([finding(before), finding(after)], [first, replacement, before, after]).length,
+    2,
+  );
+});
+
+test('Old captures without a context fingerprint remain capture-bound even when an own ID matches', () => {
+  const first = capture('first'),
+    later = capture('later');
+  delete first.payload.elements[0].contextFingerprint;
+  delete later.payload.elements[0].contextFingerprint;
+  const before = candidate('before', first.id),
+    after = candidate('after', later.id);
+  assert.equal(
+    groupPublished([finding(before), finding(after)], [first, later, before, after]).length,
+    2,
+  );
+});
+
+test('An escaped own ID and matching original context may group across captures', () => {
+  const first = capture('first', '#product\\:add'),
+    later = capture('later', '#product\\:add');
+  const before = candidate('before', first.id),
+    after = candidate('after', later.id, { basis: 'mixed' });
+  assert.equal(
+    groupPublished([finding(before), finding(after)], [first, later, before, after]).length,
+    1,
+  );
+});
+
+test('Malformed context fingerprints cannot establish cross-capture identity', () => {
+  for (const fingerprint of ['', 'not-a-fingerprint', 'A'.repeat(64), 123, null]) {
+    const first = capture('first'),
+      later = capture('later');
+    first.payload.elements[0].contextFingerprint = fingerprint;
+    later.payload.elements[0].contextFingerprint = fingerprint;
+    const before = candidate('before', first.id),
+      after = candidate('after', later.id);
+    assert.equal(
+      groupPublished([finding(before), finding(after)], [first, later, before, after]).length,
+      2,
+    );
+  }
 });

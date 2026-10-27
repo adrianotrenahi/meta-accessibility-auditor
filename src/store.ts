@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { RecordEntry, RecordKind, Role, Run, RunState, Approval } from './types.js';
 import { LIMITS, PHASE, CAPS } from './types.js';
 import { groupPublished } from './finding-key.js';
+import { presentRecordPayload } from './presentation.js';
 export const digest = (value: string | Uint8Array) =>
   createHash('sha256').update(value).digest('hex');
 export const recordIsIntact = (record: RecordEntry) =>
@@ -327,10 +328,10 @@ export class Store {
           .at(-1)?.seq ?? 0;
       if (read.payload.throughSeq < latestEvidence) continue;
       out.push({
-        ...candidate.payload,
+        ...presentRecordPayload(candidate.payload),
         id: candidate.id,
         title: review.payload.title || candidate.payload.title,
-        review: review.payload,
+        review: presentRecordPayload(review.payload),
         evidence: candidate.sources,
       });
     }

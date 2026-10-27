@@ -13,11 +13,21 @@ export function findingKey(candidate: RecordEntry, records: RecordEntry[]) {
     ]);
   const capture = records.find((r) => r.id === c.targetCaptureId && r.kind === 'capture');
   const target = capture?.payload.elements.find((e: any) => e.id === c.targetId);
-  if (c.scope === 'element' && capture && target?.selector)
+  if (c.scope === 'element' && capture && target?.selector) {
+    // A list position or an ancestor's ID does not identify a persistent control.
+    // Even an own ID can be reused: require the captured surrounding HTML to match too.
+    const ownId = /^#(?:\\.|[A-Za-z0-9_-]|[^\u0000-\u007f])+$/u.test(target.selector);
+    const context =
+      typeof target.contextFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(target.contextFingerprint)
+        ? target.contextFingerprint
+        : null;
+    const acrossCaptures = ownId && context;
     return JSON.stringify([
       'element',
       c.issueKey,
       c.criterion,
+      acrossCaptures ? ['own-id-and-context', context] : ['exact-capture', capture.id, target.id],
       capture.payload.url,
       target.selector,
       target.tag,
@@ -26,6 +36,7 @@ export function findingKey(candidate: RecordEntry, records: RecordEntry[]) {
       target.text,
       target.type,
     ]);
+  }
   // Missing original identity cannot be replaced by a shared URL or similar wording.
   return candidate.id;
 }

@@ -13,7 +13,7 @@ import {
 import type { RecordEntry, Run } from './types.js';
 import { approval, safeError } from './config.js';
 import { mapElement } from './segmentation.js';
-import { requestEvidence } from './request-evidence.js';
+import { EvidenceRequestLimit, requestEvidence } from './request-evidence.js';
 import { candidateTarget } from './candidate-target.js';
 export class Runner {
   active?: { run: Run; walk: BrowserWalk; probe: VoiceOverProbe; controller: AbortController };
@@ -406,14 +406,20 @@ export class Runner {
     try {
       await this.analyse(models, run, current, walk, signal);
     } catch (error) {
-      if (!(error instanceof IncompleteModelResult) || signal.aborted) throw error;
+      if (
+        !(error instanceof IncompleteModelResult || error instanceof EvidenceRequestLimit) ||
+        signal.aborted
+      )
+        throw error;
       this.store.append(
         run.id,
         'limit',
         error.role,
         {
           reason:
-            'An analysis or review response ended before returning a result. Navigation continues; this checkpoint remains incomplete.',
+            error instanceof EvidenceRequestLimit
+              ? `${error.message} Navigation continues; no over-limit request was sent.`
+              : 'An analysis or review response ended before returning a result. Navigation continues; this checkpoint remains incomplete.',
           checkpointCaptureId: current.id,
         },
         [current.id],

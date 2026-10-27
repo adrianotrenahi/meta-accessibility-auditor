@@ -1,6 +1,12 @@
 import { recordIsIntact, type Store } from './store.js';
 import type { RecordEntry, Role } from './types.js';
 
+export class EvidenceRequestLimit extends Error {
+  constructor(public role: Exclude<Role, 'sam'>) {
+    super('Required original screens exceed this request allowance; review remains incomplete.');
+  }
+}
+
 /** Retrieve originals from the shared pool, never another role's summary. */
 export function originalClosure(records: RecordEntry[], ids: string[]) {
   const selected = new Set<string>();
@@ -42,9 +48,7 @@ export function requestEvidence(
   const originals = originalClosure(records, roots);
   const captureIds = new Set(originals.filter((r) => r.kind === 'capture').map((r) => r.id));
   if (captureIds.size > (role === 'reviewer' ? 8 : role === 'analyst' ? 3 : 1))
-    throw Error(
-      'Required original screens exceed this request allowance; review remains incomplete.',
-    );
+    throw new EvidenceRequestLimit(role);
   roots = originals.map((r) => r.id);
   // Measurements and reader results for the selected originals are read directly too.
   for (const r of records)

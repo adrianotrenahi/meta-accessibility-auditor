@@ -141,6 +141,22 @@ export class BrowserWalk {
   private async captureOnce(): Promise<RecordEntry> {
     this.assertActive();
     const before = await this.observedState();
+    const contextFingerprint = await this.page.locator('body').evaluate(async (body) => {
+      // A nested form/wrapper can omit the product title or image. Use the whole original body.
+      // Only its local fingerprint is retained, never additional raw context HTML.
+      const html = body.outerHTML;
+      if (!globalThis.crypto?.subtle) return undefined;
+      const bytes = new TextEncoder().encode(html);
+      try {
+        const fingerprint = await crypto.subtle.digest('SHA-256', bytes);
+        return [...new Uint8Array(fingerprint)]
+          .map((byte) => byte.toString(16).padStart(2, '0'))
+          .join('');
+      } catch {
+        // Optional grouping metadata cannot abort a useful observation.
+        return undefined;
+      }
+    });
     const elements = [];
     const locators = this.page.locator(controls);
     const count = Math.min(await locators.count(), 60);
@@ -149,34 +165,36 @@ export class BrowserWalk {
       if (!(await locator.isVisible().catch(() => false))) continue;
       const box = await locator.boundingBox();
       if (!box) continue;
-      const info = await locator.evaluate((e) => ({
-        selector: (() => {
-          const parts: string[] = [];
-          let current: Element | null = e;
-          while (current) {
-            if (current.id) {
-              parts.unshift('#' + CSS.escape(current.id));
-              break;
+      const info = await locator.evaluate((e) => {
+        return {
+          selector: (() => {
+            const parts: string[] = [];
+            let current: Element | null = e;
+            while (current) {
+              if (current.id) {
+                parts.unshift('#' + CSS.escape(current.id));
+                break;
+              }
+              const tag = current.tagName.toLowerCase();
+              const siblings = current.parentElement
+                ? [...current.parentElement.children].filter((s) => s.tagName === current!.tagName)
+                : [current];
+              parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')');
+              current = current.parentElement;
             }
-            const tag = current.tagName.toLowerCase();
-            const siblings = current.parentElement
-              ? [...current.parentElement.children].filter((s) => s.tagName === current!.tagName)
-              : [current];
-            parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')');
-            current = current.parentElement;
-          }
-          return parts.join(' > ');
-        })(),
-        tag: e.tagName.toLowerCase(),
-        text: (e.textContent ?? '').trim().slice(0, 200),
-        type: e.getAttribute('type') ?? '',
-        disabled: e.hasAttribute('disabled'),
-      }));
+            return parts.join(' > ');
+          })(),
+          tag: e.tagName.toLowerCase(),
+          text: (e.textContent ?? '').trim().slice(0, 200),
+          type: e.getAttribute('type') ?? '',
+          disabled: e.hasAttribute('disabled'),
+        };
+      });
       const aria = await locator.ariaSnapshot({ depth: 1 });
       const first = aria.split('\n')[0] ?? '';
       const role = first.match(/^- ([a-z]+)/)?.[1] ?? info.tag;
       const name = first.match(/"((?:\\.|[^"])*)"/)?.[1] ?? '';
-      elements.push({ ...info, id: `e${i}`, role, name, box });
+      elements.push({ ...info, contextFingerprint, id: `e${i}`, role, name, box });
     }
     const image = await this.page.screenshot({ type: 'png', animations: 'disabled' });
     const visibleText = await this.page.locator('body').innerText();

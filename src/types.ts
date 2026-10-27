@@ -37,6 +37,7 @@ export interface RecordEntry {
 export interface ElementInfo {
   id: string;
   selector?: string;
+  contextFingerprint?: string;
   tag: string;
   role: string;
   name: string;

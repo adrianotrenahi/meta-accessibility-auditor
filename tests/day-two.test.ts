@@ -30,6 +30,7 @@ function setup() {
         {
           id: 'e0',
           selector,
+          contextFingerprint: 'a'.repeat(64),
           tag: 'button',
           role: 'button',
           name: '',
