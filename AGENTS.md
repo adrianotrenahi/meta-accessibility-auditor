@@ -5,7 +5,7 @@ This is a fresh hackathon audit engine that must plug into Cavioo's existing fun
 Standalone proofs must not call Cavioo production services or endpoints. Keep the concrete private-component mapping in the private integration plan; public documentation can describe the roles to connect.
 
 - Required product direction: preserve Cavioo's existing layout, components, design tokens, labels and interaction patterns. Use the actual components in the Cavioo host, rather than drawing replacements. The current standalone green interface is an engineering test harness, not the approved product design. Follow docs/CAVIOO-COMPATIBILITY.md before further interface work.
-- Current work is paused for this compatibility plan update. Do not treat documentation as proof that the Cavioo connection is implemented, or resume a redesign while the pause is in effect.
+- The owner resumed Cavioo compatibility work on 27 October. Start with saved-record compatibility proofs in the private host. Documentation or replay alone does not prove production integration or a live browser stream.
 
 - Explain changes in plain English, with a concrete example.
 - Current owner instruction: no model-credit spending. A key is not permission. Keep live launch disabled until the owner separately approves a bounded batch.

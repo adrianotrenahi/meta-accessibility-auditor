@@ -1,0 +1,17 @@
+{
+  "protocol": "access-walk/replay-v1",
+  "snapshots": [
+    "initial.json",
+    "after-action-1.json",
+    "after-action-2.json",
+    "after-action-3.json",
+    "after-action-4.json",
+    "after-action-5.json",
+    "after-action-6.json",
+    "final.json"
+  ],
+  "label": "Offline compatibility proof: real controlled browser captures, saved analysis/review examples, no model calls.",
+  "liveFrameCaptureProven": false,
+  "modelCalls": 0,
+  "creditsSpent": 0
+}

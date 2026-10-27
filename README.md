@@ -2,7 +2,7 @@
 
 A fresh Meta hackathon project that investigates barriers to completing website tasks with keyboards and screen readers. Access Walk is a working name.
 
-The product target is a new walk that plugs into Cavioo's existing audit flow and keeps its current visuals: the browser during the run, finding bubbles, then the existing report with each screen's screenshots. Reuse the actual Cavioo components inside the private Cavioo app. The green standalone interface below is an engineering test harness; Cavioo integration is planned and is not implemented yet. See [Cavioo compatibility](docs/CAVIOO-COMPATIBILITY.md). The public engine remains independently runnable and contains no pre-existing Cavioo source.
+The product target is a new walk that plugs into Cavioo's existing audit flow and keeps its current visuals: the browser during the run, finding bubbles, then the existing report with each screen's screenshots. Reuse the actual Cavioo components inside the private Cavioo app. The green standalone interface below is an engineering test harness; Saved-record presentation compatibility is now proved in the private Cavioo host; the setup funnel, live transport and production integration remain pending. See [Cavioo compatibility](docs/CAVIOO-COMPATIBILITY.md). The public engine remains independently runnable and contains no pre-existing Cavioo source.
 
 The application saves one original walk, navigator notes, page images, measurements and screen-reader records. Analysis and review read that same evidence independently. Only reviewed findings reach the viewer.
 
@@ -85,3 +85,21 @@ Keep every change on a branch and reviewed through a pull request. Do not merge 
 - [Playwright accessibility testing](https://playwright.dev/docs/accessibility-testing)
 
 Third-party dependencies retain their own licences. No licence for the newly written application has been chosen yet.
+
+
+## Saved host records
+
+`npm run proof:host` generates `fixtures/host-proof`: seven real controlled-browser
+captures, six keyboard actions, eight ordered host snapshots and a saved analyst/
+reviewer example. It makes zero model requests and spends $0. The export uses
+`access-walk/host-v1`, includes only currently accepted exact claim versions, and
+preserves original image fingerprints, dimensions and source anchors. A later
+withdrawal removes a finding; stale replay cannot restore it. It intentionally
+carries no complete Cavioo score or VoiceOver/SAM completion claim.
+
+A separate private host proof imports Cavioo's actual browser, pin/bubble, report
+and screenshot-viewer components at desktop and 320px. Cavioo's source remains
+private. This public fixture is independently runnable and includes only this
+project's controlled pages and newly written saved-response examples. Recorded
+captures are not proof of a live video stream, model accuracy or production
+integration. See [compatibility scope](docs/CAVIOO-COMPATIBILITY.md).

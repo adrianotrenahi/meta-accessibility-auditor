@@ -1,0 +1,64 @@
+{
+  "protocol": "access-walk/host-v1",
+  "provenance": "saved-engine-records",
+  "run": {
+    "id": "78bca187-850e-487f-ac82-5b9b01e749e1",
+    "goal": "Add the canvas bag and open the basket, stopping before review.",
+    "url": "http://127.0.0.1:4340/shop/?case=broken",
+    "state": "running",
+    "mode": "offline",
+    "createdAt": "2026-10-27T11:44:39.209Z",
+    "stopReason": null
+  },
+  "sequence": 29,
+  "captures": [
+    {
+      "id": "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69",
+      "sequence": 21,
+      "imageHash": "d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac",
+      "imageFile": "images/d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac.png",
+      "width": 1440,
+      "height": 900,
+      "url": "http://127.0.0.1:4340/shop/?case=broken",
+      "title": "Everyday Market · controlled demo",
+      "stable": true,
+      "createdAt": "2026-10-27T11:44:39.717Z"
+    },
+    {
+      "id": "6790ce9e-ce7d-45d7-ad15-d914dd48a585",
+      "sequence": 27,
+      "imageHash": "a516c11e285a3a3493a3b778a1d96f490f757211c479d30a5246146c87af33a1",
+      "imageFile": "images/a516c11e285a3a3493a3b778a1d96f490f757211c479d30a5246146c87af33a1.png",
+      "width": 1440,
+      "height": 900,
+      "url": "http://127.0.0.1:4340/shop/?case=broken",
+      "title": "Everyday Market · controlled demo",
+      "stable": true,
+      "createdAt": "2026-10-27T11:44:40.283Z"
+    },
+    {
+      "id": "72e9818c-f9ca-4768-ac04-7cc22687d20e",
+      "sequence": 29,
+      "imageHash": "3dece988bd88eec5dfba70f533d13bda198fba1a80b7945ca7906ef9ac9f1b10",
+      "imageFile": "images/3dece988bd88eec5dfba70f533d13bda198fba1a80b7945ca7906ef9ac9f1b10.png",
+      "width": 1440,
+      "height": 900,
+      "url": "http://127.0.0.1:4340/shop/?case=broken",
+      "title": "Everyday Market · controlled demo",
+      "stable": true,
+      "createdAt": "2026-10-27T11:44:40.550Z"
+    }
+  ],
+  "findings": [],
+  "coverage": {
+    "scope": "limited",
+    "score": null,
+    "realVoiceOver": "not-established",
+    "sam": "not-established"
+  },
+  "limits": [],
+  "cost": {
+    "usageEstimateUsd": 0,
+    "heldUnknownUsd": 0
+  }
+}
