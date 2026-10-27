@@ -48,7 +48,10 @@ try {
   );
   assert.equal(app.store.runs().length, 0, 'A delayed start cannot recreate a discarded request');
   const run = (
-    await request('/api/host/runs', 'POST', { mode: 'offline', requestId: randomUUID() })
+    await request('/api/host/runs', 'POST', {
+      mode: 'offline',
+      requestId: randomUUID().toUpperCase(),
+    })
   ).body;
   const requestId = app.store.db
     .prepare('SELECT request_id FROM host_starts WHERE run_id=?')
@@ -56,6 +59,10 @@ try {
   assert.equal(
     (await request('/api/host/runs', 'POST', { mode: 'offline', requestId: requestId.request_id }))
       .body.id,
+    run.id,
+  );
+  assert.equal(
+    (await request(`/api/host/requests/${requestId.request_id.toUpperCase()}`)).body.id,
     run.id,
   );
   let current = await waiting(run.id);
@@ -86,6 +93,28 @@ try {
   assert.match(current.snapshot.captures.at(-1).url, /basket/);
   assert.equal(current.snapshot.findings.length, 1);
   assert.equal(app.store.usage(run.id).requests.length, 0);
+  const original = app.store.records(run.id).find((r) => r.kind === 'capture')!;
+  const originalBytes = app.store.image(run.id, original.payload.imageFile);
+  const duplicate = app.store.asset(run.id, 'intact-duplicate.png', originalBytes);
+  const intact = app.store.append(run.id, 'capture', 'browser', {
+    ...original.payload,
+    imageFile: duplicate.file,
+  });
+  rmSync(join(dir, run.id, original.payload.imageFile));
+  const exportWithMissing = (await request('/api/host/runs/' + run.id)).body.snapshot;
+  assert.equal(
+    exportWithMissing.captures.find((c: any) => c.id === original.id).imageAvailable,
+    false,
+  );
+  assert.equal(
+    exportWithMissing.captures.find((c: any) => c.id === intact.id).imageAvailable,
+    true,
+  );
+  const intactResponse = await fetch(`${app.origin}/api/host/runs/${run.id}/assets/${image}.png`, {
+    headers: { 'x-session-token': app.token },
+  });
+  assert.equal(intactResponse.status, 200);
+  assert.deepEqual(Buffer.from(await intactResponse.arrayBuffer()), originalBytes);
   await request('/api/host/runs/' + run.id + '/discard', 'POST', {});
   assert.equal((await request('/api/host/runs/' + run.id)).status, 404);
   assert.equal(
@@ -102,6 +131,20 @@ try {
       .status,
     409,
   );
+  const upperDiscard = randomUUID().toUpperCase();
+  assert.equal(
+    (await request(`/api/host/requests/${upperDiscard}/discard`, 'POST', {})).status,
+    200,
+  );
+  assert.equal(
+    (
+      await request('/api/host/runs', 'POST', {
+        mode: 'offline',
+        requestId: upperDiscard.toLowerCase(),
+      })
+    ).status,
+    409,
+  );
   const next = (
     await request('/api/host/runs', 'POST', { mode: 'offline', requestId: randomUUID() })
   ).body;
@@ -109,7 +152,31 @@ try {
   await request('/api/host/runs/' + next.id + '/stop', 'POST', {});
   assert.equal((await request('/api/host/runs/' + next.id)).body.snapshot.run.state, 'stopped');
   assert(existsSync(join(dir, next.id)));
-  await request('/api/host/runs/' + next.id + '/discard', 'POST', {});
+  const nextRequest = app.store.db
+    .prepare('SELECT request_id FROM host_starts WHERE run_id=?')
+    .get(next.id) as { request_id: string };
+  const cleanup = (app.store as any).cleanupDiscard;
+  (app.store as any).cleanupDiscard = () => {
+    throw Error('Simulated unavailable image cleanup');
+  };
+  assert.equal(
+    (await request(`/api/host/requests/${nextRequest.request_id}/discard`, 'POST', {})).status,
+    400,
+  );
+  const pendingDiscard = (await request(`/api/host/requests/${nextRequest.request_id}`)).body;
+  assert.equal(pendingDiscard.discarded, false);
+  assert.equal(pendingDiscard.discardPending, true);
+  assert.equal(pendingDiscard.id, next.id);
+  (app.store as any).cleanupDiscard = cleanup;
+  assert.equal(
+    (await request(`/api/host/requests/${nextRequest.request_id}/discard`, 'POST', {})).status,
+    200,
+  );
+  assert.equal(existsSync(join(dir, next.id)), false);
+  assert.equal(
+    (await request(`/api/host/requests/${nextRequest.request_id}`)).body.discarded,
+    true,
+  );
   assert.equal(app.store.records(next.id).length, 0);
   console.log(
     JSON.stringify({

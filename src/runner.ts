@@ -37,7 +37,7 @@ export class Runner {
     if (prior) return prior;
     const work = (async () => {
       if (this.active?.run.id === id) await this.stop(id);
-      if (this.store.hasRun(id)) this.store.discard(id);
+      this.store.discard(id);
     })();
     this.discarding.set(id, work);
     try {

@@ -18,6 +18,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS records_run ON records(run_id,seq);
       CREATE TABLE IF NOT EXISTS host_starts(request_id TEXT PRIMARY KEY,run_id TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS host_discarded_starts(request_id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS discard_cleanup(run_id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS discarded_usage(id TEXT PRIMARY KEY,role TEXT NOT NULL,reserved INTEGER NOT NULL,actual INTEGER,status TEXT NOT NULL,created TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS host_versions(run_id TEXT PRIMARY KEY REFERENCES runs(id), hash TEXT NOT NULL, version INTEGER NOT NULL);`);
   }
@@ -35,6 +36,7 @@ export class Store {
     this.db.close();
   }
   create(goal: string, url: string, mode: Run['mode'], requestId?: string): Run {
+    requestId = requestId?.toLowerCase();
     const run: Run = {
       id: randomUUID(),
       goal,
@@ -69,7 +71,7 @@ export class Store {
   hostStart(requestId: string): string | null {
     const row = this.db
       .prepare('SELECT run_id FROM host_starts WHERE request_id=?')
-      .get(requestId) as { run_id: string } | undefined;
+      .get(requestId.toLowerCase()) as { run_id: string } | undefined;
     return row?.run_id ?? null;
   }
   hasRun(id: string): boolean {
@@ -78,19 +80,33 @@ export class Store {
   hostStartDiscarded(requestId: string): boolean {
     return !!this.db
       .prepare('SELECT 1 FROM host_discarded_starts WHERE request_id=?')
-      .get(requestId);
+      .get(requestId.toLowerCase());
   }
   discardHostStart(requestId: string) {
-    this.db.prepare('INSERT OR IGNORE INTO host_discarded_starts VALUES(?)').run(requestId);
+    this.db
+      .prepare('INSERT OR IGNORE INTO host_discarded_starts VALUES(?)')
+      .run(requestId.toLowerCase());
     return this.hostStart(requestId);
+  }
+  discardPending(id: string) {
+    return !!this.db.prepare('SELECT 1 FROM discard_cleanup WHERE run_id=?').get(id);
   }
   /** Called only after the runner has stopped all writes for this run. */
   discard(id: string) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw Error('Invalid run identity.');
-    if (!this.hasRun(id)) return;
+    if (!this.hasRun(id)) {
+      if (this.discardPending(id)) this.cleanupDiscard(id);
+      return;
+    }
     if (this.run(id).state === 'running') throw Error('Stop the run before discarding evidence.');
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      this.db.prepare('INSERT OR IGNORE INTO discard_cleanup VALUES(?)').run(id);
+      this.db
+        .prepare(
+          'INSERT OR IGNORE INTO host_discarded_starts SELECT request_id FROM host_starts WHERE run_id=?',
+        )
+        .run(id);
       this.db
         .prepare(
           'INSERT OR IGNORE INTO discarded_usage SELECT id,role,reserved,actual,status,created FROM requests WHERE run_id=?',
@@ -100,12 +116,17 @@ export class Store {
       this.db.prepare('DELETE FROM host_versions WHERE run_id=?').run(id);
       this.db.prepare('DELETE FROM records WHERE run_id=?').run(id);
       this.db.prepare('DELETE FROM runs WHERE id=?').run(id);
-      rmSync(join(this.dir, id), { recursive: true, force: true });
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
     }
+    this.cleanupDiscard(id);
+  }
+  private cleanupDiscard(id: string) {
+    rmSync(join(this.dir, id), { recursive: true, force: true });
+    this.db.prepare('DELETE FROM host_starts WHERE run_id=?').run(id);
+    this.db.prepare('DELETE FROM discard_cleanup WHERE run_id=?').run(id);
   }
   finish(id: string, state: RunState, reason?: string) {
     const r = this.run(id);

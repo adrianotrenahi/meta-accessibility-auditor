@@ -119,6 +119,11 @@ evidence; confirmed discard waits for cleanup and removes the run and originals.
 Minimal incurred/uncertain cost records remain so deletion cannot reset the
 project spending limit. No action enables paid inference.
 
+Discard status distinguishes requested cleanup from confirmed removal. Failed
+record deletion leaves original image files intact; failed file removal keeps an
+ID-only cleanup record so a repeated discard can finish it after restart. Completed
+start mappings are replaced by minimal discarded-start identifiers.
+
 `npm run proof:host-controls` checks a fresh headless browser walk, source-bound
 accepted finding, repeated starts, stale advances, ordinary Stop, confirmed
 discard and original-image removal with zero model calls. Native VoiceOver,

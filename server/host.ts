@@ -55,7 +55,10 @@ export async function hostRequest(
         .strict()
         .parse(body);
       if (store.hostStartDiscarded(body.requestId)) {
-        json(res, 409, { error: 'This start was discarded. A retry cannot recreate it.' });
+        json(res, 409, {
+          error:
+            'Discard was requested for this start. Retry discard to finish any remaining cleanup; starting it again is refused.',
+        });
         return;
       }
       const prior = store.hostStart(body.requestId);
@@ -81,7 +84,7 @@ export async function hostRequest(
       json(res, 201, { id: run.id });
       return;
     }
-    const discardStart = url.pathname.match(/^\/api\/host\/requests\/([a-f0-9-]{36})\/discard$/);
+    const discardStart = url.pathname.match(/^\/api\/host\/requests\/([a-f0-9-]{36})\/discard$/i);
     if (discardStart) {
       z.object({}).strict().parse(body);
       const id = store.discardHostStart(discardStart[1]);
@@ -123,12 +126,15 @@ export async function hostRequest(
       return;
     }
   }
-  const requested = url.pathname.match(/^\/api\/host\/requests\/([a-f0-9-]{36})$/);
+  const requested = url.pathname.match(/^\/api\/host\/requests\/([a-f0-9-]{36})$/i);
   if (requested && req.method === 'GET') {
     const id = store.hostStart(requested[1]);
+    const requestedDiscard = store.hostStartDiscarded(requested[1]);
+    const pending = !!(id && requestedDiscard && (store.hasRun(id) || store.discardPending(id)));
     json(res, 200, {
       id,
-      discarded: store.hostStartDiscarded(requested[1]) || (id ? !store.hasRun(id) : false),
+      discarded: !pending && (requestedDiscard || (id ? !store.hasRun(id) : false)),
+      discardPending: pending,
     });
     return;
   }
@@ -142,16 +148,22 @@ export async function hostRequest(
       return;
     }
     if (hash) {
-      const capture = store
+      const captures = store
         .records(id)
-        .find((r) => r.kind === 'capture' && r.payload.imageHash === hash);
-      if (!capture) {
-        json(res, 404, { error: 'Original image not found.' });
+        .filter((r) => r.kind === 'capture' && r.payload.imageHash === hash);
+      for (const capture of captures) {
+        let bytes: Buffer;
+        try {
+          bytes = store.image(id, capture.payload.imageFile);
+        } catch {
+          // An intact original with identical verified bytes can still be served.
+          continue;
+        }
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+        res.end(bytes);
         return;
       }
-      const bytes = store.image(id, capture.payload.imageFile);
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
-      res.end(bytes);
+      json(res, 404, { error: 'Original image not found.' });
       return;
     }
     json(res, 200, {
