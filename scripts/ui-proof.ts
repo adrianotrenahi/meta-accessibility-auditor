@@ -75,6 +75,62 @@ try {
     data: { mode: 'live' },
   });
   assert.equal(unsafe.status(), 400);
+  for (const path of ['/.env', '/%2e%2e/%2e%2e/etc/passwd', '/..%2f..%2f.env']) {
+    const response = await page.request.get(origin + path);
+    const text = await response.text();
+    assert(response.headers()['content-type']?.includes('text/html'));
+    assert(/^<!doctype html/i.test(text));
+    assert(!text.includes('META_API_KEY='));
+    assert(!/root:[^:]*:0:0:/.test(text));
+  }
+  const other = runsAfter.find((r: any) => r.id !== run.id && r.state !== 'running');
+  assert(other, 'The run-switch regression needs a second saved run.');
+  await page.locator(`[data-run-id="${other.id}"]`).click();
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector('[data-report-run-id]')?.getAttribute('data-report-run-id') === id,
+    other.id,
+  );
+  let releaseOld!: () => void, oldStarted!: () => void;
+  const held = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    }),
+    started = new Promise<void>((resolve) => {
+      oldStarted = resolve;
+    });
+  const oldPattern = origin + '/api/runs/' + run.id;
+  await page.route(oldPattern, async (route) => {
+    const response = await route.fetch();
+    oldStarted();
+    await held;
+    await route.fulfill({ response }).catch(() => {});
+  });
+  await page.locator(`[data-run-id="${run.id}"]`).click();
+  await started;
+  await page.locator(`[data-run-id="${other.id}"]`).click();
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector('[data-report-run-id]')?.getAttribute('data-report-run-id') === id,
+    other.id,
+  );
+  releaseOld();
+  await page.waitForTimeout(400);
+  assert.equal(
+    await page.locator('[data-report-run-id]').getAttribute('data-report-run-id'),
+    other.id,
+  );
+  assert((await page.locator('.evidence img').getAttribute('src'))?.includes(other.id));
+  await page.unroute(oldPattern);
+  const changed = structuredClone(report);
+  const originalId = changed.records.find((r: any) => r.kind === 'capture').id;
+  changed.records = changed.records.filter((r: any) => r.id !== originalId);
+  await page.route(oldPattern, (route) => route.fulfill({ json: changed }));
+  await page.locator(`[data-run-id="${run.id}"]`).click();
+  await page.getByRole('button', { name: 'Show original captured page' }).click();
+  await page.getByRole('alert').filter({ hasText: 'unavailable' }).waitFor();
+  assert.equal(await page.locator('.evidence img').count(), 0);
+  await page.unroute(oldPattern);
+  await page.reload();
   // Deliberately break a real control, prove the checker catches it, then reload.
   await page.getByRole('button', { name: /Start saved demo/ }).evaluate((e) => e.replaceChildren());
   const broken = await new AxeBuilder({ page }).withRules(['button-name']).analyze();
@@ -92,6 +148,9 @@ try {
         modelCalls: 0,
         reloadStartsNoRun: true,
         rawClaimsStayInternal: true,
+        oldRunResponseIgnored: true,
+        missingOriginalNeverSubstituted: true,
+        privateFilesNotServed: true,
         deliberateBreakCaught: 'removed a button name; button-name failed; reload restored it',
       },
       null,

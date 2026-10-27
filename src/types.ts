@@ -45,6 +45,8 @@ export interface ElementInfo {
   box: { x: number; y: number; width: number; height: number };
 }
 export interface Capture {
+  stateStamp: string;
+  stable: boolean;
   url: string;
   title: string;
   imageFile: string;

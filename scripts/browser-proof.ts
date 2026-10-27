@@ -4,6 +4,8 @@ import { BrowserWalk } from '../src/browser.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 if (process.argv.includes('--ui')) {
   await import('./ui-proof.js');
+} else if (process.argv.includes('--safety')) {
+  await import('./safety-proof.js');
 } else {
   const app = await startServer(4321, 'data/browser-proof', false),
     results: any[] = [];
@@ -108,6 +110,33 @@ if (process.argv.includes('--ui')) {
         await walk.close();
       }
     }
+    const feedbackRun = await app.runner.start({
+      mode: 'offline',
+      url: app.origin + '/shop/?case=broken&extra=1',
+      headless: true,
+      voiceOver: false,
+    });
+    await app.runner.completion;
+    const feedbackRecords = app.store.records(feedbackRun.id);
+    assert(
+      feedbackRecords.some(
+        (r) =>
+          r.kind === 'action' && r.payload.before.id === 'add' && r.payload.action.key === 'Enter',
+      ),
+      'The saved driver must actually activate the known target despite an extra focusable link.',
+    );
+    assert(
+      feedbackRecords
+        .filter((r) => r.kind === 'capture')
+        .at(-1)
+        ?.payload.url.includes('/basket'),
+    );
+    assert.equal(app.store.usage(feedbackRun.id).requests.length, 0);
+    results.push({
+      case: 'Saved driver with an extra focusable link',
+      runId: feedbackRun.id,
+      result: 'passed',
+    });
     mkdirSync('output', { recursive: true });
     writeFileSync(
       'output/browser-proof.json',

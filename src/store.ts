@@ -106,8 +106,22 @@ export class Store {
       createdAt: r.created,
     }));
   }
-  record(runId: string, id: string) {
-    return this.records(runId).find((r) => r.id === id);
+  record(runId: string, id: string): RecordEntry | undefined {
+    const r = this.db
+      .prepare('SELECT * FROM records WHERE run_id=? AND id=?')
+      .get(runId, id) as any;
+    if (!r) return undefined;
+    return {
+      id: r.id,
+      runId: r.run_id,
+      seq: r.seq,
+      kind: r.kind,
+      author: r.author,
+      payload: JSON.parse(r.body),
+      sources: JSON.parse(r.sources),
+      hash: r.hash,
+      createdAt: r.created,
+    };
   }
   snapshot(runId: string, role: Role, ids?: string[]) {
     const records = this.records(runId).filter(
@@ -137,7 +151,7 @@ export class Store {
         .at(-1);
       if (
         !review ||
-        !['keep', 'rewrite'].includes(review.payload.verdict) ||
+        review.payload.verdict !== 'keep' ||
         review.payload.candidateHash !== candidate.hash
       )
         continue;
@@ -149,6 +163,12 @@ export class Store {
       )
         continue;
       if (!candidate.sources.length || !review.sources.length) continue;
+      if (
+        [...candidate.sources, ...review.sources].some(
+          (id) => this.record(runId, id)?.payload.stable === false,
+        )
+      )
+        continue;
       if (
         !review.sources.some((id) => {
           const source = this.record(runId, id);

@@ -1,10 +1,16 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
-import { parseSam } from '../src/models.js';
+import { parseSam, MetaModels, actionSchema } from '../src/models.js';
+import { PHASE } from '../src/types.js';
+import { VoiceOverProbe } from '../src/voiceover.js';
+import { voiceOver } from '@guidepup/guidepup';
+import { BrowserWalk } from '../src/browser.js';
+import { webkit } from 'playwright';
+import { Runner } from '../src/runner.js';
 import { isCommitment } from '../src/browser.js';
 import { isPublicAddress, permittedUrl } from '../src/network.js';
 import { approval, keyFromText } from '../src/config.js';
@@ -114,6 +120,225 @@ test('Wrong candidate hash and rejected claims remain internal', () => {
       [o.id],
     );
     assert.equal(x.store.published(x.run.id).length, 0);
+  } finally {
+    x.close();
+  }
+});
+test('A rewrite stays internal until the complete corrected candidate receives its own review', () => {
+  const x = create();
+  try {
+    const o = x.store.append(x.run.id, 'observation', 'browser', { name: '' });
+    const old = x.store.append(
+      x.run.id,
+      'candidate',
+      'analyst',
+      {
+        title: 'VoiceOver cannot activate checkout',
+        detail: 'Unsupported activation claim',
+        recommendation: 'Unsupported fix',
+      },
+      [o.id],
+    );
+    const read = x.store.snapshot(x.run.id, 'reviewer');
+    x.store.append(
+      x.run.id,
+      'review',
+      'reviewer',
+      {
+        candidateId: old.id,
+        candidateHash: old.hash,
+        verdict: 'rewrite',
+        title: 'Missing name',
+        readSnapshotId: read.read.id,
+      },
+      [o.id],
+    );
+    assert.deepEqual(x.store.published(x.run.id), []);
+    const corrected = x.store.append(
+      x.run.id,
+      'candidate',
+      'analyst',
+      {
+        title: 'Missing accessible name',
+        detail: 'Measured name is empty',
+        recommendation: 'Provide a useful name',
+      },
+      [o.id],
+    );
+    const secondRead = x.store.snapshot(x.run.id, 'reviewer');
+    x.store.append(
+      x.run.id,
+      'review',
+      'reviewer',
+      {
+        candidateId: corrected.id,
+        candidateHash: corrected.hash,
+        verdict: 'keep',
+        title: corrected.payload.title,
+        readSnapshotId: secondRead.read.id,
+      },
+      [o.id],
+    );
+    const published = x.store.published(x.run.id);
+    assert.equal(published.length, 1);
+    assert.equal(published[0].detail, 'Measured name is empty');
+    assert(!JSON.stringify(published).includes('Unsupported'));
+  } finally {
+    x.close();
+  }
+});
+test('The complete phase allowance fits the run cap in every reservation order', () => {
+  const permutations = <T>(items: T[]): T[][] =>
+    items.length
+      ? items.flatMap((v, i) => permutations(items.filter((_, j) => i !== j)).map((p) => [v, ...p]))
+      : [[]];
+  for (const order of permutations(['driver', 'analyst', 'reviewer', 'sam'] as const)) {
+    const x = create();
+    try {
+      for (const role of order) {
+        const id = x.store.reserve(x.run.id, role, PHASE[role], approved, true);
+        x.store.settle(id, PHASE[role], 'completed');
+      }
+      assert.equal(x.store.usage().spent, 3000000);
+    } finally {
+      x.close();
+    }
+  }
+});
+test('Stop waits for native startup and repeated cleanup stops the reader once', async () => {
+  let resolveStart!: () => void,
+    calls = 0;
+  const starting = new Promise<void>((resolve) => {
+    resolveStart = resolve;
+  });
+  const stop = mock.method(voiceOver, 'stop', async () => {
+    calls++;
+  });
+  try {
+    const probe = new VoiceOverProbe({} as any);
+    Object.assign(probe, { startedByUs: true, starting });
+    const a = probe.cleanup(),
+      b = probe.cleanup();
+    await Promise.resolve();
+    assert.equal(calls, 0);
+    resolveStart();
+    await Promise.all([a, b]);
+    assert.equal(calls, 1);
+  } finally {
+    stop.mock.restore();
+  }
+});
+test('Browser cleanup shares one close operation', async () => {
+  let calls = 0;
+  const walk = new BrowserWalk({} as any, 'test', 'http://127.0.0.1:4317');
+  walk.browser = {
+    close: async () => {
+      calls++;
+    },
+  } as any;
+  await Promise.all([walk.close(), walk.close()]);
+  assert.equal(calls, 1);
+});
+test('An unexpected cleanup failure is saved rather than becoming an unhandled run promise', async () => {
+  const x = create();
+  try {
+    const runner = new Runner(x.store, 'https://example.org');
+    (runner as any).execute = async () => {
+      throw Error('Controlled cleanup failure');
+    };
+    const run = await runner.start({ mode: 'offline' });
+    await runner.completion;
+    assert.equal(x.store.run(run.id).state, 'partial');
+    assert(
+      x.store
+        .records(run.id)
+        .some((r) => r.kind === 'limit' && r.payload.cleanup === 'Controlled cleanup failure'),
+    );
+  } finally {
+    x.close();
+  }
+});
+test('Stop during browser launch closes the eventual browser before creating a page', async () => {
+  const x = create();
+  let resolveLaunch!: (browser: any) => void,
+    calls = 0;
+  const launch = mock.method(
+    webkit,
+    'launch',
+    () =>
+      new Promise<any>((resolve) => {
+        resolveLaunch = resolve;
+      }),
+  );
+  try {
+    const walk = new BrowserWalk(x.store, x.run.id, 'https://example.org');
+    const starting = walk.start('https://example.org');
+    await Promise.resolve();
+    await Promise.resolve();
+    assert(resolveLaunch);
+    x.store.finish(x.run.id, 'stopped');
+    const closing = walk.close();
+    resolveLaunch({
+      close: async () => {
+        calls++;
+      },
+    });
+    await assert.rejects(() => starting, /closing|stopped/);
+    await closing;
+    assert.equal(calls, 1);
+  } finally {
+    launch.mock.restore();
+    x.close();
+  }
+});
+test('Billed incomplete and invalid model results retain cost without claiming completion', async () => {
+  for (const status of ['incomplete', 'completed']) {
+    const x = create();
+    try {
+      const fakeFetch = (async (url: any) =>
+        new Response(
+          JSON.stringify(
+            String(url).endsWith('input_tokens')
+              ? { input_tokens: 10 }
+              : { status, usage: { input_tokens: 10, output_tokens: 10 }, output: [] },
+          ),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )) as typeof fetch;
+      const models = new MetaModels(
+        x.store,
+        fakeFetch,
+        () => approved,
+        () => 'fake-test-key',
+      );
+      await assert.rejects(() => models.reason(x.run.id, 'driver', [], [], actionSchema));
+      const usage = x.store.usage();
+      assert.equal(
+        usage.requests[0].status,
+        status === 'incomplete' ? 'incomplete' : 'invalid_result',
+      );
+      assert(usage.spent > 0);
+      assert.equal(usage.reserved, 0);
+    } finally {
+      x.close();
+    }
+  }
+});
+test('A stopped run sends neither token-count nor generation requests', async () => {
+  const x = create();
+  let calls = 0;
+  try {
+    const models = new MetaModels(
+      x.store,
+      (async () => {
+        calls++;
+        return new Response('{}');
+      }) as typeof fetch,
+      () => approved,
+      () => 'fake-test-key',
+    );
+    x.store.finish(x.run.id, 'stopped');
+    await assert.rejects(() => models.reason(x.run.id, 'driver', [], [], actionSchema), /stopped/);
+    assert.equal(calls, 0);
   } finally {
     x.close();
   }

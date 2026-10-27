@@ -21,13 +21,17 @@ export class VoiceOverProbe {
   checkpoints = 0;
   private startedByUs = false;
   private wasRunning = false;
+  private starting?: Promise<void>;
+  private cleaning?: Promise<void>;
   constructor(private walk: BrowserWalk) {}
   async check(source: RecordEntry, activateKnownControl = false) {
+    this.walk.assertActive();
     const { store, runId } = this.walk;
     const logs: any[] = [];
     const began = new Date().toISOString();
     if (this.checkpoints >= 2) throw Error('The two VoiceOver checkpoints have been used.');
     this.checkpoints++;
+    this.cleaning = undefined;
     if (!voiceOverPreflight().controlConfigured)
       return store.append(
         runId,
@@ -80,8 +84,11 @@ export class VoiceOverProbe {
         { timeout: 8000 },
       );
       this.wasRunning = state.stdout.trim() === 'true';
+      this.walk.assertActive();
       this.startedByUs = true;
-      await voiceOver.start({ capture: true });
+      this.starting = voiceOver.start({ capture: true });
+      await this.starting;
+      this.walk.assertActive();
       await macOSActivate(this.walk.engine === 'webkit' ? 'Playwright' : 'Chromium');
       await command('interact with web content', () => voiceOver.interact({ timeout: 5000 }));
       for (let i = 0; i < 5; i++)
@@ -145,20 +152,25 @@ export class VoiceOverProbe {
     }
   }
   async cleanup() {
+    if (this.cleaning) return this.cleaning;
     if (this.startedByUs) {
-      this.startedByUs = false;
-      try {
-        await voiceOver.stop();
-      } catch (e) {
-        this.walk.store.append(this.walk.runId, 'limit', 'voiceover', { cleanup: safeError(e) });
-      } finally {
-        if (this.wasRunning)
-          await exec('open', ['-a', 'VoiceOver'], { timeout: 8000 }).catch((e) => {
-            this.walk.store.append(this.walk.runId, 'limit', 'voiceover', {
-              restore: safeError(e),
+      this.cleaning = (async () => {
+        await this.starting?.catch(() => {});
+        try {
+          await voiceOver.stop();
+        } catch (e) {
+          this.walk.store.append(this.walk.runId, 'limit', 'voiceover', { cleanup: safeError(e) });
+        } finally {
+          this.startedByUs = false;
+          if (this.wasRunning)
+            await exec('open', ['-a', 'VoiceOver'], { timeout: 8000 }).catch((e) => {
+              this.walk.store.append(this.walk.runId, 'limit', 'voiceover', {
+                restore: safeError(e),
+              });
             });
-          });
-      }
+        }
+      })();
+      return this.cleaning;
     }
   }
 }

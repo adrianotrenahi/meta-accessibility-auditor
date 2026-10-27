@@ -13,7 +13,7 @@ function App() {
   const [session, setSession] = useState<any>(),
     [runs, setRuns] = useState<any[]>([]),
     [id, setId] = useState(''),
-    [report, setReport] = useState<any>(),
+    [savedReport, setReport] = useState<any>(),
     [error, setError] = useState(''),
     [pending, setPending] = useState(false),
     [selected, setSelected] = useState('');
@@ -27,24 +27,47 @@ function App() {
       .then((r) => r.json())
       .then(setSession);
     void load().then((list) => {
-      if (list.length) setId(list[0].id);
+      if (list.length) setId((current) => current || list[0].id);
     });
   }, []);
   useEffect(() => {
     if (!id) return;
-    const refresh = () => {
-      void fetch('/api/runs/' + id)
-        .then((r) => r.json())
-        .then(setReport);
-      void load();
+    setReport(undefined);
+    setSelected('');
+    const controller = new AbortController();
+    let current = true,
+      loading = false;
+    let events: EventSource | undefined;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const refresh = async () => {
+      if (!current || loading) return;
+      loading = true;
+      try {
+        const response = await fetch('/api/runs/' + id, { signal: controller.signal });
+        if (!response.ok) throw Error('This saved run could not be loaded.');
+        const result = await response.json();
+        if (!current || controller.signal.aborted || result.run?.id !== id) return;
+        setReport(result);
+        if (result.run.state !== 'running') {
+          if (timer) clearInterval(timer);
+          events?.close();
+          void load();
+        }
+      } catch (e) {
+        if (current && !controller.signal.aborted) setError((e as Error).message);
+      } finally {
+        loading = false;
+      }
     };
-    refresh();
-    const events = new EventSource('/api/runs/' + id + '/events');
-    events.onmessage = refresh;
-    const timer = setInterval(refresh, 3000);
+    events = new EventSource('/api/runs/' + id + '/events');
+    events.onmessage = () => void refresh();
+    timer = setInterval(() => void refresh(), 3000);
+    void refresh();
     return () => {
-      events.close();
-      clearInterval(timer);
+      current = false;
+      controller.abort();
+      events?.close();
+      if (timer) clearInterval(timer);
     };
   }, [id]);
   const start = async () => {
@@ -73,9 +96,10 @@ function App() {
     });
     if (!r.ok) setError((await r.json()).error);
   };
+  const report = savedReport?.run?.id === id ? savedReport : undefined;
   const records: RecordView[] = report?.records ?? [],
     captures = records.filter((r) => r.kind === 'capture'),
-    capture = captures.find((r) => r.id === selected) ?? captures.at(-1),
+    capture = selected ? captures.find((r) => r.id === selected) : captures.at(-1),
     at = records.filter((r) => r.kind === 'at_check'),
     active = report?.run?.state === 'running';
   const showOriginal = (finding: any) => {
@@ -90,6 +114,10 @@ function App() {
         return;
       }
     }
+    setSelected('missing-original');
+    setError(
+      'The original page for this finding is unavailable. An unrelated capture will not be substituted.',
+    );
   };
   return (
     <>
@@ -149,6 +177,7 @@ function App() {
             {runs.length ? (
               runs.map((r) => (
                 <button
+                  data-run-id={r.id}
                   key={r.id}
                   className={id === r.id ? 'run selected' : 'run'}
                   aria-pressed={id === r.id}
@@ -178,7 +207,7 @@ function App() {
               <p>Missing evidence remains visible. An unfinished check does not become a pass.</p>
             </div>
           </aside>
-          <div className="run-body">
+          <div className="run-body" data-report-run-id={report?.run.id}>
             {report ? (
               <>
                 <div className="run-heading">

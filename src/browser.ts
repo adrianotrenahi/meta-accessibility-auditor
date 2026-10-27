@@ -1,6 +1,6 @@
 import { webkit, chromium, type Browser, type Page } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
-import { Store } from './store.js';
+import { Store, digest } from './store.js';
 import { LIMITS, type Capture, type RecordEntry } from './types.js';
 import type { Action } from './models.js';
 import { permittedUrl } from './network.js';
@@ -13,6 +13,9 @@ export const isCommitment = (name: string) =>
   );
 export class BrowserWalk {
   browser?: Browser;
+  private closing?: Promise<void>;
+  private launching?: Promise<Browser>;
+  private closingRequested = false;
   page!: Page;
   actions = 0;
   started = Date.now();
@@ -24,6 +27,7 @@ export class BrowserWalk {
     public engine: 'webkit' | 'chromium' = 'webkit',
   ) {}
   assertActive() {
+    if (this.closingRequested) throw Error('The browser is closing; no further action is allowed.');
     if (this.store.run(this.runId).state !== 'running') throw Error('The run has stopped.');
     if (Date.now() - this.started > LIMITS.minutes * 60000) throw Error('Run time limit reached.');
     if (this.actions >= LIMITS.actions) throw Error('Browser action limit reached.');
@@ -35,9 +39,12 @@ export class BrowserWalk {
   async start(url: string) {
     this.assertActive();
     const approved = await permittedUrl(url, this.controlledOrigin);
-    this.browser = await (this.engine === 'webkit' ? webkit : chromium).launch({
+    this.assertActive();
+    this.launching = (this.engine === 'webkit' ? webkit : chromium).launch({
       headless: this.headless,
     });
+    this.browser = await this.launching;
+    this.assertActive();
     const context = await this.browser.newContext({
       viewport: { width: 1440, height: 900 },
       deviceScaleFactor: 1,
@@ -68,18 +75,42 @@ export class BrowserWalk {
     return this.capture();
   }
   async focus() {
-    return this.page.evaluate(() => {
+    const details = await this.page.evaluate(() => {
       const e = document.activeElement as HTMLElement | null;
+      const form = (e as HTMLInputElement | null)?.form;
+      const inputButton =
+        e?.tagName === 'INPUT' &&
+        ['submit', 'button', 'reset', 'image'].includes((e as HTMLInputElement).type);
       return {
+        id: e?.id ?? '',
         tag: e?.tagName.toLowerCase() ?? '',
         text: (e?.textContent ?? '').trim().slice(0, 200),
-        name: e?.getAttribute('aria-label') ?? '',
+        labelHint:
+          e?.getAttribute('aria-label') ?? (inputButton ? (e as HTMLInputElement).value : ''),
+        href: e?.getAttribute('href') ?? '',
         type: e?.getAttribute('type') ?? '',
+        hasForm: !!form,
+        paymentForm: !!form?.querySelector('[autocomplete^="cc-"],input[name*="card" i]'),
       };
     });
+    const active = this.page.locator(':focus').first();
+    const aria = (await active.count())
+      ? await active.ariaSnapshot({ depth: 1 }).catch(() => '')
+      : '';
+    const name = aria.split('\n')[0]?.match(/"((?:\\.|[^"])*)"/)?.[1] ?? details.labelHint;
+    return { ...details, name };
+  }
+  private async observedState() {
+    return {
+      url: this.page.url(),
+      aria: await this.page.locator('body').ariaSnapshot(),
+      focus: await this.focus(),
+      scroll: await this.page.evaluate(() => ({ x: scrollX, y: scrollY })),
+    };
   }
   async capture(): Promise<RecordEntry> {
     this.assertActive();
+    const before = await this.observedState();
     const elements = [];
     const locators = this.page.locator(controls);
     const count = Math.min(await locators.count(), 60);
@@ -103,6 +134,7 @@ export class BrowserWalk {
     const image = await this.page.screenshot({ type: 'png', animations: 'disabled' });
     const asset = this.store.asset(this.runId, `capture_${randomUUID()}.png`, image);
     const visibleText = await this.page.locator('body').innerText();
+    const state = await this.observedState();
     const payload: Capture = {
       url: this.page.url(),
       title: await this.page.title(),
@@ -112,8 +144,10 @@ export class BrowserWalk {
       height: 900,
       elements,
       text: visibleText.slice(0, 16000),
-      aria: await this.page.locator('body').ariaSnapshot(),
-      focus: await this.focus(),
+      aria: state.aria,
+      focus: state.focus,
+      stateStamp: digest(JSON.stringify(state)),
+      stable: digest(JSON.stringify(before)) === digest(JSON.stringify(state)),
       limits: {
         totalControls: await locators.count(),
         maximumListedControls: 60,
@@ -125,8 +159,19 @@ export class BrowserWalk {
   }
   async act(action: Action, source: RecordEntry) {
     this.assertActive();
+    if (
+      source.kind !== 'capture' ||
+      source.runId !== this.runId ||
+      this.store.record(this.runId, source.id)?.hash !== source.hash
+    )
+      throw Error('The action needs an original capture from this run.');
     if (source.payload.url !== this.page.url())
       throw Error('Page changed; capture a fresh observation first.');
+    if (
+      !source.payload.stable ||
+      source.payload.stateStamp !== digest(JSON.stringify(await this.observedState()))
+    )
+      throw Error('Page state changed; capture a fresh observation before acting.');
     const before = await this.focus();
     const urlBefore = this.page.url();
     let outcome = 'performed';
@@ -134,6 +179,27 @@ export class BrowserWalk {
       if (!action.key) throw Error('A keyboard action needs a permitted key.');
       if (['Enter', 'Space'].includes(action.key) && isCommitment(before.name + ' ' + before.text))
         throw Error('Stopped before a purchase, account or payment action.');
+      if (
+        ['Enter', 'Space'].includes(action.key) &&
+        (before.tag === 'iframe' || before.paymentForm)
+      )
+        throw Error('The focused context cannot safely be activated in this demo.');
+      if (
+        action.key === 'Enter' &&
+        before.hasForm &&
+        before.tag === 'input' &&
+        !['submit', 'button', 'reset', 'image'].includes(before.type)
+      )
+        throw Error(
+          'Implicit form submission is outside the safe action boundary; use an explicitly checked control.',
+        );
+      if (
+        ['Enter', 'Space'].includes(action.key) &&
+        before.tag === 'input' &&
+        ['submit', 'image'].includes(before.type) &&
+        !before.name
+      )
+        throw Error('The submit input has no verified name; it cannot be activated safely.');
       this.count();
       await this.page.keyboard.press(action.key === 'Space' ? 'Space' : action.key);
     } else if (action.kind === 'type') {
@@ -176,6 +242,14 @@ export class BrowserWalk {
     );
   }
   async measurements(source: RecordEntry) {
+    this.assertActive();
+    if (
+      source.kind !== 'capture' ||
+      source.runId !== this.runId ||
+      this.store.record(this.runId, source.id)?.hash !== source.hash
+    )
+      throw Error('The measurement needs an original capture from this run.');
+    const before = await this.observedState();
     const result = await new AxeBuilder({ page: this.page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
       .analyze();
@@ -185,6 +259,10 @@ export class BrowserWalk {
       'axe-core',
       {
         method: 'automatic_accessibility_scan',
+        stable:
+          source.payload.stable &&
+          source.payload.stateStamp === digest(JSON.stringify(before)) &&
+          source.payload.stateStamp === digest(JSON.stringify(await this.observedState())),
         engine: result.testEngine,
         violations: result.violations.map((v) => ({
           id: v.id,
@@ -216,6 +294,12 @@ export class BrowserWalk {
       .map((r) => ({ captureId: r.id, image: this.image(r) }));
   }
   async close() {
-    await this.browser?.close();
+    this.closingRequested = true;
+    if (!this.closing)
+      this.closing = (async () => {
+        const browser = this.browser ?? (await this.launching?.catch(() => undefined));
+        await browser?.close();
+      })();
+    await this.closing;
   }
 }

@@ -34,9 +34,10 @@ npm run build
 npm run preflight
 npm run proof:browser
 npm run proof:browser -- --ui
+npm run proof:browser -- --safety
 ```
 
-The viewer check requires `npm run dev` in another terminal. These commands spend no model credits. Screenshots and detailed local proof records are written to ignored `output/` and `data/` folders.
+The viewer check requires `npm run dev` in another terminal. These commands spend no model credits. The safety check uses only controlled local forms and verifies that unsafe activation and stale sources are refused. Screenshots and detailed local proof records are written to ignored `output/` and `data/` folders.
 
 ## Real VoiceOver
 

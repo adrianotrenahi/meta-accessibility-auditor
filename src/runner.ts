@@ -40,15 +40,19 @@ export class Runner {
     const probe = new VoiceOverProbe(walk),
       controller = new AbortController();
     this.active = { run, walk, probe, controller };
-    this.completion = this.execute(
-      run,
-      walk,
-      probe,
-      controller,
-      options.voiceOver !== false,
-    ).finally(() => {
-      this.active = undefined;
-    });
+    this.completion = this.execute(run, walk, probe, controller, options.voiceOver !== false)
+      .catch((e) => {
+        this.store.append(run.id, 'limit', 'runner', { cleanup: safeError(e) });
+        if (this.store.run(run.id).state === 'running')
+          this.store.finish(
+            run.id,
+            'partial',
+            'Cleanup could not finish; inspect the saved limit before starting again.',
+          );
+      })
+      .finally(() => {
+        this.active = undefined;
+      });
     return run;
   }
   async stop(id: string) {
@@ -125,13 +129,32 @@ export class Runner {
     // These are newly written deterministic demonstration responses, not claimed model output.
     let current = start;
     const tab = walk.engine === 'webkit' ? 'Alt+Tab' : 'Tab';
-    for (const key of [tab, tab, tab, 'Enter', tab, 'Enter'] as const) {
-      walk.assertActive();
+    for (const target of ['add', 'basket'] as const) {
+      let reached = false;
+      for (let n = 0; n < 12; n++) {
+        const focus = await walk.focus();
+        reached =
+          target === 'add'
+            ? focus.id === 'add'
+            : focus.tag === 'a' && focus.href.startsWith('/shop/basket');
+        if (reached) break;
+        await walk.act(
+          {
+            kind: 'press',
+            key: tab,
+            note: 'Saved example: advance by real keys until the known controlled target is observed.',
+          },
+          current,
+        );
+        current = await walk.capture();
+      }
+      if (!reached)
+        throw Error('The known controlled target was not reached within the keyboard limit.');
       await walk.act(
         {
           kind: 'press',
-          key,
-          note: 'Saved offline keyboard example; WebKit uses Option-Tab to include links.',
+          key: 'Enter',
+          note: 'Activate the observed, non-purchasing controlled target.',
         },
         current,
       );
@@ -142,7 +165,11 @@ export class Runner {
     const source = this.store
       .records(run.id)
       .filter((r) => r.kind === 'observation')
-      .find((r) => r.payload.violations?.some((v: any) => v.id === 'button-name'));
+      .find(
+        (r) =>
+          r.payload.stable !== false &&
+          r.payload.violations?.some((v: any) => v.id === 'button-name'),
+      );
     if (source) {
       const candidate = this.store.append(
         run.id,

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { CAPS } from './types.js';
-import type { Role } from './types.js';
+import type { Role, Approval } from './types.js';
 import { Store } from './store.js';
 import { approval, key } from './config.js';
 export const actionSchema = z.object({
@@ -65,7 +65,7 @@ const instructions = {
   analyst:
     'Inspect this customer journey for accessibility and UX barriers. Read the original walk, navigator notes, images and actual test records. Examine content, typography, composition, affordances, colour and consistency. Separate measured facts from expert visual judgement. A screenshot cannot prove keyboard operation or spoken output. A robot limit is not a website defect. Missing essential evidence means defer the claim. Findings must link exact provided source IDs. Do not claim full-site coverage, user-study outcomes or compliance certification. No finding quota. Use return_result.',
   reviewer:
-    'Independently review the analyst claims against original walk, navigator notes, screenshots, keyboard and real VoiceOver records. Read the exact candidate and hash. The analyst is not your only source. Validate premise, scope, consequence and source identity. Reject robot-caused misunderstandings, unsupported behaviour, invented speech and screenshot-only keyboard claims. Keep supported expert visual judgements labelled as such. Return keep, rewrite, reject or unresolved for each candidate. Include original source IDs. Missing required evidence stays unresolved. Use return_result.',
+    'Independently review the analyst claims against original walk, navigator notes, screenshots, keyboard and real VoiceOver records. Read the exact candidate and hash. The analyst is not your only source. Validate premise, scope, consequence and source identity. Reject robot-caused misunderstandings, unsupported behaviour, invented speech and screenshot-only keyboard claims. Keep supported expert visual judgements labelled as such. Return keep, rewrite, reject or unresolved for each candidate. A rewrite requests a corrected new candidate: it stays unpublished until the complete new candidate receives a keep decision. Changing a title alone never approves an unsupported detail, severity or recommendation. Include original source IDs. Missing required evidence stays unresolved. Use return_result.',
 } as const;
 export function outputText(response: any): string {
   if (typeof response.output_text === 'string') return response.output_text;
@@ -79,9 +79,11 @@ export class MetaModels {
   constructor(
     private store: Store,
     private fetcher: typeof fetch = fetch,
+    private getApproval: () => Approval = approval,
+    private getKey: () => string | undefined = key,
   ) {}
   private async post(path: string, body: any, signal: AbortSignal) {
-    const apiKey = key();
+    const apiKey = this.getKey();
     if (!apiKey) throw Error('Add a Meta API key to the private .env before paid testing.');
     const response = await this.fetcher('https://api.meta.ai/v1' + path, {
       method: 'POST',
@@ -102,8 +104,10 @@ export class MetaModels {
     final = false,
     signal = AbortSignal.timeout(60_000),
   ): Promise<T> {
-    const approved = approval();
-    if (!key()) throw Error('No Meta API key is available.');
+    if (this.store.run(runId).state !== 'running')
+      throw Error('The run has stopped; no model request will be sent.');
+    const approved = this.getApproval();
+    if (!this.getKey()) throw Error('No Meta API key is available.');
     const cap = CAPS[role];
     const body: any = {
       model: 'muse-spark-1.3',
@@ -152,7 +156,7 @@ export class MetaModels {
       )
         throw Error('Meta usage was missing; the spending reservation is retained.');
       const actual = Math.ceil(u.input_tokens * 1.25 + u.output_tokens * 4.25);
-      this.store.settle(id, actual, 'completed');
+      this.store.settle(id, actual, response.status === 'completed' ? 'received' : 'incomplete');
       this.store.append(runId, 'model_response', role, {
         requestId: id,
         model: body.model,
@@ -165,10 +169,14 @@ export class MetaModels {
         (x: any) => x.type === 'function_call' && x.name === 'return_result',
       );
       if (!tool) throw Error('The model did not return a valid result.');
-      return schema.parse(JSON.parse(tool.arguments));
+      const result = schema.parse(JSON.parse(tool.arguments));
+      this.store.settle(id, actual, 'completed');
+      return result;
     } catch (e) {
       const request = this.store.usage(runId).requests.find((r) => r.id === id);
       if (request?.actual === null) this.store.settle(id, null, 'unknown');
+      else if (request?.status === 'received')
+        this.store.settle(id, request.actual, 'invalid_result');
       throw e;
     }
   }
@@ -179,8 +187,8 @@ export class MetaModels {
     dimensions: { width: number; height: number },
     signal = AbortSignal.timeout(60_000),
   ) {
-    const approved = approval();
-    if (!key()) throw Error('No Meta API key is available.');
+    const approved = this.getApproval();
+    if (!this.getKey()) throw Error('No Meta API key is available.');
     const id = this.store.reserve(runId, 'sam', 2500, approved);
     try {
       const response = await this.post(
