@@ -150,3 +150,27 @@ saved report evidence stays available. Full accessibility-state comparisons are
 retained for correctness, shared and paced with the picture reads. Large real-site
 performance remains outside the controlled proof. Temporary picture failures
 return a safe unavailable response; stopped browsers return an ended response.
+
+### Saved keyboard input attempts
+
+The local host reply now includes a versioned `access-walk/keyboard-v1` object
+alongside the unchanged saved screenshot/finding snapshot. It carries performed
+browser Enter/Space keypresses on known native controls, exact original action and
+capture identities, and the original image fingerprint. It exports no free-form
+notes, typed values, URLs or model responses. Invalid, rewritten, unstable or
+unlinked records are withheld with an explicit limit. New input records bind the
+source capture and image inside their saved contents; older records without this
+binding cannot acquire a guessed screenshot. Body focus and unsupported
+target kinds are not presented as controls.
+
+Every exported outcome is `not-confirmed`: sending input alone establishes
+neither successful activation nor a website defect. Full Tab order, visible focus
+and native screen-reader operation remain unestablished. The saved delivery
+version covers keyboard metadata too, including keypress-only changes and
+withdrawals. Reads make no browser input or model call. Existing hosts can ignore
+the additional reply field; the original snapshot protocol is unchanged.
+
+The `keyPresses` list describes inputs, including Enter/Space in a text field; it
+does not label them as control activations. Limits distinguish a damaged saved
+record, an unperformed input, a missing/stale screen link and an unsupported
+control/record format. An unsupported target does not imply broken screenshots.

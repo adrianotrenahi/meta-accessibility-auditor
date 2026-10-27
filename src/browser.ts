@@ -240,6 +240,8 @@ export class BrowserWalk {
       'browser',
       {
         method: 'actual_keyboard_or_browser',
+        sourceCaptureId: source.id,
+        sourceImageHash: source.payload.imageHash,
         action,
         before,
         after,

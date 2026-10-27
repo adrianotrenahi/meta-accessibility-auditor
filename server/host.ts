@@ -211,10 +211,8 @@ export async function hostRequest(
       json(res, 404, { error: 'Original image not found.' });
       return;
     }
-    json(res, 200, {
-      snapshot: exportHostSnapshot(store, id).snapshot,
-      waiting: runner.isWaiting(id),
-    });
+    const { snapshot, keyboard } = exportHostSnapshot(store, id);
+    json(res, 200, { snapshot, keyboard, waiting: runner.isWaiting(id) });
     return;
   }
   json(res, 404, { error: 'Host action not found.' });
