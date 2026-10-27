@@ -140,6 +140,7 @@ export async function startServer(port = 4317, dir = dataDir, frontend = true) {
           run: store.run(id),
           records,
           findings: store.published(id),
+          limits: store.publicationLimits(id),
           usage: store.usage(id),
           score: null,
         });

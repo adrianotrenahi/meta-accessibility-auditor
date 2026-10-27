@@ -2,10 +2,19 @@ import { z } from 'zod';
 import { BrowserWalk } from './browser.js';
 import { VoiceOverProbe } from './voiceover.js';
 import { Store } from './store.js';
-import { MetaModels, actionSchema, analysisSchema, reviewSchema, type Action } from './models.js';
+import {
+  MetaModels,
+  IncompleteModelResult,
+  actionSchema,
+  analysisSchema,
+  reviewSchema,
+  type Action,
+} from './models.js';
 import type { RecordEntry, Run } from './types.js';
 import { approval, safeError } from './config.js';
 import { mapElement } from './segmentation.js';
+import { EvidenceRequestLimit, requestEvidence } from './request-evidence.js';
+import { candidateTarget } from './candidate-target.js';
 export class Runner {
   active?: { run: Run; walk: BrowserWalk; probe: VoiceOverProbe; controller: AbortController };
   completion?: Promise<void>;
@@ -127,6 +136,10 @@ export class Runner {
         model:
           run.mode === 'offline' ? 'Saved offline examples; no AI inference' : 'muse-spark-1.3',
         stopBoundary: 'No orders, payments, account creation or bookings.',
+        keyboardPattern:
+          walk.engine === 'webkit'
+            ? 'Mac WebKit Option-Tab includes links; Tab/Shift+Tab requests are performed as Alt+Tab/Alt+Shift+Tab and both requested and actual keys are recorded.'
+            : 'Chromium Tab/Shift+Tab; requested and actual keys are recorded.',
       });
       let current = await walk.start(run.url);
       const scan = await walk.measurements(current);
@@ -297,10 +310,12 @@ export class Runner {
     const models = new MetaModels(this.store);
     let current = start;
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15 * 60000)]);
+    let unchangedTraversal = 0;
+    let decisionAllowanceSpent = true;
     try {
       for (let i = 0; i < 20; i++) {
         walk.assertActive();
-        const snap = this.store.snapshot(run.id, 'driver');
+        const snap = requestEvidence(this.store, run.id, 'driver', current);
         const action = await models.reason(
           run.id,
           'driver',
@@ -317,20 +332,57 @@ export class Runner {
           { kind: 'progress', text: action.note },
           [current.id],
         );
-        if (action.kind === 'finish') break;
+        if (action.kind === 'finish') {
+          decisionAllowanceSpent = false;
+          break;
+        }
         if (action.kind === 'voiceover') {
+          unchangedTraversal = 0;
           await probe.check(current);
           current = await walk.capture();
         } else {
+          const before = current;
           await walk.act(action, current);
           current = await walk.capture();
+          unchangedTraversal =
+            action.kind === 'press' &&
+            ['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.key ?? '') &&
+            typeof before.payload.stateStamp === 'string' &&
+            before.payload.stateStamp === current.payload.stateStamp
+              ? unchangedTraversal + 1
+              : 0;
+          if (unchangedTraversal >= 3) {
+            this.store.append(
+              run.id,
+              'limit',
+              'driver',
+              {
+                reason:
+                  'Three consecutive navigation attempts changed no recorded page state. The robot stopped; this does not establish a website keyboard barrier.',
+              },
+              [before.id, current.id],
+            );
+            decisionAllowanceSpent = false;
+            break;
+          }
         }
         if (i % 3 === 2) {
           await walk.measurements(current);
-          await this.analyse(models, run, current, walk, signal);
+          await this.analyseCheckpoint(models, run, current, walk, signal);
         }
       }
-      await this.analyse(models, run, current, walk, signal);
+      if (decisionAllowanceSpent)
+        this.store.append(
+          run.id,
+          'limit',
+          'driver',
+          {
+            reason:
+              'The robot used its twenty navigation decisions and stopped. This limit does not establish a website defect.',
+          },
+          [current.id],
+        );
+      await this.analyseCheckpoint(models, run, current, walk, signal);
     } finally {
       if (!signal.aborted && this.store.run(run.id).state === 'running') {
         try {
@@ -344,6 +396,36 @@ export class Runner {
       }
     }
   }
+  private async analyseCheckpoint(
+    models: MetaModels,
+    run: Run,
+    current: RecordEntry,
+    walk: BrowserWalk,
+    signal: AbortSignal,
+  ) {
+    try {
+      await this.analyse(models, run, current, walk, signal);
+    } catch (error) {
+      if (
+        !(error instanceof IncompleteModelResult || error instanceof EvidenceRequestLimit) ||
+        signal.aborted
+      )
+        throw error;
+      this.store.append(
+        run.id,
+        'limit',
+        error.role,
+        {
+          reason:
+            error instanceof EvidenceRequestLimit
+              ? `${error.message} Navigation continues; no over-limit request was sent.`
+              : 'An analysis or review response ended before returning a result. Navigation continues; this checkpoint remains incomplete.',
+          checkpointCaptureId: current.id,
+        },
+        [current.id],
+      );
+    }
+  }
   private async analyse(
     models: MetaModels,
     run: Run,
@@ -351,7 +433,7 @@ export class Runner {
     walk: BrowserWalk,
     signal: AbortSignal,
   ) {
-    const snapshot = this.store.snapshot(run.id, 'analyst');
+    const snapshot = requestEvidence(this.store, run.id, 'analyst', current);
     const analysis = await models.reason(
       run.id,
       'analyst',
@@ -364,10 +446,21 @@ export class Runner {
     for (const c of analysis.findings) {
       if (!c.sources.every((id) => snapshot.records.some((r) => r.id === id)))
         throw Error('Analyst cited evidence it did not read.');
+      let target: ReturnType<typeof candidateTarget>;
+      try {
+        target = candidateTarget(c, snapshot.records);
+      } catch (error) {
+        this.store.append(run.id, 'limit', 'analyst', {
+          reason: safeError(error),
+          issueKey: c.issueKey,
+          claimStatus: 'withheld; raw result remains in model_response',
+        });
+        continue;
+      }
       this.store.append(run.id, 'candidate', 'analyst', c, c.sources);
-      if (c.targetId && c.sources.includes(current.id)) {
+      if (target) {
         try {
-          await mapElement(this.store, models, run.id, current, c.targetId, signal);
+          await mapElement(this.store, models, run.id, target.capture, target.target.id, signal);
         } catch (e) {
           this.store.append(
             run.id,
@@ -375,10 +468,10 @@ export class Runner {
             'sam',
             {
               reason: safeError(e),
-              captureId: current.id,
+              captureId: target.capture.id,
               source: 'SAM unavailable; original capture remains available.',
             },
-            [current.id],
+            [target.capture.id],
           );
         }
       }
@@ -400,7 +493,7 @@ export class Runner {
   ) {
     const candidates = this.store.records(run.id).filter((r) => r.kind === 'candidate');
     if (!candidates.length) return;
-    const snapshot = this.store.snapshot(run.id, 'reviewer');
+    const snapshot = requestEvidence(this.store, run.id, 'reviewer', current);
     const result = await models.reason(
       run.id,
       'reviewer',
@@ -416,11 +509,17 @@ export class Runner {
         throw Error('Review does not match the exact candidate.');
       if (!d.sources.every((id) => snapshot.records.some((r) => r.id === id)))
         throw Error('Reviewer cited evidence it did not read.');
-      this.store.append(run.id, 'review', 'reviewer', { ...d, readSnapshotId: snapshot.read.id }, [
-        ...d.sources,
-        c.id,
-        snapshot.read.id,
-      ]);
+      const verdict =
+        d.verdict === 'keep' && (d.premise !== 'supported' || d.title !== c.payload.title)
+          ? 'rewrite'
+          : d.verdict;
+      this.store.append(
+        run.id,
+        'review',
+        'reviewer',
+        { ...d, verdict, readSnapshotId: snapshot.read.id },
+        [...d.sources, c.id, snapshot.read.id],
+      );
     }
   }
 }

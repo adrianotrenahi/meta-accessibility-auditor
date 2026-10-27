@@ -36,6 +36,8 @@ export interface RecordEntry {
 }
 export interface ElementInfo {
   id: string;
+  selector?: string;
+  contextFingerprint?: string;
   tag: string;
   role: string;
   name: string;
@@ -63,21 +65,32 @@ export interface Capture {
     visibleTextTruncated: boolean;
     imageScope: 'viewport';
   };
+  imageProvenance?: {
+    source: string;
+    engineAddedAnnotations: boolean;
+    focusOutline: string;
+    animations: string;
+  };
 }
 export interface Candidate {
+  issueKey: string;
+  scope: 'element' | 'view';
+  visiblePremise: string;
   title: string;
   detail: string;
   criterion: string | null;
   basis: 'measured' | 'expert_visual' | 'mixed';
   severity: 'blocker' | 'serious' | 'minor';
   sources: string[];
-  targetId?: string;
+  targetCaptureId: string | null;
+  targetId: string | null;
   recommendation: string;
 }
 export interface Decision {
   candidateId: string;
   candidateHash: string;
   verdict: 'keep' | 'rewrite' | 'reject' | 'unresolved';
+  premise: 'supported' | 'contradicted' | 'unverified';
   title: string;
   reason: string;
   sources: string[];
@@ -110,6 +123,6 @@ export const PHASE = {
 } as const;
 export const CAPS = {
   driver: { input: 30000, output: 4096, effort: 'low' },
-  analyst: { input: 40000, output: 4096, effort: 'medium' },
+  analyst: { input: 40000, output: 8192, effort: 'medium' },
   reviewer: { input: 60000, output: 8192, effort: 'medium' },
 } as const;

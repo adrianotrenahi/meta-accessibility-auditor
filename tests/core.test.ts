@@ -433,7 +433,7 @@ test('Expired and unbounded approvals cannot authorise spend', () => {
 test('SAM validates coordinates and preserves real mask tokens without inventing outlines', () => {
   assert.deepEqual(parseSam('', { width: 100, height: 100 }), []);
   const text =
-    '<0f>3<|box;x1=10;y1=10;x2=30;y2=30;w=100;h=100;c=0.9|><|mask;x=0;y=0;data=20,20,!abc|>';
+    '<0f>3<|box;x1=10;y1=10;x2=30;y2=30;w=100;h=100;c=0.9|><|mask;x=0;y=0;c=0.9;data=20,20,!abc|>';
   assert.equal(parseSam(text, { width: 100, height: 100 })[0].objectId, '3');
   assert.throws(() => parseSam(text, { width: 1440, height: 900 }));
   assert.throws(() => parseSam('unreadable', { width: 100, height: 100 }));
@@ -517,7 +517,7 @@ test('SAM uses capture pixels, validates visible targets and avoids unrelated ge
     disabled: false,
     box: { x: 10, y: 20, width: 100, height: 40 },
   };
-  assert.equal(boxPrompt(target, 1440, 900), '<0f>1<|box;x1=10;y1=20;x2=110;y2=60;w=1440;h=900|>');
+  assert.equal(boxPrompt(target, 1440, 900), '<0f>1<|box;x1=10;y1=20;x2=109;y2=59;w=1440;h=900|>');
   assert.equal(overlap(target.box, target.box), 1);
   assert.equal(overlap(target.box, { x: 900, y: 900, width: 10, height: 10 }), 0);
   assert.throws(() =>

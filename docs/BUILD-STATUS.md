@@ -1,33 +1,36 @@
 # Day 1 and Day 2 status
 
-Updated 27 October 2026. This status distinguishes working code from proof that still needs to happen.
+Updated 27 October 2026. Working code, controlled evidence and remaining proof are kept separate.
 
 ## Impact on the system
 
-The new standalone application contains a local evidence store, original-record retrieval, independent analysis/review connections, an event stream, spending reservations, a controlled browser walk and a VoiceOver connection. The private API key is present. Adriano subsequently approved one paid test, which finished as partial; its temporary spending approval was removed. No further paid run is approved. See [the test results](FIRST-PAID-TEST.md).
+The fresh public engine and the controlled Cavioo host connection are merged. The current Day 2 change fixes repeated screenshot input, exact element targets, repeated accepted claims, supported visual wording and evidence-link integrity. The original walk and navigator notes remain shared originals; review reads those originals and the exact analyst claim independently.
 
-Twenty-four offline tests currently pass. They cover source integrity, corrected-candidate publication, safe key-file parsing, unknown charges, all 24 phase orders, protected final review, startup/Stop cleanup, blocked private destinations, the purchase boundary, SAM geometry handling and Meta's supported request setting. The TypeScript check and production interface build pass. Additional real-browser checks exercise unsafe submit controls, changed same-URL states, a delayed old-run response, missing original images and an extra focusable element in the saved journey. Review decisions and rejected suggestions are recorded in REVIEW-NOTES.md.
+Ninety offline tests, TypeScript and the production build pass. Controlled host tests prove fresh start, live pictures without evidence writes, reload and distinct Stop/Discard behavior. The source-stability, SAM-frame and per-command speech regressions were each checked with a deliberate break; working sources were preserved/restored exactly.
 
-The real controlled browser proof passes both cases. Each takes thirteen recorded browser actions using the recorded Mac WebKit Option-Tab pattern throughout. The clean button has a name and its dialog receives focus; the broken button has no name and its dialog leaves focus outside. These are actual browser observations, without AI calls or a claim about VoiceOver. An earlier inconsistent Tab pattern failed after the browser settings differed; that was corrected as a test-harness condition, not called a site defect.
+Native VoiceOver successfully announced and activated a known local named button, capturing its resulting status. Some actual paid-run startup checkpoints also captured six real commands and speech deltas. After the owner enabled normal Mac Accessibility access, both controlled native-reader → keyboard → final-reader sequences passed. The clean final reader described a button inside the dialog; the broken case read Continue to review while keyboard focus stayed outside. This is bounded control/context proof, not full screen-reader-only coverage. No system security controls were bypassed.
 
-The native VoiceOver proof has been attempted and remains incomplete: System Events timed out while sending keys. The control flag and matching test assets are present. Computer control was refused access to System Settings. No security control was disabled and no screen-reader pass was manufactured.
+The keyboard connection records both requested Tab and actual Mac WebKit Option-Tab. Clean and broken full controlled paths pass, preserving their different dialog focus outcomes. Navigation-aware reading retries only observations, and a sent input stays recorded even if its immediate focus result cannot be read; the click is never repeated as a recovery measure.
+
+A real SAM request matched its original plus button with 98.78% box overlap. Its source, image and coordinates were independently checked. This is prompted geometry association; encoded mask pixels remain undecoded and the naming claim rests on browser evidence, not SAM.
+
+The first two Day 2 investigation attempts were partial: one analyst returned no result after exhausting its output allowance; another mixed incompatible WebKit traversal keys. Their combined usage estimate is $0.875054, without unconfirmed charges. Both remain in the record. The analyst allowance and checkpoint handling are corrected; navigation has explicit platform keys and no-progress limits.
+
+All three corrected-build headless model journeys reached safe review in twelve key actions each, with a fixed source fingerprint and configuration. An additional provenance regression corrected an unsupported test-overlay attribution; saved-result replay also closes basis/view grouping variations. All six attempts, including the two investigation failures, cost an estimated $2.705455 in one $10 ledger, with no held charges. Temporary approval is removed. External-review corrections also keep an over-limit review incomplete while navigation continues, retry detached-target observations without repeating input, and hide internal fingerprints from presentation. Details and retained limitations are in DAY-TWO-VALIDATION.md; Billing reconciliation remains required.
 
 ## Impact on the UX
 
-A local viewer shows saved runs, original screenshots, page information as text, actual actions and reviewed demonstration findings. An example finding about the unnamed basket button links to its original measurement and page capture. Reloading and reopening evidence make no model calls. Raw candidate accusations are excluded from the viewer.
+Cavioo keeps its existing layout, components and default customer engine/browser. This public change does not activate the new engine for customers.
 
-The real-browser viewer check passes at 1440px and 320px with no accessibility-checker violations or horizontal page overflow. Removing a button's name deliberately makes the checker fail; reloading restores the page. Screenshots and the local proof report are saved outside Git.
+For example, a supported empty name on Add to basket produces a source-bound finding; a changed source link or an unstable underlying image cannot keep that finding accepted. Repeated accepted claims on the same original target can group once while retaining their raw occurrences. Across screens this requires the control's own ID and matching captured surrounding context; ambiguous older targets stay separate.
 
-The viewer is an early Day 1–2 interface. The complete criterion review, polished live bubbles and SAM mask rendering are later work. Access Walk is a working name.
+The public engineering viewer explains when older reviews cannot verify their original source links. Real-browser checks at 1440px and 320px prove the warning remains readable, original screenshots remain available, and a fresh valid review still shows its finding. Closed-details checks pass at both widths. Expanded evidence panels exposed seven unfocusable scrolling regions, now corrected: keyboard scrolling and the existing visible focus ring pass at both widths, with zero scan violations and no page overflow. These checks are not a full accessibility certificate.
 
 ## Still pending
 
-- **Adriano:** any additional paid test needs a new bounded approval; the one approved test is finished. Reconcile the usage-based cost estimate with provider Billing.
-- **Native VoiceOver proof:** the Mac's key-control/Automation state needs inspection before the real test can pass. Codex implements and reruns the proof once control works; the existing checkbox alone is not proof.
-- **Day 2 model proof:** the first Spark run reached the basket but exceeded the evidence input limit before the review form. Codex needs to address repeated evidence, duplicate claims, overly absolute visual wording and missing element identifiers before another test. Complete journeys, consistency, real SAM matches and model accuracy remain unproved. Further paid testing needs new approval.
-- **Evaluation cases:** the twelve-case set has draft expected labels. Adriano reviews them before model evaluation; only the named-button/dialog pairs have full browser proof so far.
-- **Owner choices:** final name, time commitment, real demo site/task, criterion/design details, track/team, participant contribution and launch timing remain undecided. Partner-credit awards remain pending.
-- **Later days:** full criterion coverage, richer visual review, final report reconciliation, finished bubbles/mask rendering, independent human validation and the video remain to be built or verified as scheduled.
-- **Review and merge:** the foundation's first corrections passed verification. The separate request-setting fix and its test results are in a proposed change with external reviews requested. Adriano controls the merges; no application code has been merged or deployed.
-
-Day 1 is therefore substantially implemented with its native VoiceOver proof outstanding. Day 2 connections and offline behaviour are implemented; its model and native-reader completion conditions are not yet met. Total Meta usage-based cost estimate: **$0.3145**, pending provider Billing reconciliation.
+- Codex and Adriano: independently validate the chosen task with a human screen-reader user before filming; broader reader coverage and a real prior-on restoration trial remain outside these scoped proofs.
+- Codex: complete external review and address validated findings. Adriano decides when this proposed change merges.
+- Adriano: review the twelve-case expected labels, the real demo task and participant recording arrangements, and the remaining name/track/team/contribution choices in the build plan.
+- Codex and Adriano: measure false claims, genuine issues retained or missed, uncertainty and coverage against reviewed labels. No percentage improvement over Cavioo has been established.
+- Later build days: fifteen criteria and six visual topics, missing-fact checks, decoded mask presentation, complete model-backed Cavioo flow, full authenticated-layout/control coverage, report reconciliation, human comparison and the video. The separate Baseten balance remains unused.
+- Costs remain usage-based estimates pending Billing reconciliation. Meta calls stay inside the current bounded approval; temporary approval files are removed after testing.

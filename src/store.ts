@@ -4,8 +4,17 @@ import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RecordEntry, RecordKind, Role, Run, RunState, Approval } from './types.js';
 import { LIMITS, PHASE, CAPS } from './types.js';
+import { groupPublished } from './finding-key.js';
+import { presentRecordPayload } from './presentation.js';
 export const digest = (value: string | Uint8Array) =>
   createHash('sha256').update(value).digest('hex');
+export const recordIsIntact = (record: RecordEntry) =>
+  !!record.payload &&
+  typeof record.payload === 'object' &&
+  !Array.isArray(record.payload) &&
+  digest(JSON.stringify(record.payload)) === record.hash &&
+  (record.payload._sourcesHash === undefined ||
+    record.payload._sourcesHash === digest(JSON.stringify(record.sources)));
 export class Store {
   db: DatabaseSync;
   constructor(public dir: string) {
@@ -165,6 +174,8 @@ export class Store {
     this.run(runId);
     for (const id of sources)
       if (!this.record(runId, id)) throw Error('Evidence link does not belong to this run.');
+    // Bind new originals to their source links, without rewriting earlier retained records.
+    payload = { ...payload, _sourcesHash: digest(JSON.stringify(sources)) };
     const id = randomUUID(),
       body = JSON.stringify(payload),
       hash = digest(body),
@@ -222,7 +233,9 @@ export class Store {
   }
   snapshot(runId: string, role: Role, ids?: string[]) {
     const records = this.records(runId).filter(
-      (r) => !['read_snapshot', 'model_response'].includes(r.kind),
+      (r) =>
+        !['read_snapshot', 'model_response'].includes(r.kind) &&
+        !(r.kind === 'coverage' && ['analyst', 'reviewer'].includes(r.author)),
     );
     const wanted = new Set(ids ?? records.map((r) => r.id));
     // The walk and navigator notes are always original records, not another role's digest.
@@ -234,7 +247,7 @@ export class Store {
     if (missing.length) throw Error('Required original evidence is missing.');
     const read = this.append(runId, 'read_snapshot', role, {
       throughSeq: records.at(-1)?.seq ?? 0,
-      records: selected.map((r) => ({ id: r.id, hash: r.hash })),
+      records: selected.map((r) => ({ id: r.id, hash: r.hash, sources: r.sources })),
       missing,
     });
     return { read, records: selected };
@@ -252,20 +265,53 @@ export class Store {
         review.payload.candidateHash !== candidate.hash
       )
         continue;
+      if (candidate.payload.issueKey && review.payload.premise !== 'supported') continue;
       const read = this.record(runId, review.payload.readSnapshotId);
       if (
         !read ||
         read.kind !== 'read_snapshot' ||
+        !Array.isArray(read.payload?.records) ||
         !read.payload.records.some((r: any) => r.id === candidate.id && r.hash === candidate.hash)
       )
         continue;
-      if (!candidate.sources.length || !review.sources.length) continue;
+      if ([candidate, review, read].some((r) => !recordIsIntact(r))) continue;
       if (
-        [...candidate.sources, ...review.sources].some(
-          (id) => this.record(runId, id)?.payload.stable === false,
-        )
+        read.payload.records.some((entry: any) => {
+          const original = this.record(runId, entry.id);
+          return (
+            !original ||
+            original.hash !== entry.hash ||
+            !recordIsIntact(original) ||
+            !Array.isArray(entry.sources) ||
+            JSON.stringify(entry.sources) !== JSON.stringify(original.sources)
+          );
+        })
       )
         continue;
+      if (!candidate.sources.length || !review.sources.length) continue;
+      const pending = [candidate.id, ...candidate.sources, ...review.sources];
+      const checked = new Set<string>();
+      let originalsSupported = true;
+      while (pending.length && originalsSupported) {
+        const id = pending.pop()!;
+        if (id === read.id || checked.has(id)) continue;
+        checked.add(id);
+        const original = this.record(runId, id);
+        const pin = read.payload.records.find((entry: any) => entry.id === id);
+        if (
+          !original ||
+          !pin ||
+          original.payload.stable === false ||
+          !recordIsIntact(original) ||
+          original.hash !== pin.hash ||
+          JSON.stringify(original.sources) !== JSON.stringify(pin.sources)
+        ) {
+          originalsSupported = false;
+          break;
+        }
+        pending.push(...original.sources);
+      }
+      if (!originalsSupported) continue;
       if (
         !review.sources.some((id) => {
           const source = this.record(runId, id);
@@ -282,14 +328,37 @@ export class Store {
           .at(-1)?.seq ?? 0;
       if (read.payload.throughSeq < latestEvidence) continue;
       out.push({
-        ...candidate.payload,
+        ...presentRecordPayload(candidate.payload),
         id: candidate.id,
         title: review.payload.title || candidate.payload.title,
-        review: review.payload,
+        review: presentRecordPayload(review.payload),
         evidence: candidate.sources,
       });
     }
-    return out;
+    return groupPublished(out, records);
+  }
+  publicationLimits(runId: string): string[] {
+    const records = this.records(runId);
+    const historical = records
+      .filter((r) => r.kind === 'candidate')
+      .some((candidate) => {
+        const review = records.findLast(
+          (r) => r.kind === 'review' && r.payload.candidateId === candidate.id,
+        );
+        if (review?.payload.verdict !== 'keep') return false;
+        const read = records.find(
+          (r) => r.id === review.payload.readSnapshotId && r.kind === 'read_snapshot',
+        );
+        return (
+          !Array.isArray(read?.payload?.records) ||
+          read.payload.records.some((r: any) => !Array.isArray(r.sources))
+        );
+      });
+    return historical
+      ? [
+          'Some saved reviews, including older formats, cannot verify which original evidence links they checked. Their findings are unverified and withheld; original screens and records remain available.',
+        ]
+      : [];
   }
   usage(runId?: string) {
     const rows = this.db

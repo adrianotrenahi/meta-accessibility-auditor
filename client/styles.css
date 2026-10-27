@@ -47,7 +47,8 @@ button:disabled {
 button:focus-visible,
 a:focus-visible,
 summary:focus-visible,
-select:focus-visible {
+select:focus-visible,
+pre:focus-visible {
   outline: 3px solid #a34118;
   outline-offset: 4px;
 }

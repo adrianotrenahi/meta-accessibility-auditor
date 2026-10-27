@@ -16,12 +16,34 @@ try {
   const after = await walk.capture();
   const status = await walk.page.locator('#status').innerText();
   const activated = status.includes('Added');
-  const success = check.payload.captureHealthy && activated;
+  const commands = check.payload.commands ?? [];
+  const namedControlObserved = commands.some(
+    (entry: any) =>
+      entry.command === 'find next VoiceOver button' &&
+      entry.outcome === 'completed' &&
+      entry.itemText.includes('Add to basket') &&
+      entry.spokenPhrases.some((phrase: string) => phrase.includes('Add to basket')),
+  );
+  const nativeActivationCompleted = commands.some(
+    (entry: any) =>
+      entry.command === 'activate known Add to basket control' && entry.outcome === 'completed',
+  );
+  const success =
+    check.payload.state === 'observed' &&
+    check.payload.captureHealthy &&
+    namedControlObserved &&
+    nativeActivationCompleted &&
+    activated;
   app.store.append(
     run.id,
     'observation',
     'voiceover-proof',
-    { knownSafeControlActivated: activated, observedStatus: status },
+    {
+      knownSafeControlActivated: activated,
+      namedControlObserved,
+      nativeActivationCompleted,
+      observedStatus: status,
+    },
     [check.id, after.id],
   );
   app.store.finish(
@@ -39,6 +61,11 @@ try {
         at: new Date().toISOString(),
         runId: run.id,
         success,
+        sourceCaptureId: capture.id,
+        sourceCaptureHash: capture.hash,
+        afterCaptureId: after.id,
+        namedControlObserved,
+        nativeActivationCompleted,
         check: check.payload,
         status,
         modelCalls: 0,

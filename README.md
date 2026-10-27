@@ -2,7 +2,7 @@
 
 A fresh Meta hackathon project that investigates barriers to completing website tasks with keyboards and screen readers. Access Walk is a working name.
 
-The product target is a new walk that plugs into Cavioo's existing audit flow and keeps its current visuals: the browser during the run, finding bubbles, then the existing report with each screen's screenshots. Reuse the actual Cavioo components inside the private Cavioo app. The green standalone interface below is an engineering test harness. Saved-record presentation compatibility is now proved in the private Cavioo host; the setup funnel, live transport and production integration remain pending. See [Cavioo compatibility](docs/CAVIOO-COMPATIBILITY.md). The public engine remains independently runnable and contains no pre-existing Cavioo source.
+The product target is a new walk that plugs into Cavioo's existing audit flow and keeps its current visuals: the browser during the run, finding bubbles, then the existing report with each screen's screenshots. Reuse the actual Cavioo components inside the private Cavioo app. The green standalone interface below is an engineering test harness. The controlled private-host proof now covers setup, fresh keyboard navigation, live pictures, saved-example bubbles, the existing report and original screenshot viewer, reload/reconnect and confirmed discard. Customer-account integration and complete coverage remain pending. See [Cavioo compatibility](docs/CAVIOO-COMPATIBILITY.md). The public engine remains independently runnable and contains no pre-existing Cavioo source.
 
 The application saves one original walk, navigator notes, page images, measurements and screen-reader records. Analysis and review read that same evidence independently. Only reviewed findings reach the viewer.
 
@@ -11,12 +11,12 @@ The application saves one original walk, navigator notes, page images, measureme
 - A controlled shop built during the event, with clean and deliberately broken button and dialog examples.
 - Real keyboard navigation through product selection, basket and a non-purchasing review dialog, with focus and before/after captures saved.
 - Browser accessibility measurements and an evidence viewer at desktop and phone widths.
-- A local SQLite record store, original-record retrieval, saved read manifests, exact-candidate reviews and conservative publication rules.
+- A local SQLite record store, bounded original-record retrieval, source-link integrity checks, saved read manifests, exact-candidate reviews and conservative publication rules. Full original actions and navigator notes stay available to every role; selected screenshots are retrieved directly from the shared pool.
 - Separate Muse Spark driver, analyst and reviewer connections; SAM 3.1 request construction, source-bound geometry parsing and within-run reuse.
 - Spending reservations, request/phase/run limits, interrupted-run recovery, ordered events and replay without new model calls.
-- A connection to real VoiceOver through Guidepup. Its native key-control proof is currently incomplete on this Mac; it is not presented as a successful screen-reader test.
+- A real VoiceOver connection through Guidepup's supported AppleScript commands. A native local proof saves the known button announcement, activation and resulting spoken status, with per-command speech and the previous reader state restored. This is scoped proof, not complete reader coverage.
 
-The saved demonstration uses newly written deterministic analysis/review examples. Its browser actions and measurements are real; its responses are not claimed to come from Meta models. One separately approved live test used actual Spark responses and reached the basket, then stopped before the review form at the evidence input limit. Its usage-based cost estimate is $0.3145 against a $3 ceiling. Duplicate findings and overly absolute visual wording remain quality problems. See [the first paid test](docs/FIRST-PAID-TEST.md). Live launch remains disabled in the interface and command-line script.
+The saved demonstration uses newly written deterministic analysis/review examples. Its browser actions and measurements are real; its responses are not claimed to come from Meta models. The first paid test reached the basket and stopped at the evidence input allowance, costing an estimated $0.3145. Day 2 corrects accumulated images, repeated accepted claims, supported visual wording and exact element targets. A new bounded batch includes real Spark, VoiceOver and SAM; see [Day 2 validation](docs/DAY-TWO-VALIDATION.md) and the preserved [first paid test](docs/FIRST-PAID-TEST.md). The ordinary interface and default command still cannot start paid runs.
 
 ## Run locally
 
@@ -37,6 +37,8 @@ npm run preflight
 npm run proof:browser
 npm run proof:browser -- --ui
 npm run proof:browser -- --safety
+npm run proof:action-observation
+npm run proof:browser-reader -- --keyboard-only
 ```
 
 The viewer check requires `npm run dev` in another terminal. These commands spend no model credits. The safety check uses only controlled local forms and verifies that unsafe activation and stale sources are refused. Screenshots and detailed local proof records are written to ignored `output/` and `data/` folders.
@@ -54,19 +56,19 @@ npm run proof:voiceover
 
 The test captures actual spoken phrases separately from visited-item text and attempts a known safe action on our local shop. Unknown or missing output remains inconclusive. Cleanup attempts to restore the test reader's settings and previous enabled state, recording a failure if that cannot finish. This restoration is not yet proven by a successful native run. In-run checks are bounded to two checkpoints; they do not establish that every screen-reader task or browser works.
 
-Latest local limit: System Events timed out while the test tried to send keys (`AppleEvent timed out`, -1712). The control checkbox and assets are present, but actual key operation and reliable speech capture have not passed. Access to System Settings through computer control was refused, so the remaining system permission/state needs inspection before this proof can be completed. No security restrictions were disabled.
+Earlier native attempts timed out or were refused synthetic keystrokes. The supported VoiceOver commander interface and an explicit browser-focus request now pass the known-control test while retaining the strict foreground guard. No security restrictions were disabled. A copied per-command speech delta prevents a later announcement from appearing in an earlier command record.
 
-## Paid testing stays off
+## Paid tests require a bounded approval
 
 Put a future Meta API key only in private `.env` as `META_API_KEY=…`; `MODEL_API_KEY` is also recognised. Never commit keys, run records or provider responses. Adding a key alone does not authorise spending.
 
-The owner approved **one paid test**, which is now finished. Its temporary `spend-approval.json` was removed and further paid runs require new approval. Live launch is refused by the interface and command-line script. The model client additionally requires a valid, expiring owner approval and reserves each bounded request before sending it.
+The first one-off approval is consumed. On 27 October the owner authorised further tightly budgeted Meta tests; the current Day 2 batch is capped at $10 total and $3 per run on controlled local records. The dedicated `scripts/day-two-proof.ts` requires a private expiring approval and records all attempts in the same durable ledger. It normally allows three attempts; the explicit corrected-build check allows three validation attempts after the two retained investigation failures, with a fixed source fingerprint and at most five attempts overall. One explicit outline-provenance regression can be the sixth attempt. The $10 aggregate ceiling remains unchanged. It stops a failed journey or unconfirmed charge for inspection and does not create its own approval. Ordinary paid launch remains refused by the interface and default command, and each model request reserves spending before it is sent. Temporary approval files are removed when the batch ends.
 
 The planned limits remain $3 per run, $110 routine project spend and $40 held back from the $150 Meta allowance. Spark uses Standard mode. Unknown charges retain their reservation. No application credentials, database or code from Cavioo are used.
 
 ## Scope and remaining proof
 
-Day 1–2 code can be checked offline. One actual Spark run established six keyboard actions and analysis/review calls, with a partial journey result. Model accuracy, complete journeys, two-of-three consistency and real SAM matching have not been established. Full criterion coverage, polished live bubbles, SAM mask rendering, complete report reconciliation and the final video belong to later days. An automatic accessibility scan is not a screen-reader test or a compliance certificate.
+Day 1–2 code can be checked offline. The first paid test remains a partial result. Current model/native/SAM proof and its limits are recorded in [Day 2 validation](docs/DAY-TWO-VALIDATION.md). Full criterion coverage, model-backed live findings through the existing host, decoded SAM mask rendering, complete report reconciliation, independent human validation and the final video remain later work. An automatic accessibility scan is not a screen-reader test or a compliance certificate.
 
 The twelve-case evaluation set is a draft for owner review. Offline code tests establish record, limit and publication behaviour; they do not establish model accuracy or represent the experiences of all disabled people.
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { presentRecordPayload } from '../src/presentation.js';
 import './styles.css';
 type RecordView = {
   id: string;
@@ -232,6 +233,11 @@ function App() {
                   {report.run.stopReason ??
                     'The robot is collecting original observations. Findings wait for review.'}
                 </p>
+                {report.limits?.map((limit: string) => (
+                  <p className="scope" key={limit}>
+                    {limit}
+                  </p>
+                ))}
                 <div className="run-grid">
                   <section className="evidence" aria-labelledby="evidence-title">
                     <div className="section-heading">
@@ -256,7 +262,7 @@ function App() {
                         </label>
                         <details>
                           <summary>Read page information as text</summary>
-                          <pre>{capture.payload.aria}</pre>
+                          <pre tabIndex={0}>{capture.payload.aria}</pre>
                         </details>
                       </>
                     ) : (
@@ -284,9 +290,9 @@ function App() {
                             {f.evidence.map((source: string) => {
                               const r = records.find((x) => x.id === source);
                               return (
-                                <pre key={source}>
+                                <pre key={source} tabIndex={0}>
                                   {r
-                                    ? JSON.stringify(r.payload, null, 2)
+                                    ? JSON.stringify(presentRecordPayload(r.payload), null, 2)
                                     : 'Original evidence unavailable.'}
                                 </pre>
                               );
@@ -326,7 +332,9 @@ function App() {
                         {records
                           .filter((r) => r.kind === 'action')
                           .map((r) => (
-                            <pre key={r.id}>{JSON.stringify(r.payload, null, 2)}</pre>
+                            <pre key={r.id} tabIndex={0}>
+                              {JSON.stringify(presentRecordPayload(r.payload), null, 2)}
+                            </pre>
                           ))}
                       </details>
                     </article>
@@ -340,7 +348,9 @@ function App() {
                             </p>
                             <details>
                               <summary>Read commands and spoken output</summary>
-                              <pre>{JSON.stringify(r.payload, null, 2)}</pre>
+                              <pre tabIndex={0}>
+                                {JSON.stringify(presentRecordPayload(r.payload), null, 2)}
+                              </pre>
                             </details>
                           </div>
                         ))
