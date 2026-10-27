@@ -323,6 +323,49 @@ test('Billed incomplete and invalid model results retain cost without claiming c
     }
   }
 });
+test('Spark requests use the supported automatic tool choice and validate the returned result', async () => {
+  const x = create();
+  const requests: any[] = [];
+  try {
+    const models = new MetaModels(
+      x.store,
+      (async (url: any, options: any) => {
+        const body = JSON.parse(options.body);
+        requests.push(body);
+        assert.equal(body.tool_choice, 'auto');
+        return new Response(
+          JSON.stringify(
+            String(url).endsWith('input_tokens')
+              ? { input_tokens: 10 }
+              : {
+                  status: 'completed',
+                  usage: { input_tokens: 10, output_tokens: 10 },
+                  output: [
+                    {
+                      type: 'function_call',
+                      name: 'return_result',
+                      arguments: JSON.stringify({
+                        kind: 'finish',
+                        note: 'Safe stopping point reached.',
+                      }),
+                    },
+                  ],
+                },
+          ),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }) as typeof fetch,
+      () => approved,
+      () => 'fake-test-key',
+    );
+    const result = await models.reason(x.run.id, 'driver', [], [], actionSchema);
+    assert.equal(result.kind, 'finish');
+    assert.equal(requests.length, 2);
+    assert.equal(x.store.usage().requests[0].status, 'completed');
+  } finally {
+    x.close();
+  }
+});
 test('A stopped run sends neither token-count nor generation requests', async () => {
   const x = create();
   let calls = 0;

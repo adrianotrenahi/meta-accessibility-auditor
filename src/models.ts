@@ -136,7 +136,7 @@ export class MetaModels {
           parameters: z.toJSONSchema(schema),
         },
       ],
-      tool_choice: { type: 'function', name: 'return_result' },
+      tool_choice: 'auto',
     };
     const { input_tokens: count } = await this.post('/responses/input_tokens', body, signal);
     if (!Number.isInteger(count) || count < 0 || count > cap.input)

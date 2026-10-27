@@ -14,7 +14,7 @@ The application saves one original walk, navigator notes, page images, measureme
 - Spending reservations, request/phase/run limits, interrupted-run recovery, ordered events and replay without new model calls.
 - A connection to real VoiceOver through Guidepup. Its native key-control proof is currently incomplete on this Mac; it is not presented as a successful screen-reader test.
 
-The saved demonstration uses newly written deterministic analysis/review examples. Its browser actions and measurements are real; its responses are not claimed to come from Meta models. No Meta credits have been spent. The live API and interface are deliberately disabled pending a key and a separate bounded owner approval.
+The saved demonstration uses newly written deterministic analysis/review examples. Its browser actions and measurements are real; its responses are not claimed to come from Meta models. One separately approved live test used actual Spark responses and reached the basket, then stopped before the review form at the evidence input limit. Its usage-based cost estimate is $0.3145 against a $3 ceiling. Duplicate findings and overly absolute visual wording remain quality problems. See [the first paid test](docs/FIRST-PAID-TEST.md). Live launch remains disabled in the interface and command-line script.
 
 ## Run locally
 
@@ -58,13 +58,13 @@ Latest local limit: System Events timed out while the test tried to send keys (`
 
 Put a future Meta API key only in private `.env` as `META_API_KEY=…`; `MODEL_API_KEY` is also recognised. Never commit keys, run records or provider responses. Adding a key alone does not authorise spending.
 
-The owner's current instruction is **no credit spending**. There is no `spend-approval.json`. Live launch is refused by the interface and command-line script. The model client additionally requires a valid, expiring owner approval and reserves each bounded request before sending it.
+The owner approved **one paid test**, which is now finished. Its temporary `spend-approval.json` was removed and further paid runs require new approval. Live launch is refused by the interface and command-line script. The model client additionally requires a valid, expiring owner approval and reserves each bounded request before sending it.
 
 The planned limits remain $3 per run, $110 routine project spend and $40 held back from the $150 Meta allowance. Spark uses Standard mode. Unknown charges retain their reservation. No application credentials, database or code from Cavioo are used.
 
 ## Scope and remaining proof
 
-Day 1–2 code can be checked offline. Actual Spark navigation, model accuracy, two-of-three live journey completion and real SAM matching require separately approved paid tests and have not been established. Full criterion coverage, polished live bubbles, SAM mask rendering, complete report reconciliation and the final video belong to later days. An automatic accessibility scan is not a screen-reader test or a compliance certificate.
+Day 1–2 code can be checked offline. One actual Spark run established six keyboard actions and analysis/review calls, with a partial journey result. Model accuracy, complete journeys, two-of-three consistency and real SAM matching have not been established. Full criterion coverage, polished live bubbles, SAM mask rendering, complete report reconciliation and the final video belong to later days. An automatic accessibility scan is not a screen-reader test or a compliance certificate.
 
 The twelve-case evaluation set is a draft for owner review. Offline code tests establish record, limit and publication behaviour; they do not establish model accuracy or represent the experiences of all disabled people.
 
