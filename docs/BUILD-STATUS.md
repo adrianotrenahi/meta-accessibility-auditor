@@ -4,9 +4,9 @@ Updated 27 October 2026. This status distinguishes working code from proof that 
 
 ## Impact on the system
 
-The new standalone application contains a local evidence store, original-record retrieval, independent analysis/review connections, an event stream, spending reservations, a controlled browser walk and a VoiceOver connection. Meta calls are disabled under Adriano's overnight instruction. The API key is absent and no spending approval exists.
+The new standalone application contains a local evidence store, original-record retrieval, independent analysis/review connections, an event stream, spending reservations, a controlled browser walk and a VoiceOver connection. The private API key is present. Adriano subsequently approved one paid test, which finished as partial; its temporary spending approval was removed. No further paid run is approved. See [the test results](FIRST-PAID-TEST.md).
 
-Twenty-three offline tests currently pass. They cover source integrity, corrected-candidate publication, safe key-file parsing, unknown charges, all 24 phase orders, protected final review, startup/Stop cleanup, blocked private destinations, the purchase boundary and SAM geometry handling. The TypeScript check and production interface build pass. Additional real-browser checks exercise unsafe submit controls, changed same-URL states, a delayed old-run response, missing original images and an extra focusable element in the saved journey. Review decisions and rejected suggestions are recorded in REVIEW-NOTES.md.
+Twenty-four offline tests currently pass. They cover source integrity, corrected-candidate publication, safe key-file parsing, unknown charges, all 24 phase orders, protected final review, startup/Stop cleanup, blocked private destinations, the purchase boundary, SAM geometry handling and Meta's supported request setting. The TypeScript check and production interface build pass. Additional real-browser checks exercise unsafe submit controls, changed same-URL states, a delayed old-run response, missing original images and an extra focusable element in the saved journey. Review decisions and rejected suggestions are recorded in REVIEW-NOTES.md.
 
 The real controlled browser proof passes both cases. Each takes thirteen recorded browser actions using the recorded Mac WebKit Option-Tab pattern throughout. The clean button has a name and its dialog receives focus; the broken button has no name and its dialog leaves focus outside. These are actual browser observations, without AI calls or a claim about VoiceOver. An earlier inconsistent Tab pattern failed after the browser settings differed; that was corrected as a test-harness condition, not called a site defect.
 
@@ -22,12 +22,12 @@ The viewer is an early Day 1–2 interface. The complete criterion review, polis
 
 ## Still pending
 
-- **Adriano:** add the Meta API key privately in the morning. Separately decide whether to approve a bounded paid batch; the present instruction remains no spending.
+- **Adriano:** any additional paid test needs a new bounded approval; the one approved test is finished. Reconcile the usage-based cost estimate with provider Billing.
 - **Native VoiceOver proof:** the Mac's key-control/Automation state needs inspection before the real test can pass. Codex implements and reruns the proof once control works; the existing checkbox alone is not proof.
-- **Day 2 model proof:** actual Spark navigation, two successful journeys in three approved attempts, real SAM element matching, model accuracy and measured provider cost remain untested because paid calls were declined. Codex runs them only after a future approval.
+- **Day 2 model proof:** the first Spark run reached the basket but exceeded the evidence input limit before the review form. Codex needs to address repeated evidence, duplicate claims, overly absolute visual wording and missing element identifiers before another test. Complete journeys, consistency, real SAM matches and model accuracy remain unproved. Further paid testing needs new approval.
 - **Evaluation cases:** the twelve-case set has draft expected labels. Adriano reviews them before model evaluation; only the named-button/dialog pairs have full browser proof so far.
 - **Owner choices:** final name, time commitment, real demo site/task, criterion/design details, track/team, participant contribution and launch timing remain undecided. Partner-credit awards remain pending.
 - **Later days:** full criterion coverage, richer visual review, final report reconciliation, finished bubbles/mask rendering, independent human validation and the video remain to be built or verified as scheduled.
-- **Review and merge:** external review, any validated corrections and the owner's merge decision remain ahead. No application code has been merged or deployed.
+- **Review and merge:** the foundation's first corrections passed verification. The separate request-setting fix and its test results are in a proposed change with external reviews requested. Adriano controls the merges; no application code has been merged or deployed.
 
-Day 1 is therefore substantially implemented with its native VoiceOver proof outstanding. Day 2 connections and offline behaviour are implemented; its model and native-reader completion conditions are not yet met. Total Meta spending: **$0.00**.
+Day 1 is therefore substantially implemented with its native VoiceOver proof outstanding. Day 2 connections and offline behaviour are implemented; its model and native-reader completion conditions are not yet met. Total Meta usage-based cost estimate: **$0.3145**, pending provider Billing reconciliation.
