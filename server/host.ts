@@ -155,7 +155,22 @@ export async function hostRequest(
       json(res, 409, { error: 'The live browser is not available.' });
       return;
     }
-    const picture = await active.walk.frames.read();
+    let picture;
+    try {
+      picture = await active.walk.frames.read();
+    } catch {
+      const ended =
+        runner.active !== active ||
+        active.controller.signal.aborted ||
+        !store.hasRun(id) ||
+        store.run(id).state !== 'running';
+      json(res, ended ? 409 : 503, {
+        error: ended
+          ? 'The live browser has ended.'
+          : 'The live picture is temporarily unavailable.',
+      });
+      return;
+    }
     if (
       runner.active !== active ||
       active.controller.signal.aborted ||

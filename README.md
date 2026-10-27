@@ -143,3 +143,10 @@ Concurrent readers share work, with at most four screenshots per second. Closing
 the browser clears cached pixels and refuses late replies; Stop and Discard end
 the live view. The controlled host proof changes the page between picture reads
 and confirms live pixels change while the original audit record stays unchanged.
+
+The live view preserves animations. A moving picture that differs from a saved
+original intentionally has no original binding, so it cannot carry that pin;
+saved report evidence stays available. Full accessibility-state comparisons are
+retained for correctness, shared and paced with the picture reads. Large real-site
+performance remains outside the controlled proof. Temporary picture failures
+return a safe unavailable response; stopped browsers return an ended response.
