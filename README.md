@@ -103,3 +103,30 @@ private. This public fixture is independently runnable and includes only this
 project's controlled pages and newly written saved-response examples. Recorded
 captures are not proof of a live video stream, model accuracy or production
 integration. See [compatibility scope](docs/CAVIOO-COMPATIBILITY.md).
+
+
+## Controlled host run interface
+
+`npm run serve:host -- --data /absolute/path/to/dedicated-local-records` starts a
+local, offline-only host surface without the standalone viewer. It prints its
+loopback address. A host obtains the local session token and uses `GET /api/host`
+for the supported controlled URL/goal/capabilities. Requests to `/api/host/runs`
+start only the fixed Desktop keyboard example and require a stable request UUID.
+Repeated starts reuse the same run; a discarded start cannot be resurrected.
+Read snapshots and original PNGs through the run's host routes, advance only a
+matching saved revision, or use separate Stop and Discard actions. Stop retains
+evidence; confirmed discard waits for cleanup and removes the run and originals.
+Minimal incurred/uncertain cost records remain so deletion cannot reset the
+project spending limit. No action enables paid inference.
+
+Discard status distinguishes requested cleanup from confirmed removal. Failed
+record deletion leaves original image files intact; failed file removal keeps an
+ID-only cleanup record so a repeated discard can finish it after restart. Completed
+start mappings are replaced by minimal discarded-start identifiers.
+
+`npm run proof:host-controls` checks a fresh headless browser walk, source-bound
+accepted finding, repeated starts, stale advances, ordinary Stop, confirmed
+discard and original-image removal with zero model calls. Native VoiceOver,
+continuous live video, per-screen deletion, model accuracy and SAM are not
+established by this controlled proof. Provider awards now include Meta's $150 and
+Baseten's separately held $100; paid runs still need a new bounded approval.

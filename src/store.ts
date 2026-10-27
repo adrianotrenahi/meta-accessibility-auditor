@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RecordEntry, RecordKind, Role, Run, RunState, Approval } from './types.js';
 import { LIMITS, PHASE, CAPS } from './types.js';
@@ -16,6 +16,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS records(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,run_id TEXT NOT NULL REFERENCES runs(id),kind TEXT NOT NULL,author TEXT NOT NULL,body TEXT NOT NULL,sources TEXT NOT NULL,hash TEXT NOT NULL,created TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id),role TEXT NOT NULL,reserved INTEGER NOT NULL,actual INTEGER,status TEXT NOT NULL,created TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS records_run ON records(run_id,seq);
+      CREATE TABLE IF NOT EXISTS host_starts(request_id TEXT PRIMARY KEY,run_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS host_discarded_starts(request_id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS discard_cleanup(run_id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS discarded_usage(id TEXT PRIMARY KEY,role TEXT NOT NULL,reserved INTEGER NOT NULL,actual INTEGER,status TEXT NOT NULL,created TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS host_versions(run_id TEXT PRIMARY KEY REFERENCES runs(id), hash TEXT NOT NULL, version INTEGER NOT NULL);`);
   }
   recoverInterrupted() {
@@ -31,7 +35,8 @@ export class Store {
   close() {
     this.db.close();
   }
-  create(goal: string, url: string, mode: Run['mode']): Run {
+  create(goal: string, url: string, mode: Run['mode'], requestId?: string): Run {
+    requestId = requestId?.toLowerCase();
     const run: Run = {
       id: randomUUID(),
       goal,
@@ -40,8 +45,18 @@ export class Store {
       state: 'running',
       createdAt: new Date().toISOString(),
     };
-    this.db.prepare('INSERT INTO runs VALUES(?,?)').run(run.id, JSON.stringify(run));
-    return run;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (requestId && this.hostStartDiscarded(requestId))
+        throw Error('This start was discarded. A retry cannot recreate it.');
+      this.db.prepare('INSERT INTO runs VALUES(?,?)').run(run.id, JSON.stringify(run));
+      if (requestId) this.db.prepare('INSERT INTO host_starts VALUES(?,?)').run(requestId, run.id);
+      this.db.exec('COMMIT');
+      return run;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   run(id: string): Run {
     const row = this.db.prepare('SELECT body FROM runs WHERE id=?').get(id) as any;
@@ -52,6 +67,66 @@ export class Store {
     return (this.db.prepare('SELECT body FROM runs ORDER BY rowid DESC').all() as any[]).map((r) =>
       JSON.parse(r.body),
     );
+  }
+  hostStart(requestId: string): string | null {
+    const row = this.db
+      .prepare('SELECT run_id FROM host_starts WHERE request_id=?')
+      .get(requestId.toLowerCase()) as { run_id: string } | undefined;
+    return row?.run_id ?? null;
+  }
+  hasRun(id: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM runs WHERE id=?').get(id);
+  }
+  hostStartDiscarded(requestId: string): boolean {
+    return !!this.db
+      .prepare('SELECT 1 FROM host_discarded_starts WHERE request_id=?')
+      .get(requestId.toLowerCase());
+  }
+  discardHostStart(requestId: string) {
+    this.db
+      .prepare('INSERT OR IGNORE INTO host_discarded_starts VALUES(?)')
+      .run(requestId.toLowerCase());
+    return this.hostStart(requestId);
+  }
+  discardPending(id: string) {
+    return !!this.db.prepare('SELECT 1 FROM discard_cleanup WHERE run_id=?').get(id);
+  }
+  /** Called only after the runner has stopped all writes for this run. */
+  discard(id: string) {
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw Error('Invalid run identity.');
+    if (!this.hasRun(id)) {
+      if (this.discardPending(id)) this.cleanupDiscard(id);
+      return;
+    }
+    if (this.run(id).state === 'running') throw Error('Stop the run before discarding evidence.');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('INSERT OR IGNORE INTO discard_cleanup VALUES(?)').run(id);
+      this.db
+        .prepare(
+          'INSERT OR IGNORE INTO host_discarded_starts SELECT request_id FROM host_starts WHERE run_id=?',
+        )
+        .run(id);
+      this.db
+        .prepare(
+          'INSERT OR IGNORE INTO discarded_usage SELECT id,role,reserved,actual,status,created FROM requests WHERE run_id=?',
+        )
+        .run(id);
+      this.db.prepare('DELETE FROM requests WHERE run_id=?').run(id);
+      this.db.prepare('DELETE FROM host_versions WHERE run_id=?').run(id);
+      this.db.prepare('DELETE FROM records WHERE run_id=?').run(id);
+      this.db.prepare('DELETE FROM runs WHERE id=?').run(id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    this.cleanupDiscard(id);
+  }
+  private cleanupDiscard(id: string) {
+    rmSync(join(this.dir, id), { recursive: true, force: true });
+    this.db.prepare('DELETE FROM host_starts WHERE run_id=?').run(id);
+    this.db.prepare('DELETE FROM discard_cleanup WHERE run_id=?').run(id);
   }
   finish(id: string, state: RunState, reason?: string) {
     const r = this.run(id);
@@ -218,7 +293,11 @@ export class Store {
   }
   usage(runId?: string) {
     const rows = this.db
-      .prepare(`SELECT * FROM requests${runId ? ' WHERE run_id=?' : ''}`)
+      .prepare(
+        runId
+          ? 'SELECT * FROM requests WHERE run_id=?'
+          : 'SELECT * FROM requests UNION ALL SELECT id,NULL AS run_id,role,reserved,actual,status,created FROM discarded_usage',
+      )
       .all(...(runId ? [runId] : [])) as any[];
     return {
       spent: rows.reduce((n, r) => n + (r.actual ?? 0), 0),
@@ -295,7 +374,13 @@ export class Store {
   settle(id: string, actual: number | null, status: string) {
     if (actual !== null && (!Number.isSafeInteger(actual) || actual < 0))
       throw Error('Invalid reported usage.');
-    this.db.prepare('UPDATE requests SET actual=?,status=? WHERE id=?').run(actual, status, id);
+    const updated = this.db
+      .prepare('UPDATE requests SET actual=?,status=? WHERE id=?')
+      .run(actual, status, id);
+    if (!updated.changes)
+      this.db
+        .prepare('UPDATE discarded_usage SET actual=?,status=? WHERE id=?')
+        .run(actual, status, id);
   }
   asset(runId: string, name: string, bytes: Uint8Array) {
     if (!/^[a-zA-Z0-9_-]+\.(png|json)$/.test(name)) throw Error('Invalid asset name.');

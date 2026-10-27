@@ -1,0 +1,176 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { z } from 'zod';
+import type { Store } from '../src/store.js';
+import type { Runner } from '../src/runner.js';
+import { exportHostSnapshot } from '../src/host-export.js';
+
+export const HOST_GOAL = 'Add the canvas bag to the basket, stopping before any order.';
+/** Generic local host surface. It knows no private application components. */
+export async function hostRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  kit: {
+    origin: string;
+    token: string;
+    store: Store;
+    runner: Runner;
+    json: (res: ServerResponse, status: number, value: unknown) => void;
+  },
+) {
+  const { store, runner, json } = kit;
+  if (req.headers['x-session-token'] !== kit.token) {
+    json(res, 403, { error: 'A local host connection is required.' });
+    return;
+  }
+  if (url.pathname === '/api/host' && req.method === 'GET') {
+    json(res, 200, {
+      protocol: 'access-walk/host-v1',
+      mode: 'offline',
+      url: kit.origin + '/shop/?case=broken',
+      goal: HOST_GOAL,
+      devices: ['desktop_1440_900'],
+      capabilities: {
+        liveBrowser: false,
+        deleteScreens: false,
+        discard: true,
+        manualCheckpoints: true,
+      },
+      modelCalls: 0,
+    });
+    return;
+  }
+  if (req.method === 'POST') {
+    let raw = '';
+    for await (const chunk of req) {
+      raw += chunk;
+      if (raw.length > 4096) {
+        json(res, 413, { error: 'Request too large.' });
+        return;
+      }
+    }
+    const body = raw ? JSON.parse(raw) : {};
+    if (url.pathname === '/api/host/runs') {
+      z.object({ mode: z.literal('offline'), requestId: z.uuid() })
+        .strict()
+        .parse(body);
+      if (store.hostStartDiscarded(body.requestId)) {
+        json(res, 409, {
+          error:
+            'Discard was requested for this start. Retry discard to finish any remaining cleanup; starting it again is refused.',
+        });
+        return;
+      }
+      const prior = store.hostStart(body.requestId);
+      if (prior) {
+        json(
+          res,
+          store.hasRun(prior) ? 200 : 409,
+          store.hasRun(prior)
+            ? { id: prior }
+            : { error: 'This run was discarded. A retry cannot recreate it.' },
+        );
+        return;
+      }
+      const run = await runner.start({
+        mode: 'offline',
+        headless: true,
+        engine: 'chromium',
+        voiceOver: false,
+        goal: HOST_GOAL,
+        manualCheckpoints: true,
+        requestId: body.requestId,
+      });
+      json(res, 201, { id: run.id });
+      return;
+    }
+    const discardStart = url.pathname.match(/^\/api\/host\/requests\/([a-f0-9-]{36})\/discard$/i);
+    if (discardStart) {
+      z.object({}).strict().parse(body);
+      const id = store.discardHostStart(discardStart[1]);
+      if (id) await runner.discard(id);
+      json(res, 200, { discarded: true });
+      return;
+    }
+    const control = url.pathname.match(
+      /^\/api\/host\/runs\/([a-f0-9-]{36})\/(advance|discard|stop)$/,
+    );
+    if (control) {
+      const [, id, action] = control;
+      if (action === 'advance')
+        z.object({ sequence: z.number().int().positive() }).strict().parse(body);
+      else z.object({}).strict().parse(body);
+      if (action === 'discard') {
+        await runner.discard(id);
+        json(res, 200, { discarded: true });
+        return;
+      }
+      if (!store.hasRun(id)) {
+        json(res, 404, { error: 'Run not found.' });
+        return;
+      }
+      if (action === 'advance') {
+        if (!runner.isWaiting(id)) {
+          json(res, 409, { error: 'The next controlled checkpoint is not ready.' });
+          return;
+        }
+        if (body.sequence !== exportHostSnapshot(store, id).snapshot.sequence) {
+          json(res, 409, {
+            error: 'The displayed checkpoint changed. Refresh the saved state before advancing.',
+          });
+          return;
+        }
+        runner.advance(id);
+      } else if (runner.active?.run.id === id) await runner.stop(id);
+      json(res, 200, { accepted: true });
+      return;
+    }
+  }
+  const requested = url.pathname.match(/^\/api\/host\/requests\/([a-f0-9-]{36})$/i);
+  if (requested && req.method === 'GET') {
+    const id = store.hostStart(requested[1]);
+    const requestedDiscard = store.hostStartDiscarded(requested[1]);
+    const pending = !!(id && requestedDiscard && (store.hasRun(id) || store.discardPending(id)));
+    json(res, 200, {
+      id,
+      discarded: !pending && (requestedDiscard || (id ? !store.hasRun(id) : false)),
+      discardPending: pending,
+    });
+    return;
+  }
+  const read = url.pathname.match(
+    /^\/api\/host\/runs\/([a-f0-9-]{36})(?:\/assets\/([a-f0-9]{64})\.png)?$/,
+  );
+  if (read && req.method === 'GET') {
+    const [, id, hash] = read;
+    if (!store.hasRun(id)) {
+      json(res, 404, { error: 'Run not found.' });
+      return;
+    }
+    if (hash) {
+      const captures = store
+        .records(id)
+        .filter((r) => r.kind === 'capture' && r.payload.imageHash === hash);
+      for (const capture of captures) {
+        let bytes: Buffer;
+        try {
+          bytes = store.image(id, capture.payload.imageFile);
+        } catch {
+          // An intact original with identical verified bytes can still be served.
+          continue;
+        }
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+        res.end(bytes);
+        return;
+      }
+      json(res, 404, { error: 'Original image not found.' });
+      return;
+    }
+    json(res, 200, {
+      snapshot: exportHostSnapshot(store, id).snapshot,
+      waiting: runner.isWaiting(id),
+    });
+    return;
+  }
+  json(res, 404, { error: 'Host action not found.' });
+}

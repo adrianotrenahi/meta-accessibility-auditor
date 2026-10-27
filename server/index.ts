@@ -9,6 +9,7 @@ import { dataDir, safeError, key } from '../src/config.js';
 import { voiceOverPreflight } from '../src/voiceover.js';
 import { shopPage } from './shop.js';
 import { z } from 'zod';
+import { hostRequest } from './host.js';
 import { sessionLock } from '../src/lock.js';
 export const visibleKinds = new Set([
   'plan',
@@ -28,8 +29,8 @@ export async function startServer(port = 4317, dir = dataDir, frontend = true) {
     store.close();
     throw e;
   }
-  const origin = `http://127.0.0.1:${port}`,
-    runner = new Runner(store, origin),
+  let origin = `http://127.0.0.1:${port}`;
+  const runner = new Runner(store, origin),
     token = randomBytes(24).toString('hex');
   if (frontend && !existsSync('dist/client/index.html')) {
     release();
@@ -53,6 +54,8 @@ export async function startServer(port = 4317, dir = dataDir, frontend = true) {
         return json(res, 403, { error: 'Requests from other websites are refused.' });
       if (req.headers['sec-fetch-site'] === 'cross-site')
         return json(res, 403, { error: 'Open this page directly on this Mac.' });
+      if (url.pathname === '/api/host' || url.pathname.startsWith('/api/host/'))
+        return await hostRequest(req, res, url, { origin, token, store, runner, json });
       if (url.pathname.startsWith('/shop')) {
         res.writeHead(200, {
           'Content-Type': 'text/html;charset=utf-8',
@@ -115,6 +118,10 @@ export async function startServer(port = 4317, dir = dataDir, frontend = true) {
           let seq = Number(req.headers['last-event-id'] ?? 0);
           if (!Number.isSafeInteger(seq)) seq = 0;
           const emit = () => {
+            if (!store.hasRun(id)) {
+              res.end();
+              return;
+            }
             for (const record of store.records(id, seq)) {
               res.write(
                 `id: ${record.seq}\ndata: ${JSON.stringify({ seq: record.seq, kind: record.kind })}\n\n`,
@@ -166,6 +173,12 @@ export async function startServer(port = 4317, dir = dataDir, frontend = true) {
       server.once('error', reject);
       server.listen(port, '127.0.0.1', resolve);
     });
+    const address = server.address();
+    if (!address || typeof address === 'string')
+      throw Error('The local server did not obtain a port.');
+    port = address.port;
+    origin = `http://127.0.0.1:${port}`;
+    runner.origin = origin;
     store.recoverInterrupted();
   } catch (e) {
     release();

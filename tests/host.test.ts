@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
@@ -199,6 +199,112 @@ test('One unavailable screenshot withholds its claim without hiding unrelated in
     assert.equal(missing.captures[0].imageAvailable, false);
     assert(missing.sequence > later.sequence);
     assert.equal(applyHostSnapshot(later, missing).captures.length, 2);
+  } finally {
+    x.close();
+  }
+});
+
+test('Confirmed discard removes evidence while keeping incurred and uncertain costs in the project limit', () => {
+  const x = sample();
+  try {
+    x.review();
+    exportHostSnapshot(x.store, x.run.id);
+    x.store.db
+      .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
+      .run('known-cost', x.run.id, 'analyst', 100, 80, 'done', new Date().toISOString());
+    x.store.db
+      .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
+      .run('unknown-cost', x.run.id, 'reviewer', 120, null, 'unknown', new Date().toISOString());
+    assert.throws(() => x.store.discard(x.run.id), /Stop/);
+    x.store.finish(x.run.id, 'stopped', 'Discard requested');
+    x.store.discard(x.run.id);
+    assert.equal(x.store.hasRun(x.run.id), false);
+    assert.deepEqual(x.store.records(x.run.id), []);
+    assert.equal(x.store.usage().spent, 80);
+    assert.equal(x.store.usage().reserved, 120);
+    assert(!JSON.stringify(x.store.usage()).includes(x.run.id));
+    x.store.settle('unknown-cost', 90, 'done');
+    assert.equal(x.store.usage().spent, 170);
+    assert.equal(x.store.usage().reserved, 0);
+    x.store.discard(x.run.id);
+  } finally {
+    x.close();
+  }
+});
+
+test('A start request keeps its identity across reopen and cannot resurrect discarded evidence', () => {
+  const x = sample();
+  try {
+    const key = '10000000-0000-4000-8000-000000000000';
+    const run = x.store.create(
+      'Controlled host request',
+      'https://controlled.example/',
+      'offline',
+      key,
+    );
+    assert.equal(x.store.hostStart(key), run.id);
+    const reopened = new Store(x.store.dir);
+    try {
+      assert.equal(reopened.hostStart(key), run.id);
+    } finally {
+      reopened.close();
+    }
+    assert.throws(() => x.store.create('Duplicate', 'https://controlled.example/', 'offline', key));
+    assert.equal(x.store.runs().length, 2);
+    x.store.finish(run.id, 'stopped');
+    x.store.discard(run.id);
+    assert.equal(x.store.hostStart(key), null);
+    assert.equal(x.store.hostStartDiscarded(key), true);
+    assert.equal(x.store.hasRun(run.id), false);
+    const cancelled = '20000000-0000-4000-8000-000000000000';
+    assert.equal(x.store.discardHostStart(cancelled), null);
+    const afterDiscard = new Store(x.store.dir);
+    try {
+      assert.equal(afterDiscard.hostStartDiscarded(cancelled), true);
+      assert.throws(
+        () =>
+          afterDiscard.create('Late start', 'https://controlled.example/', 'offline', cancelled),
+        /discarded/,
+      );
+      assert.equal(afterDiscard.runs().length, 1);
+    } finally {
+      afterDiscard.close();
+    }
+  } finally {
+    x.close();
+  }
+});
+
+test('Failed record deletion preserves originals and pending file cleanup can be retried after reopen', () => {
+  const x = sample();
+  try {
+    const imageFile = join(x.store.dir, x.run.id, x.capture.payload.imageFile);
+    x.store.finish(x.run.id, 'stopped');
+    x.store.db.exec(
+      "CREATE TEMP TRIGGER fail_discard BEFORE DELETE ON runs BEGIN SELECT RAISE(ABORT,'forced discard rollback'); END",
+    );
+    assert.throws(() => x.store.discard(x.run.id), /forced discard rollback/);
+    assert.equal(x.store.hasRun(x.run.id), true);
+    assert.equal(existsSync(imageFile), true);
+    assert.equal(
+      x.store.image(x.run.id, x.capture.payload.imageFile).toString(),
+      'original image bytes',
+    );
+    x.store.db.exec('DROP TRIGGER fail_discard');
+    x.store.discard(x.run.id);
+    assert.equal(existsSync(imageFile), false);
+    mkdirSync(join(x.store.dir, x.run.id));
+    writeFileSync(imageFile, 'pending original cleanup');
+    x.store.db.prepare('INSERT INTO discard_cleanup VALUES(?)').run(x.run.id);
+    const reopened = new Store(x.store.dir);
+    try {
+      assert.equal(reopened.discardPending(x.run.id), true);
+      reopened.discard(x.run.id);
+      assert.equal(existsSync(imageFile), false);
+      assert.equal(reopened.discardPending(x.run.id), false);
+    } finally {
+      reopened.close();
+    }
   } finally {
     x.close();
   }

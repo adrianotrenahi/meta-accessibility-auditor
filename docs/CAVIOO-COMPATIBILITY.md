@@ -78,3 +78,17 @@ rewritten original is marked unavailable; only claims that depend on it are
 withheld, and unrelated intact originals remain readable. Originals keep their
 identity when availability changes. The controlled proof uses a temporary local
 store; `npm run proof:host -- --port 4341` selects a different free port if needed.
+
+
+## Controlled fresh-run host surface
+
+The generic local host API now supports a fresh controlled browser run and
+original snapshot/image reads. Manual checkpoints let the private host prove its
+existing setup → browser → reviewed finding → report flow without paid inference.
+The example uses actual keyboard actions and saved analysis/review responses;
+its declaration is not a claim about model accuracy or native-reader operation.
+Stable start identities and revision-bound advance controls prevent duplicated
+work. Confirmed discard waits for all writes to stop before removing original
+run evidence and images; Stop keeps them. Minimal financial totals and deletion
+identifiers survive without retaining the discarded actions, prompts or images.
+Private UI source and production credentials remain outside this repository.
