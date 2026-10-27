@@ -1,4 +1,4 @@
-import { Store } from './store.js';
+import { Store, recordIsIntact } from './store.js';
 import { MetaModels } from './models.js';
 import type { RecordEntry, ElementInfo } from './types.js';
 export function overlap(a: ElementInfo['box'], b: ElementInfo['box']) {
@@ -8,11 +8,21 @@ export function overlap(a: ElementInfo['box'], b: ElementInfo['box']) {
   return intersection / (a.width * a.height + b.width * b.height - intersection || 1);
 }
 export function boxPrompt(target: ElementInfo, width: number, height: number) {
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    width <= 0 ||
+    height <= 0 ||
+    ![target.box.x, target.box.y, target.box.width, target.box.height].every(Number.isFinite) ||
+    target.box.width <= 0 ||
+    target.box.height <= 0
+  )
+    throw Error('SAM needs valid original dimensions and a visible target.');
   const x1 = Math.max(0, Math.floor(target.box.x)),
     y1 = Math.max(0, Math.floor(target.box.y)),
-    x2 = Math.min(width, Math.ceil(target.box.x + target.box.width)),
-    y2 = Math.min(height, Math.ceil(target.box.y + target.box.height));
-  if (x1 >= x2 || y1 >= y2) throw Error('The element is outside this capture.');
+    x2 = Math.min(width - 1, Math.ceil(target.box.x + target.box.width) - 1),
+    y2 = Math.min(height - 1, Math.ceil(target.box.y + target.box.height) - 1);
+  if (x1 > x2 || y1 > y2) throw Error('The element is outside this capture.');
   return `<0f>1<|box;x1=${x1};y1=${y1};x2=${x2};y2=${y2};w=${width};h=${height}|>`;
 }
 export async function mapElement(
@@ -23,19 +33,59 @@ export async function mapElement(
   targetId: string,
   signal: AbortSignal,
 ) {
-  if (capture.kind !== 'capture' || capture.runId !== runId)
+  const original = store.record(runId, capture.id);
+  if (
+    capture.kind !== 'capture' ||
+    capture.runId !== runId ||
+    capture.payload.stable !== true ||
+    original?.hash !== capture.hash ||
+    !recordIsIntact(capture) ||
+    !recordIsIntact(original)
+  )
     throw Error('SAM needs the exact original capture.');
-  const target = capture.payload.elements.find((x: ElementInfo) => x.id === targetId);
-  if (!target) throw Error('The proposed element is not part of this capture.');
+  const targets = capture.payload.elements.filter((x: ElementInfo) => x.id === targetId);
+  if (targets.length !== 1) throw Error('The proposed element is not unique in this capture.');
+  const target = targets[0];
   const prompt = boxPrompt(target, capture.payload.width, capture.payload.height),
     cacheKey = `sam-3.1:${capture.payload.imageHash}:${prompt}`;
+  // Verify bytes even on a cache hit. Identical pixels from another capture are not this source.
+  const image =
+    'data:image/png;base64,' + store.image(runId, capture.payload.imageFile).toString('base64');
   const prior = store
     .records(runId)
     .find(
       (r) =>
-        r.kind === 'sam_mapping' && r.payload.cacheKey === cacheKey && r.payload.stage === 'result',
+        r.kind === 'sam_mapping' &&
+        r.payload.cacheKey === cacheKey &&
+        r.payload.stage === 'result' &&
+        r.payload.captureId === capture.id &&
+        r.payload.targetId === targetId,
     );
-  if (prior) return prior;
+  if (prior) {
+    if (
+      !recordIsIntact(prior) ||
+      prior.payload.captureHash !== capture.payload.imageHash ||
+      prior.payload.dimensions?.width !== capture.payload.width ||
+      prior.payload.dimensions?.height !== capture.payload.height ||
+      !prior.sources.includes(capture.id)
+    )
+      throw Error('The saved SAM result changed; it cannot be reused.');
+    return prior;
+  }
+  const priorAttempt = store
+    .records(runId)
+    .find(
+      (r) =>
+        r.kind === 'sam_mapping' &&
+        r.payload.stage === 'requested' &&
+        r.payload.captureId === capture.id &&
+        r.payload.targetId === targetId &&
+        r.payload.cacheKey === cacheKey,
+    );
+  if (priorAttempt)
+    throw Error(
+      'A prior SAM attempt for this original target has no usable result; it will not be silently retried.',
+    );
   const count = store.usage(runId).requests.filter((r) => r.role === 'sam').length;
   const forImage = store
     .records(runId)
@@ -46,8 +96,6 @@ export async function mapElement(
         r.payload.stage === 'requested',
     ).length;
   if (count >= 16 || forImage >= 2) throw Error('SAM request limit reached for this run or view.');
-  const image =
-    'data:image/png;base64,' + store.image(runId, capture.payload.imageFile).toString('base64');
   store.append(
     runId,
     'sam_mapping',
@@ -78,7 +126,8 @@ export async function mapElement(
       dimensions: { width: capture.payload.width, height: capture.payload.height },
       match: match ? 'geometry_matches_target' : 'unresolved',
       matchingObjectId: match?.objectId,
-      limit: 'Geometric overlap is not semantic correctness or proof of an accessibility claim.',
+      limit:
+        'Geometric overlap is not semantic correctness or proof of an accessibility claim. Mask payloads are retained encoded; their pixels have not been decoded or validated.',
     },
     [capture.id],
   );

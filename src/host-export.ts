@@ -55,20 +55,23 @@ export function exportHostSnapshot(store: Store, runId: string) {
       String(record.payload.reason ?? record.payload.cleanup ?? 'A check was incomplete.'),
     );
   limits.push(...imageLimits);
+  limits.push(...store.publicationLimits(runId));
   const findings = store.published(runId).flatMap((finding) => {
     const candidate = records.find((record) => record.id === finding.id)!;
     const review = records
       .filter((record) => record.kind === 'review' && record.payload.candidateId === candidate.id)
       .at(-1)!;
-    const captureIds = captureSources(candidate.sources);
+    const captureIds = captureSources(finding.evidence);
     if (captureIds.some((id) => unavailable.has(id))) return [];
     if (!captureIds.length) {
       limits.push('An accepted claim lacks a retrievable original image and is not exported.');
       return [];
     }
     let anchor = null;
-    if (captureIds.length === 1 && candidate.payload.targetId) {
-      const record = originals.find((record) => record.id === captureIds[0])!;
+    const anchorId =
+      candidate.payload.targetCaptureId ?? (captureIds.length === 1 ? captureIds[0] : null);
+    if (anchorId && captureIds.includes(anchorId) && candidate.payload.targetId) {
+      const record = originals.find((record) => record.id === anchorId)!;
       const element = record.payload.elements.find(
         (element: { id: string }) => element.id === candidate.payload.targetId,
       );
@@ -98,7 +101,7 @@ export function exportHostSnapshot(store: Store, runId: string) {
         basis: finding.basis,
         severity: finding.severity,
         captureIds,
-        sourceIds: candidate.sources,
+        sourceIds: finding.evidence,
         anchor,
       },
     ];

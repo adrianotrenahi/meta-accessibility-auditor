@@ -6,6 +6,8 @@ import type { Action } from './models.js';
 import { permittedUrl } from './network.js';
 import { randomUUID } from 'node:crypto';
 import { LiveFrames } from './live-frame.js';
+import { readPage } from './page-observation.js';
+import { safeError } from './config.js';
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
 export const isCommitment = (name: string) =>
@@ -85,13 +87,18 @@ export class BrowserWalk {
     return this.capture();
   }
   async focus() {
+    return readPage(this.page, () => this.readFocus());
+  }
+  private async readFocus() {
     const details = await this.page.evaluate(() => {
       const e = document.activeElement as HTMLElement | null;
       const form = (e as HTMLInputElement | null)?.form;
       const inputButton =
         e?.tagName === 'INPUT' &&
         ['submit', 'button', 'reset', 'image'].includes((e as HTMLInputElement).type);
+      const style = e ? getComputedStyle(e) : null;
       return {
+        documentEpoch: performance.timeOrigin,
         id: e?.id ?? '',
         tag: e?.tagName.toLowerCase() ?? '',
         text: (e?.textContent ?? '').trim().slice(0, 200),
@@ -101,17 +108,27 @@ export class BrowserWalk {
         type: e?.getAttribute('type') ?? '',
         hasForm: !!form,
         paymentForm: !!form?.querySelector('[autocomplete^="cc-"],input[name*="card" i]'),
+        appearance: style
+          ? {
+              outlineColor: style.outlineColor,
+              outlineStyle: style.outlineStyle,
+              outlineWidth: style.outlineWidth,
+              outlineOffset: style.outlineOffset,
+            }
+          : null,
       };
     });
     const active = this.page.locator(':focus').first();
-    const aria = (await active.count())
-      ? await active.ariaSnapshot({ depth: 1 }).catch(() => '')
-      : '';
+    const aria = (await active.count()) ? await active.ariaSnapshot({ depth: 1 }) : '';
     const name = aria.split('\n')[0]?.match(/"((?:\\.|[^"])*)"/)?.[1] ?? details.labelHint;
-    return { ...details, name };
+    if (details.documentEpoch !== (await this.page.evaluate(() => performance.timeOrigin)))
+      throw Error('Document changed during observation');
+    const { documentEpoch: _epoch, ...focus } = details;
+    return { ...focus, name };
   }
   private async observedState() {
     return {
+      documentEpoch: await this.page.evaluate(() => performance.timeOrigin),
       url: this.page.url(),
       aria: await this.page.locator('body').ariaSnapshot(),
       focus: await this.focus(),
@@ -119,6 +136,9 @@ export class BrowserWalk {
     };
   }
   async capture(): Promise<RecordEntry> {
+    return readPage(this.page, () => this.captureOnce());
+  }
+  private async captureOnce(): Promise<RecordEntry> {
     this.assertActive();
     const before = await this.observedState();
     const elements = [];
@@ -130,21 +150,40 @@ export class BrowserWalk {
       const box = await locator.boundingBox();
       if (!box) continue;
       const info = await locator.evaluate((e) => ({
+        selector: (() => {
+          const parts: string[] = [];
+          let current: Element | null = e;
+          while (current) {
+            if (current.id) {
+              parts.unshift('#' + CSS.escape(current.id));
+              break;
+            }
+            const tag = current.tagName.toLowerCase();
+            const siblings = current.parentElement
+              ? [...current.parentElement.children].filter((s) => s.tagName === current!.tagName)
+              : [current];
+            parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')');
+            current = current.parentElement;
+          }
+          return parts.join(' > ');
+        })(),
         tag: e.tagName.toLowerCase(),
         text: (e.textContent ?? '').trim().slice(0, 200),
         type: e.getAttribute('type') ?? '',
         disabled: e.hasAttribute('disabled'),
       }));
-      const aria = await locator.ariaSnapshot({ depth: 1 }).catch(() => '');
+      const aria = await locator.ariaSnapshot({ depth: 1 });
       const first = aria.split('\n')[0] ?? '';
       const role = first.match(/^- ([a-z]+)/)?.[1] ?? info.tag;
       const name = first.match(/"((?:\\.|[^"])*)"/)?.[1] ?? '';
       elements.push({ ...info, id: `e${i}`, role, name, box });
     }
     const image = await this.page.screenshot({ type: 'png', animations: 'disabled' });
-    const asset = this.store.asset(this.runId, `capture_${randomUUID()}.png`, image);
     const visibleText = await this.page.locator('body').innerText();
     const state = await this.observedState();
+    if (before.documentEpoch !== state.documentEpoch)
+      throw Error('Document changed during observation');
+    const asset = this.store.asset(this.runId, `capture_${randomUUID()}.png`, image);
     const payload: Capture = {
       url: this.page.url(),
       title: await this.page.title(),
@@ -163,6 +202,12 @@ export class BrowserWalk {
         maximumListedControls: 60,
         visibleTextTruncated: visibleText.length > 16000,
         imageScope: 'viewport',
+      },
+      imageProvenance: {
+        source: 'Browser-rendered page viewport',
+        engineAddedAnnotations: false,
+        focusOutline: 'Rendered page/browser styling, not an audit or test overlay',
+        animations: 'Disabled for the saved screenshot',
       },
     };
     return this.store.append(this.runId, 'capture', 'browser', payload);
@@ -184,6 +229,9 @@ export class BrowserWalk {
       throw Error('Page state changed; capture a fresh observation before acting.');
     const before = await this.focus();
     const urlBefore = this.page.url();
+    const requestedAction = action;
+    if (this.engine === 'webkit' && ['Tab', 'Shift+Tab'].includes(action.key ?? ''))
+      action = { ...action, key: action.key === 'Tab' ? 'Alt+Tab' : 'Alt+Shift+Tab' };
     let outcome = 'performed';
     if (action.kind === 'press') {
       if (!action.key) throw Error('A keyboard action needs a permitted key.');
@@ -233,8 +281,14 @@ export class BrowserWalk {
       await this.page.waitForTimeout(800);
     } else outcome = 'not a browser input';
     await this.page.waitForTimeout(180);
-    const after = await this.focus();
-    return this.store.append(
+    let after: Awaited<ReturnType<BrowserWalk['focus']>> | null = null;
+    let afterLimit: string | undefined;
+    try {
+      after = await this.focus();
+    } catch (error) {
+      afterLimit = safeError(error);
+    }
+    const record = this.store.append(
       this.runId,
       'action',
       'browser',
@@ -243,6 +297,7 @@ export class BrowserWalk {
         sourceCaptureId: source.id,
         sourceImageHash: source.payload.imageHash,
         action,
+        requestedAction,
         before,
         after,
         urlBefore,
@@ -252,6 +307,19 @@ export class BrowserWalk {
       },
       [source.id],
     );
+    if (afterLimit)
+      this.store.append(
+        this.runId,
+        'limit',
+        'browser',
+        {
+          reason:
+            'The input was sent, but its immediate focus result could not be read. This is an observation limit, not evidence that the website action failed.',
+          observationError: afterLimit,
+        },
+        [record.id],
+      );
+    return record;
   }
   async measurements(source: RecordEntry) {
     this.assertActive();

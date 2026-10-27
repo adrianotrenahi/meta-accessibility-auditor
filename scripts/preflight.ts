@@ -10,7 +10,7 @@ console.log(
       browserInstalled: existsSync(webkit.executablePath()),
       metaKeyPresent: !!key(),
       paidApprovalPresent: existsSync('spend-approval.json'),
-      paidTestingAuthorised: false,
+      paidLaunchEnabledInInterface: false,
       voiceOver: voiceOverPreflight(),
       next: 'Offline tests do not need an API key. Actual VoiceOver needs the normal Mac permissions and matching Guidepup assets.',
     },

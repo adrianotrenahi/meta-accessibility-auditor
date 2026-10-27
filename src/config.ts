@@ -28,7 +28,7 @@ export function approval(): Approval {
     if (a.approvedBy !== 'Adriano') throw Error();
     return a;
   } catch {
-    throw Error('Paid calls are disabled. Adriano has approved coding and offline tests only.');
+    throw Error('Paid calls are disabled until a current bounded approval file is supplied.');
   }
 }
 export const safeError = (e: unknown) => {

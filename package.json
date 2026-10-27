@@ -17,6 +17,8 @@
     "run:live": "node --import tsx scripts/run.ts --mode live",
     "proof:browser": "node --import tsx scripts/browser-proof.ts",
     "proof:voiceover": "node --import tsx scripts/voiceover-proof.ts",
+    "proof:browser-reader": "node --import tsx scripts/day-two-browser-reader-proof.ts",
+    "proof:action-observation": "node --import tsx scripts/action-observation-proof.ts",
     "format:check": "prettier --check src server scripts tests client vite.config.ts tsconfig.json package.json .prettierrc.json",
     "proof:host": "node --import tsx scripts/host-proof.ts --out fixtures/host-proof",
     "serve:host": "node --import tsx scripts/serve-host.ts",

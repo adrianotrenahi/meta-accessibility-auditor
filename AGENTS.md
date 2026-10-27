@@ -8,7 +8,7 @@ Standalone proofs must not call Cavioo production services or endpoints. Keep th
 - The owner resumed Cavioo compatibility work on 27 October. Start with saved-record compatibility proofs in the private host. Documentation or replay alone does not prove production integration or a live browser stream.
 
 - Explain changes in plain English, with a concrete example.
-- Current owner instruction: no model-credit spending. A key is not permission. Keep live launch disabled until the owner separately approves a bounded batch.
+- Model-credit tests require the owner's explicit bounded approval. A key is not permission. The 27 October Day 2 batch is capped at $10 total and $3 per run on local controlled records; its private temporary approval is removed when testing ends. Keep the customer live-launch surface disabled.
 - For retained runs, preserve original actions, images, navigator notes and screen-reader output. Analysis and review read originals independently; review also reads the exact analyst claim. An explicit confirmed Cavioo discard must apply Cavioo's declared deletion behaviour to the linked run, including engine evidence; never keep a hidden evidence archive after that deletion promise. Ordinary Stop retains its separate evidence-preserving meaning.
 - A keyboard or VoiceOver claim requires an actual test. A screenshot, browser metadata or a robot limitation cannot replace that evidence.
 - Save uncertainty. Finishing a run never accepts an unchecked finding. Reopening evidence never starts paid work.

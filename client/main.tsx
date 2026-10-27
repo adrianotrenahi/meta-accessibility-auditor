@@ -232,6 +232,11 @@ function App() {
                   {report.run.stopReason ??
                     'The robot is collecting original observations. Findings wait for review.'}
                 </p>
+                {report.limits?.map((limit: string) => (
+                  <p className="scope" key={limit}>
+                    {limit}
+                  </p>
+                ))}
                 <div className="run-grid">
                   <section className="evidence" aria-labelledby="evidence-title">
                     <div className="section-heading">

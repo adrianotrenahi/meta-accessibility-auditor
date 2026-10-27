@@ -2,7 +2,7 @@ import { startServer } from '../server/index.js';
 const mode = process.argv.includes('live') ? 'live' : 'offline';
 if (mode === 'live')
   throw Error(
-    'No paid tests tonight. Add the key and obtain a separately bounded approval before using live mode.',
+    'This command starts saved demonstrations only. Paid tests use the controlled proof script with its bounded approval.',
   );
 const app = await startServer(4323, undefined, false);
 try {
