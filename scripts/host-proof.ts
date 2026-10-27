@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import assert from 'node:assert/strict';
 import { startServer } from '../server/index.js';
@@ -7,7 +8,20 @@ import { exportHostSnapshot } from '../src/host-export.js';
 
 const output = resolve(process.argv[process.argv.indexOf('--out') + 1] ?? 'output/host-proof');
 if (process.argv.indexOf('--out') < 0) throw Error('Supply --out with the proof output folder.');
-const app = await startServer(4340, 'data/offline-host-proof', false);
+const portIndex = process.argv.indexOf('--port');
+const port = portIndex < 0 ? 4340 : Number(process.argv[portIndex + 1]);
+if (!Number.isInteger(port) || port < 1 || port > 65535)
+  throw Error('Pass --port with an available local port from 1 to 65535.');
+const temporary = mkdtempSync(join(tmpdir(), 'access-walk-host-'));
+let app: Awaited<ReturnType<typeof startServer>>;
+try {
+  app = await startServer(port, temporary, false);
+} catch {
+  rmSync(temporary, { recursive: true, force: true });
+  throw Error(
+    `The local proof could not start on port ${port}. Retry with --port and a different unused local port.`,
+  );
+}
 const run = app.store.create(
   'Add the canvas bag and open the basket, stopping before review.',
   app.origin + '/shop/?case=broken',
@@ -137,4 +151,5 @@ try {
   globalThis.fetch = previousFetch;
   await walk.close();
   await app.close();
+  rmSync(temporary, { recursive: true, force: true });
 }

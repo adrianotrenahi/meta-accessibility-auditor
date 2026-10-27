@@ -2,51 +2,54 @@
   "protocol": "access-walk/host-v1",
   "provenance": "saved-engine-records",
   "run": {
-    "id": "78bca187-850e-487f-ac82-5b9b01e749e1",
+    "id": "5e0c7eb1-b021-40a8-ba4f-0c27c58631c3",
     "goal": "Add the canvas bag and open the basket, stopping before review.",
     "url": "http://127.0.0.1:4340/shop/?case=broken",
     "state": "running",
     "mode": "offline",
-    "createdAt": "2026-10-27T11:44:39.209Z",
+    "createdAt": "2026-10-27T12:07:43.551Z",
     "stopReason": null
   },
-  "sequence": 29,
+  "sequence": 3,
   "captures": [
     {
-      "id": "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69",
-      "sequence": 21,
+      "id": "bf56ace6-2277-4c43-9896-e6e6802b0067",
+      "sequence": 1,
       "imageHash": "d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac",
+      "imageAvailable": true,
       "imageFile": "images/d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:39.717Z"
+      "createdAt": "2026-10-27T12:07:44.068Z"
     },
     {
-      "id": "6790ce9e-ce7d-45d7-ad15-d914dd48a585",
-      "sequence": 27,
+      "id": "40f7411a-908c-4d91-856d-98064917adda",
+      "sequence": 7,
       "imageHash": "a516c11e285a3a3493a3b778a1d96f490f757211c479d30a5246146c87af33a1",
+      "imageAvailable": true,
       "imageFile": "images/a516c11e285a3a3493a3b778a1d96f490f757211c479d30a5246146c87af33a1.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:40.283Z"
+      "createdAt": "2026-10-27T12:07:44.586Z"
     },
     {
-      "id": "72e9818c-f9ca-4768-ac04-7cc22687d20e",
-      "sequence": 29,
+      "id": "09016124-30cf-463f-a46c-6481f6b3c345",
+      "sequence": 9,
       "imageHash": "3dece988bd88eec5dfba70f533d13bda198fba1a80b7945ca7906ef9ac9f1b10",
+      "imageAvailable": true,
       "imageFile": "images/3dece988bd88eec5dfba70f533d13bda198fba1a80b7945ca7906ef9ac9f1b10.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:40.550Z"
+      "createdAt": "2026-10-27T12:07:44.854Z"
     }
   ],
   "findings": [],

@@ -70,3 +70,11 @@ local framework shims do not establish the full authenticated product flow or
 full-page visual identity. VoiceOver, SAM, model quality and publication timing
 require their own evidence; a replay does not establish any of them. The green
 standalone viewer remains an engineering harness.
+
+
+Saved-state delivery has a durable revision that advances for run state and
+spending changes even when no new evidence record is added. An unreadable or
+rewritten original is marked unavailable; only claims that depend on it are
+withheld, and unrelated intact originals remain readable. Originals keep their
+identity when availability changes. The controlled proof uses a temporary local
+store; `npm run proof:host -- --port 4341` selects a different free port if needed.

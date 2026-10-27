@@ -2,34 +2,35 @@
   "protocol": "access-walk/host-v1",
   "provenance": "saved-engine-records",
   "run": {
-    "id": "78bca187-850e-487f-ac82-5b9b01e749e1",
+    "id": "5e0c7eb1-b021-40a8-ba4f-0c27c58631c3",
     "goal": "Add the canvas bag and open the basket, stopping before review.",
     "url": "http://127.0.0.1:4340/shop/?case=broken",
     "state": "running",
     "mode": "offline",
-    "createdAt": "2026-10-27T11:44:39.209Z",
+    "createdAt": "2026-10-27T12:07:43.551Z",
     "stopReason": null
   },
-  "sequence": 25,
+  "sequence": 1,
   "captures": [
     {
-      "id": "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69",
-      "sequence": 21,
+      "id": "bf56ace6-2277-4c43-9896-e6e6802b0067",
+      "sequence": 1,
       "imageHash": "d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac",
+      "imageAvailable": true,
       "imageFile": "images/d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:39.717Z"
+      "createdAt": "2026-10-27T12:07:44.068Z"
     }
   ],
   "findings": [
     {
-      "id": "dc152008-7c3b-424b-ad06-dc0805bdb772",
+      "id": "69e0f1b5-6cca-4f3c-b8d9-d8dec4d2a814",
       "candidateHash": "68c21e5f35a9045392ec08629ceca298352c5e03b48f62ee1c3a19262539a9a9",
-      "reviewHash": "3f30644e644e59963de948eb960244b521f0ef58e74bae774ec286872283b148",
+      "reviewHash": "1295f33ca973996fca29c907861355f25b1ffb1a6435c841dff74b8e31b94ea8",
       "reviewProvenance": "saved-example",
       "title": "The add-to-basket button has no accessible name",
       "detail": "The original product page exposes an unnamed button. The saved automatic button-name measurement supports this naming finding; no spoken output is inferred.",
@@ -38,14 +39,14 @@
       "basis": "measured",
       "severity": "serious",
       "captureIds": [
-        "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69"
+        "bf56ace6-2277-4c43-9896-e6e6802b0067"
       ],
       "sourceIds": [
-        "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69",
-        "52b44f8c-e66d-40ae-b612-bf39a16a00bb"
+        "bf56ace6-2277-4c43-9896-e6e6802b0067",
+        "42273ac4-dfbf-4632-86c8-772a3cbe5df0"
       ],
       "anchor": {
-        "captureId": "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69",
+        "captureId": "bf56ace6-2277-4c43-9896-e6e6802b0067",
         "elementId": "e2",
         "box": {
           "x": 740,

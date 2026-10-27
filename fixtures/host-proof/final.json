@@ -2,106 +2,113 @@
   "protocol": "access-walk/host-v1",
   "provenance": "saved-engine-records",
   "run": {
-    "id": "78bca187-850e-487f-ac82-5b9b01e749e1",
+    "id": "5e0c7eb1-b021-40a8-ba4f-0c27c58631c3",
     "goal": "Add the canvas bag and open the basket, stopping before review.",
     "url": "http://127.0.0.1:4340/shop/?case=broken",
     "state": "partial",
     "mode": "offline",
-    "createdAt": "2026-10-27T11:44:39.209Z",
+    "createdAt": "2026-10-27T12:07:43.551Z",
     "stopReason": "Controlled basket goal reached. This saved-record proof is not a complete accessibility assessment; VoiceOver and SAM are not tested."
   },
-  "sequence": 40,
+  "sequence": 8,
   "captures": [
     {
-      "id": "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69",
-      "sequence": 21,
+      "id": "bf56ace6-2277-4c43-9896-e6e6802b0067",
+      "sequence": 1,
       "imageHash": "d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac",
+      "imageAvailable": true,
       "imageFile": "images/d115dc7f3622aca8dc917998052315055d820a8e18b01679ca5ef922161ec7ac.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:39.717Z"
+      "createdAt": "2026-10-27T12:07:44.068Z"
     },
     {
-      "id": "6790ce9e-ce7d-45d7-ad15-d914dd48a585",
-      "sequence": 27,
+      "id": "40f7411a-908c-4d91-856d-98064917adda",
+      "sequence": 7,
       "imageHash": "a516c11e285a3a3493a3b778a1d96f490f757211c479d30a5246146c87af33a1",
+      "imageAvailable": true,
       "imageFile": "images/a516c11e285a3a3493a3b778a1d96f490f757211c479d30a5246146c87af33a1.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:40.283Z"
+      "createdAt": "2026-10-27T12:07:44.586Z"
     },
     {
-      "id": "72e9818c-f9ca-4768-ac04-7cc22687d20e",
-      "sequence": 29,
+      "id": "09016124-30cf-463f-a46c-6481f6b3c345",
+      "sequence": 9,
       "imageHash": "3dece988bd88eec5dfba70f533d13bda198fba1a80b7945ca7906ef9ac9f1b10",
+      "imageAvailable": true,
       "imageFile": "images/3dece988bd88eec5dfba70f533d13bda198fba1a80b7945ca7906ef9ac9f1b10.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:40.550Z"
+      "createdAt": "2026-10-27T12:07:44.854Z"
     },
     {
-      "id": "bf5e2180-5cdf-499d-9db8-ac7515320b37",
-      "sequence": 31,
+      "id": "92897396-d708-454c-b474-f2d8caaf5bf3",
+      "sequence": 11,
       "imageHash": "1017629c030d3620f8b77dcc221cc039f2ee67d62b3f301310c9f8cae49c1ba7",
+      "imageAvailable": true,
       "imageFile": "images/1017629c030d3620f8b77dcc221cc039f2ee67d62b3f301310c9f8cae49c1ba7.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:40.815Z"
+      "createdAt": "2026-10-27T12:07:45.120Z"
     },
     {
-      "id": "c69e7ccf-c0dc-47ec-b294-6d7bb7344838",
-      "sequence": 33,
+      "id": "8d43bcaf-f44f-4435-9de7-62c6af7a2e8a",
+      "sequence": 13,
       "imageHash": "a8f413a17ae3742561bcbf63500879eec9fb86f84ca58ba6891bea541b7caeb5",
+      "imageAvailable": true,
       "imageFile": "images/a8f413a17ae3742561bcbf63500879eec9fb86f84ca58ba6891bea541b7caeb5.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:41.083Z"
+      "createdAt": "2026-10-27T12:07:45.379Z"
     },
     {
-      "id": "beecb18e-63ab-46c2-aa1e-ce95d60d0595",
-      "sequence": 35,
+      "id": "632d3945-a5cf-4eef-b16e-ea3610242e1d",
+      "sequence": 15,
       "imageHash": "5517d6051ed5bae983b42e7a967f86e5837710e1744dbbac34cc5f4ca94ac14e",
+      "imageAvailable": true,
       "imageFile": "images/5517d6051ed5bae983b42e7a967f86e5837710e1744dbbac34cc5f4ca94ac14e.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/?case=broken",
       "title": "Everyday Market · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:41.344Z"
+      "createdAt": "2026-10-27T12:07:45.624Z"
     },
     {
-      "id": "6c4afaf7-6f53-4aa0-a7c8-e765bb1507f3",
-      "sequence": 37,
+      "id": "ada56682-01fd-4475-809a-7fdeb41efb82",
+      "sequence": 17,
       "imageHash": "1a194d3ea953927c813838216cb8043b109f4a3846f5710cf86da15ac91d3342",
+      "imageAvailable": true,
       "imageFile": "images/1a194d3ea953927c813838216cb8043b109f4a3846f5710cf86da15ac91d3342.png",
       "width": 1440,
       "height": 900,
       "url": "http://127.0.0.1:4340/shop/basket?case=broken",
       "title": "Your basket · controlled demo",
       "stable": true,
-      "createdAt": "2026-10-27T11:44:41.614Z"
+      "createdAt": "2026-10-27T12:07:45.912Z"
     }
   ],
   "findings": [
     {
-      "id": "dc152008-7c3b-424b-ad06-dc0805bdb772",
+      "id": "69e0f1b5-6cca-4f3c-b8d9-d8dec4d2a814",
       "candidateHash": "68c21e5f35a9045392ec08629ceca298352c5e03b48f62ee1c3a19262539a9a9",
-      "reviewHash": "aa17bb8debf23afeae7238d42eb5cd2c3f88b47b027261a9a50ec986ad891e5c",
+      "reviewHash": "bb9ad8cef879541055cd46b93e0471b00920dd7601d5368eff509eebf277b749",
       "reviewProvenance": "saved-example",
       "title": "The add-to-basket button has no accessible name",
       "detail": "The original product page exposes an unnamed button. The saved automatic button-name measurement supports this naming finding; no spoken output is inferred.",
@@ -110,14 +117,14 @@
       "basis": "measured",
       "severity": "serious",
       "captureIds": [
-        "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69"
+        "bf56ace6-2277-4c43-9896-e6e6802b0067"
       ],
       "sourceIds": [
-        "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69",
-        "52b44f8c-e66d-40ae-b612-bf39a16a00bb"
+        "bf56ace6-2277-4c43-9896-e6e6802b0067",
+        "42273ac4-dfbf-4632-86c8-772a3cbe5df0"
       ],
       "anchor": {
-        "captureId": "a6dc4d9f-93e5-4843-b4f0-55bbc92fbc69",
+        "captureId": "bf56ace6-2277-4c43-9896-e6e6802b0067",
         "elementId": "e2",
         "box": {
           "x": 740,

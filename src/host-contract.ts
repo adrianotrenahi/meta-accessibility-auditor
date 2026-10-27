@@ -36,6 +36,7 @@ export const hostSnapshotSchema = z
           id,
           sequence: z.number().int().positive(),
           imageHash: hash,
+          imageAvailable: z.boolean(),
           imageFile: z.string().regex(/^images\/[a-f0-9]{64}\.png$/),
           width: z.number().int().positive(),
           height: z.number().int().positive(),
@@ -108,6 +109,7 @@ export const hostSnapshotSchema = z
         if (
           !capture ||
           !capture.stable ||
+          !capture.imageAvailable ||
           !finding.captureIds.includes(capture.id) ||
           b.x + b.width > capture.width ||
           b.y + b.height > capture.height
@@ -137,7 +139,9 @@ export function applyHostSnapshot(
   }
   for (const previous of current.captures) {
     const now = next.captures.find((capture) => capture.id === previous.id);
-    if (!now || JSON.stringify(now) !== JSON.stringify(previous))
+    const { imageAvailable: _wasAvailable, ...original } = previous;
+    const { imageAvailable: _isAvailable, ...retained } = now ?? {};
+    if (!now || JSON.stringify(retained) !== JSON.stringify(original))
       throw Error('A retained original capture cannot be changed or removed.');
   }
   return next;

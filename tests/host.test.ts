@@ -142,3 +142,64 @@ test('Cross-run delivery, changed originals, foreign anchors and extra private f
     x.close();
   }
 });
+
+test('Run completion, recovery and cost changes advance the persisted host revision without new evidence', () => {
+  const x = sample();
+  try {
+    const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.equal(exportHostSnapshot(x.store, x.run.id).snapshot.sequence, first.sequence);
+    x.store.finish(x.run.id, 'partial', 'Stopped at a safe boundary');
+    const ended = exportHostSnapshot(x.store, x.run.id).snapshot;
+    const reopened = new Store(x.store.dir);
+    try {
+      assert.equal(exportHostSnapshot(reopened, x.run.id).snapshot.sequence, ended.sequence);
+    } finally {
+      reopened.close();
+    }
+    assert(ended.sequence > first.sequence);
+    assert.equal(applyHostSnapshot(first, ended).run.state, 'partial');
+    const run = x.store.create('Recovery', 'https://controlled.example/', 'offline');
+    const before = exportHostSnapshot(x.store, run.id).snapshot;
+    x.store.recoverInterrupted();
+    const after = exportHostSnapshot(x.store, run.id).snapshot;
+    assert(after.sequence > before.sequence);
+    assert.equal(applyHostSnapshot(before, after).run.state, 'interrupted');
+    x.store.db
+      .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
+      .run('test-charge', run.id, 'analyst', 100, null, 'unknown', new Date().toISOString());
+    const cost = exportHostSnapshot(x.store, run.id).snapshot;
+    assert(cost.sequence > after.sequence);
+    assert.equal(cost.cost.heldUnknownUsd, 0.0001);
+  } finally {
+    x.close();
+  }
+});
+
+test('One unavailable screenshot withholds its claim without hiding unrelated intact evidence', () => {
+  const x = sample();
+  try {
+    x.review();
+    const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+    const broken = x.store.append(
+      x.run.id,
+      'capture',
+      'browser',
+      { ...x.capture.payload, imageFile: 'missing.png' },
+      [],
+    );
+    x.review();
+    const later = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.equal(later.captures.find((c) => c.id === broken.id)?.imageAvailable, false);
+    assert.equal(later.findings.length, 1);
+    assert(later.limits.some((line) => line.includes('unavailable')));
+    assert.equal(applyHostSnapshot(first, later).captures.length, 2);
+    rmSync(join(x.store.dir, x.run.id, x.capture.payload.imageFile));
+    const missing = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.equal(missing.findings.length, 0);
+    assert.equal(missing.captures[0].imageAvailable, false);
+    assert(missing.sequence > later.sequence);
+    assert.equal(applyHostSnapshot(later, missing).captures.length, 2);
+  } finally {
+    x.close();
+  }
+});
