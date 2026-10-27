@@ -635,6 +635,39 @@ test('Missing labels or control names cannot be invented by a supported review',
   }
 });
 
+test('An observed aria-label is a valid image alternative only with exact independent review', () => {
+  for (const ariaLabel of ['Canvas bag with two shoulder straps', null, '', '   ', 42]) {
+    const x = fixture();
+    try {
+      const c = x.capture(),
+        s = x.scope(c),
+        f = x.facts(c, {
+          images: [
+            {
+              selector: '#product-image',
+              tag: 'div',
+              alt: null,
+              role: 'img',
+              ariaLabel,
+              programmaticLabels: [],
+              contextText: 'Canvas bag product photograph',
+            },
+          ],
+        }),
+        p = x.proposal(s, 'C04', [c.id, f.id]);
+      assert.equal(row(x.report(), 'C04').verdict, 'INCONCLUSIVE');
+      x.review(p);
+      assert.equal(
+        row(x.report(), 'C04').verdict,
+        typeof ariaLabel === 'string' && ariaLabel.trim() ? 'PASS' : 'INCONCLUSIVE',
+      );
+      assert.equal(x.report().score, null);
+    } finally {
+      x.close();
+    }
+  }
+});
+
 test('An actually measured empty title can retain a reviewed failure without invented heading evidence', () => {
   for (const scenario of [
     { title: '', verdict: 'FAIL', expected: 'FAIL' },
@@ -855,6 +888,95 @@ test('Error-quality assessment needs an actual trigger and the captured field/me
       assert.equal(
         row(x.report(), 'C07').checks.find((c) => c.scopeId === scope.id)?.verdict,
         attempted ? 'PASS' : 'NOT_TESTED',
+      );
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('Legacy ARIA invalid tokens distinguish valid fields from real error states', () => {
+  for (const invalid of [
+    false,
+    'false',
+    'FALSE',
+    '',
+    true,
+    'true',
+    'grammar',
+    'spelling',
+    'unexpected',
+    undefined,
+    null,
+    42,
+  ]) {
+    const x = fixture();
+    try {
+      const c = x.capture(),
+        s = x.scope(c),
+        f = x.facts(c, {
+          fields: [
+            {
+              invalid,
+              describedBy: ['Ordinary field help'],
+              visibleLabels: ['Email'],
+              programmaticLabels: ['Email'],
+            },
+          ],
+          colourMessages: [],
+        });
+      x.approve(s, 'C07', [c.id, f.id], 'NOT_APPLICABLE');
+      assert.equal(
+        row(x.report(), 'C07').verdict,
+        invalid === false ||
+          invalid === '' ||
+          (typeof invalid === 'string' && invalid.toLowerCase() === 'false')
+          ? 'NOT_APPLICABLE'
+          : 'INCONCLUSIVE',
+      );
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('A false invalid token cannot turn an ordinary action and help text into a tested error', () => {
+  for (const invalid of [
+    false,
+    'false',
+    '',
+    true,
+    'true',
+    'grammar',
+    'spelling',
+    'unexpected',
+    undefined,
+  ]) {
+    const x = fixture();
+    try {
+      const before = x.capture();
+      x.scope(before);
+      const action = x.action(before),
+        after = x.capture(),
+        s = x.scope(after),
+        f = x.facts(after, {
+          fields: [
+            {
+              invalid,
+              describedBy: ['A captured field explanation'],
+              visibleLabels: ['Email'],
+              programmaticLabels: ['Email'],
+            },
+          ],
+          colourMessages: [],
+        });
+      x.approve(s, 'C07', [before.id, action.id, after.id, f.id]);
+      const settled =
+        invalid === true ||
+        (typeof invalid === 'string' && invalid !== '' && invalid.toLowerCase() !== 'false');
+      assert.equal(
+        row(x.report(), 'C07').checks.find((check) => check.scopeId === s.id)?.verdict,
+        settled ? 'PASS' : 'INCONCLUSIVE',
       );
     } finally {
       x.close();

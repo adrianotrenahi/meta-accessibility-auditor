@@ -15,6 +15,20 @@ export const isCommitment = (name: string) =>
   /\b(place|confirm|submit|complete)\s+(?:my\s+|your\s+|the\s+)?(order|purchase|booking|reservation)|\b(pay|subscribe|sign\s*up|register|sign\s*in|log\s*in|buy\s*now)\b/i.test(
     name,
   );
+/** An intact original no longer describes the page; this is an observation limit. */
+export class MeasurementStateChanged extends Error {
+  constructor(
+    public captureId: string,
+    public stage: 'before' | 'during',
+    public observationId?: string,
+  ) {
+    super(
+      stage === 'before'
+        ? 'The original page state is no longer stable/current; no scan was attempted.'
+        : 'The page changed during measurement; its saved raw result remains untrusted.',
+    );
+  }
+}
 export class BrowserWalk {
   browser?: Browser;
   private closing?: Promise<void>;
@@ -355,17 +369,19 @@ export class BrowserWalk {
       original.hash !== source.hash ||
       !recordIsIntact(original) ||
       !recordIsIntact(source) ||
-      source.payload.stable !== true
+      typeof source.payload.stable !== 'boolean' ||
+      typeof source.payload.stateStamp !== 'string'
     )
       throw Error('The measurement needs an original capture from this run.');
+    if (source.payload.stable !== true) throw new MeasurementStateChanged(source.id, 'before');
     const before = await this.observationStamp();
     if (source.payload.stateStamp !== before)
-      throw Error('The requested measurement state is no longer current; no scan was attempted.');
+      throw new MeasurementStateChanged(source.id, 'before');
     const result = await new AxeBuilder({ page: this.page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
       .analyze();
     const facts = await collectBrowserFacts(this.page, source, result);
-    return this.store.append(
+    const observation = this.store.append(
       this.runId,
       'observation',
       'axe-core',
@@ -385,6 +401,9 @@ export class BrowserWalk {
       },
       [source.id],
     );
+    if (observation.payload.stable !== true)
+      throw new MeasurementStateChanged(source.id, 'during', observation.id);
+    return observation;
   }
   image(record: RecordEntry) {
     return (

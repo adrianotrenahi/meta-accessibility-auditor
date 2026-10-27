@@ -52,7 +52,59 @@ export function requestEvidence(
     );
     if (otherView) roots.push(otherView.id);
   }
-  const originals = originalClosure(records, roots);
+  let originals = originalClosure(records, roots);
+  if (role !== 'driver') {
+    const selectedCaptures = new Set(
+      originals.filter((record) => record.kind === 'capture').map((record) => record.id),
+    );
+    // Read attached measurements and reader results with their entire original source
+    // graph. A return comparison, for example, also needs the earlier typed-entry baseline.
+    // Select attachments from this request's original pictures only: a historical source
+    // is not an instruction to add unrelated observations from that historical screen.
+    const attached = records.filter(
+      (record) =>
+        ['observation', 'at_check', 'criterion_scope'].includes(record.kind) &&
+        record.sources.some((id) => selectedCaptures.has(id)),
+    );
+    const available = attached.filter((record) => {
+      if (record.kind !== 'observation' || record.payload.stable !== false) return true;
+      const pending = [record];
+      const checked = new Set<string>();
+      while (pending.length) {
+        const original = pending.pop()!;
+        if (checked.has(original.id)) continue;
+        if (original.runId !== runId || !recordIsIntact(original))
+          throw Error('Required original evidence is missing or changed.');
+        checked.add(original.id);
+        for (const id of original.sources) {
+          const dependency = records.find((item) => item.id === id);
+          if (!dependency) throw Error('Required original evidence is missing or changed.');
+          pending.push(dependency);
+        }
+      }
+      // Retain the raw original in the pool, but never offer a moving-page measurement
+      // as a usable fact. Mandatory cited dependencies still refuse in originalClosure.
+      if (
+        !records.some(
+          (limit) => limit.kind === 'limit' && limit.payload.unavailableObservationId === record.id,
+        )
+      )
+        store.append(
+          runId,
+          'limit',
+          'browser',
+          {
+            state: 'INCONCLUSIVE',
+            reason:
+              'A measurement changed while it was collected. Its raw original is retained but excluded from usable evidence; the required check remains unknown.',
+            unavailableObservationId: record.id,
+          },
+          [record.id],
+        );
+      return false;
+    });
+    originals = originalClosure(records, [...roots, ...available.map((record) => record.id)]);
+  }
   const captureIds = new Set(originals.filter((r) => r.kind === 'capture').map((r) => r.id));
   if (captureIds.size > (role === 'reviewer' ? 8 : role === 'analyst' ? 3 : 1))
     throw new EvidenceRequestLimit(role);
@@ -84,14 +136,6 @@ export function requestEvidence(
     }
   }
   roots = originals.map((r) => r.id);
-  // Measurements and reader results for the selected originals are read directly too.
-  for (const r of records)
-    if (
-      role !== 'driver' &&
-      ['observation', 'at_check', 'criterion_scope'].includes(r.kind) &&
-      r.sources.some((id) => captureIds.has(id))
-    )
-      roots.push(r.id);
   // Prior claims prevent repeat proposals; they are not a substitute for original evidence.
   if (role === 'analyst') roots.push(...candidates.map((r) => r.id));
   const snapshot = store.snapshot(runId, role, roots);

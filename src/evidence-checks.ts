@@ -370,6 +370,8 @@ export async function collectBrowserFacts(page: Page, source: RecordEntry, axe: 
     const fields = allFields.slice(0, maximum).map((e) => {
       const input = e as HTMLInputElement;
       const labels = [...(input.labels ?? [])];
+      const ariaInvalid = e.getAttribute('aria-invalid');
+      const nativeValidityValid = input.validity?.valid ?? null;
       return {
         selector: util.selector(e),
         tag: e.tagName.toLowerCase(),
@@ -382,7 +384,12 @@ export async function collectBrowserFacts(page: Page, source: RecordEntry, axe: 
         ].filter(Boolean),
         placeholder: e.getAttribute('placeholder') ?? '',
         required: input.required || e.getAttribute('aria-required') === 'true',
-        invalid: e.getAttribute('aria-invalid') ?? '',
+        // ARIA's false/empty/absent states are false; other nonempty tokens are invalid.
+        invalid:
+          (ariaInvalid !== null && ariaInvalid !== '' && ariaInvalid.toLowerCase() !== 'false') ||
+          nativeValidityValid === false,
+        ariaInvalid,
+        nativeValidityValid,
         describedBy: util.labelledBy(e, 'aria-describedby'),
       };
     });

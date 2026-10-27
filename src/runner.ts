@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BrowserWalk } from './browser.js';
+import { BrowserWalk, MeasurementStateChanged } from './browser.js';
 import { VoiceOverProbe } from './voiceover.js';
 import { Store } from './store.js';
 import {
@@ -172,7 +172,13 @@ export class Runner {
       });
       let current = await walk.start(run.url);
       declareCriterionScopes(this.store, run.id);
-      const scan = await walk.measurements(current);
+      const initialMeasurement = await this.automaticMeasurement(
+        run,
+        walk,
+        current,
+        controller.signal,
+      );
+      current = initialMeasurement.current;
       this.store.append(
         run.id,
         'navigator_note',
@@ -181,7 +187,7 @@ export class Runner {
           kind: 'progress',
           text: 'Initial page captured. Automatic scan results do not establish keyboard or screen-reader operation.',
         },
-        [current.id, scan.id],
+        [current.id, ...(initialMeasurement.scan ? [initialMeasurement.scan.id] : [])],
       );
       if (withVoiceOver) {
         current = await performFocusedCheck(
@@ -388,13 +394,14 @@ export class Runner {
       current = await walk.capture();
       if (manual) await pause();
     }
-    const scan = await walk.measurements(current);
+    const measured = await this.automaticMeasurement(run, walk, current, signal);
+    current = measured.current;
     const snap = this.store.snapshot(run.id, 'analyst');
     review();
     this.store.append(run.id, 'coverage', 'runner', {
       criteria: 'Foundation only; this is not the complete fifteen-criterion assessment.',
       analystRead: snap.read.id,
-      scan: scan.id,
+      scan: measured.scan?.id ?? null,
       modelEvaluation: 'NOT_TESTED',
       sam: 'NOT_TESTED',
     });
@@ -514,7 +521,7 @@ export class Runner {
           }
         }
         if (i % 3 === 2) {
-          await walk.measurements(current);
+          current = (await this.automaticMeasurement(run, walk, current, signal)).current;
           current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
         }
       }
@@ -542,6 +549,41 @@ export class Runner {
           });
         }
       }
+    }
+  }
+  private async automaticMeasurement(
+    run: Run,
+    walk: BrowserWalk,
+    current: RecordEntry,
+    signal: AbortSignal,
+  ): Promise<{ current: RecordEntry; scan?: RecordEntry }> {
+    if (signal.aborted) throw Error('The run stopped before the automatic measurement.');
+    try {
+      const scan = await walk.measurements(current);
+      if (signal.aborted) throw Error('The run stopped during the automatic measurement.');
+      return { current, scan };
+    } catch (error) {
+      if (!(error instanceof MeasurementStateChanged) || signal.aborted) throw error;
+      this.store.append(
+        run.id,
+        'limit',
+        'browser',
+        {
+          method: 'automatic_accessibility_scan',
+          state: error.stage === 'before' ? 'NOT_TESTED' : 'INCONCLUSIVE',
+          reason:
+            'The page changed before its automatic measurement could settle. This check remains unknown; navigation resumes from one fresh observation without repeating input or the scan.',
+          sourceCaptureId: error.captureId,
+          unavailableObservationId: error.observationId ?? null,
+        },
+        [current.id, ...(error.observationId ? [error.observationId] : [])],
+      );
+      // One observation refresh only: another scan could make its replacement stale again.
+      const refreshed = await walk.capture();
+      if (signal.aborted) throw Error('The run stopped during the automatic observation refresh.');
+      walk.assertActive();
+      declareCriterionScopes(this.store, run.id);
+      return { current: refreshed };
     }
   }
   private async analyseCheckpoint(

@@ -404,6 +404,12 @@ function factsIn(original: RecordEntry[]) {
 }
 const familyComplete = (facts: any, family: string) =>
   facts?.scope?.[`${family}Incomplete`] === false && facts.scope[`${family}Truncated`] === false;
+// Retained facts used raw aria-invalid strings: empty/false are valid; other tokens mean invalid.
+function fieldInvalid(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value !== '' && value.toLowerCase() !== 'false';
+  return null;
+}
 function afterCapture(original: RecordEntry[], action: RecordEntry, allRecords = original) {
   const nextAction = allRecords
     .filter((r) => r.runId === action.runId && kind(r, 'action') && r.seq > action.seq)
@@ -566,7 +572,7 @@ function evidenceGate(
       criterionId === 'C07' &&
       (!familyComplete(facts, 'fields') ||
         !familyComplete(facts, 'colourMessages') ||
-        (facts.fields ?? []).some((field: any) => field.invalid) ||
+        (facts.fields ?? []).some((field: any) => fieldInvalid(field.invalid) !== false) ||
         (facts.colourMessages ?? []).some((message: any) => message.role === 'alert'))
     )
       return fail(
@@ -712,6 +718,7 @@ function evidenceGate(
         (image: any) =>
           ['presentation', 'none'].includes(image.role) ||
           (typeof image.alt === 'string' && image.alt.trim()) ||
+          (typeof image.ariaLabel === 'string' && image.ariaLabel.trim()) ||
           (Array.isArray(image.programmaticLabels) &&
             image.programmaticLabels.some((label: string) => label.trim())),
       )
@@ -778,7 +785,9 @@ function evidenceGate(
     if (!trigger) return fail('An actual error-triggering interaction was not recorded.');
     const context =
       facts &&
-      ((facts.fields ?? []).some((f: any) => f.invalid && (f.describedBy ?? []).length) ||
+      ((facts.fields ?? []).some(
+        (f: any) => fieldInvalid(f.invalid) === true && (f.describedBy ?? []).length,
+      ) ||
         (facts.colourMessages ?? []).some((m: any) => m.role === 'alert' && m.text));
     return context
       ? yes(familyComplete(facts, 'fields') && familyComplete(facts, 'colourMessages'))
