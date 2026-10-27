@@ -1,0 +1,77 @@
+{
+  "status": "New controlled cases; expected labels drafted by Codex and awaiting Adriano's review. Not a model-accuracy result.",
+  "cases": [
+    {
+      "id": "real-01",
+      "truth": "issue",
+      "case": "Icon-only add-to-basket control without a name",
+      "required": "Actual browser name/role and button-name measurement"
+    },
+    {
+      "id": "real-02",
+      "truth": "issue",
+      "case": "Review dialog opens while actual keyboard focus remains outside",
+      "required": "Real key action, before/after focus and captured dialog"
+    },
+    {
+      "id": "real-03",
+      "truth": "issue",
+      "case": "Triggered form error gives no useful recovery instruction",
+      "required": "Deliberately triggered error and exact visible content"
+    },
+    {
+      "id": "real-04",
+      "truth": "issue",
+      "case": "Task-relevant text has insufficient measured contrast",
+      "required": "Measured colours, size and relevant contrast rule"
+    },
+    {
+      "id": "real-05",
+      "truth": "issue",
+      "case": "A required selection is lost on the tested return step",
+      "required": "Same recorded selection before and after a real return action"
+    },
+    {
+      "id": "real-06",
+      "truth": "issue",
+      "case": "Meaningful image has no suitable text alternative",
+      "required": "Image purpose, browser-exposed alternative and task context"
+    },
+    {
+      "id": "clean-01",
+      "truth": "non-defect",
+      "case": "Named button is keyboard-operable",
+      "required": "Real accessible name and actual activation"
+    },
+    {
+      "id": "clean-02",
+      "truth": "non-defect",
+      "case": "Dialog moves focus inside and returns it after closing",
+      "required": "Actual keyboard open/close and focus evidence"
+    },
+    {
+      "id": "clean-03",
+      "truth": "non-defect",
+      "case": "Price changes because the robot changes quantity",
+      "required": "Original quantity action and comparable totals"
+    },
+    {
+      "id": "clean-04",
+      "truth": "non-defect",
+      "case": "Intentional restrained visual style is internally clear",
+      "required": "Original image and contextual expert review, without invented brand rules"
+    },
+    {
+      "id": "unknown-01",
+      "truth": "insufficient",
+      "case": "Keyboard reach check runs out of robot actions",
+      "required": "Retain the limit; do not call the control unreachable"
+    },
+    {
+      "id": "unknown-02",
+      "truth": "insufficient",
+      "case": "Browser metadata exists but real VoiceOver speech was not captured",
+      "required": "Keep VoiceOver-specific claims untested or inconclusive"
+    }
+  ]
+}
