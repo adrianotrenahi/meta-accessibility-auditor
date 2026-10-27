@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Store } from '../src/store.js';
 import type { Runner } from '../src/runner.js';
 import { exportHostSnapshot } from '../src/host-export.js';
+import { assessmentForRun } from '../src/assessment.js';
 
 export const HOST_GOAL = 'Add the canvas bag to the basket, stopping before any order.';
 /** Generic local host surface. It knows no private application components. */
@@ -136,6 +137,15 @@ export async function hostRequest(
       discarded: !pending && (requestedDiscard || (id ? !store.hasRun(id) : false)),
       discardPending: pending,
     });
+    return;
+  }
+  const assessment = url.pathname.match(/^\/api\/host\/runs\/([a-f0-9-]{36})\/assessment$/);
+  if (assessment && req.method === 'GET') {
+    if (!store.hasRun(assessment[1])) {
+      json(res, 404, { error: 'Run not found.' });
+      return;
+    }
+    json(res, 200, assessmentForRun(store, assessment[1]));
     return;
   }
   const frame = url.pathname.match(/^\/api\/host\/runs\/([a-f0-9-]{36})\/frame$/);

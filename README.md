@@ -15,6 +15,9 @@ The application saves one original walk, navigator notes, page images, measureme
 - Separate Muse Spark driver, analyst and reviewer connections; SAM 3.1 request construction, source-bound geometry parsing and within-run reuse.
 - Spending reservations, request/phase/run limits, interrupted-run recovery, ordered events and replay without new model calls.
 - A real VoiceOver connection through Guidepup's supported AppleScript commands. A native local proof saves the known button announcement, activation and resulting spoken status, with per-command speech and the previous reader state restored. This is scoped proof, not complete reader coverage.
+- Fifteen versioned journey criteria, with declared required checks, independent exact-version review, explicit missing coverage and a code-calculated score only after the run and every required check are complete.
+- Six visual-inspection topics per analysed original viewport. Expert interpretation stays separate from measured facts; valid visual concerns can remain unscored.
+- Bounded missing-fact checks sharing the existing two VoiceOver/focused slots. A stale state, failed capture or exhausted allowance cannot trigger an identical input retry.
 
 The saved demonstration uses newly written deterministic analysis/review examples. Its browser actions and measurements are real; its responses are not claimed to come from Meta models. The first paid test reached the basket and stopped at the evidence input allowance, costing an estimated $0.3145. Day 2 corrects accumulated images, repeated accepted claims, supported visual wording and exact element targets. A new bounded batch includes real Spark, VoiceOver and SAM; see [Day 2 validation](docs/DAY-TWO-VALIDATION.md) and the preserved [first paid test](docs/FIRST-PAID-TEST.md). The ordinary interface and default command still cannot start paid runs.
 
@@ -39,6 +42,8 @@ npm run proof:browser -- --ui
 npm run proof:browser -- --safety
 npm run proof:action-observation
 npm run proof:browser-reader -- --keyboard-only
+npm run proof:day-three
+npm run proof:journey-evidence
 ```
 
 The viewer check requires `npm run dev` in another terminal. These commands spend no model credits. The safety check uses only controlled local forms and verifies that unsafe activation and stale sources are refused. Screenshots and detailed local proof records are written to ignored `output/` and `data/` folders.
@@ -54,7 +59,7 @@ npx @guidepup/setup@0.29.3 install voiceover
 npm run proof:voiceover
 ```
 
-The test captures actual spoken phrases separately from visited-item text and attempts a known safe action on our local shop. Unknown or missing output remains inconclusive. Cleanup attempts to restore the test reader's settings and previous enabled state, recording a failure if that cannot finish. This restoration is not yet proven by a successful native run. In-run checks are bounded to two checkpoints; they do not establish that every screen-reader task or browser works.
+The test captures actual spoken phrases separately from visited-item text and attempts a known safe action on our local shop. Unknown or missing output remains inconclusive. Cleanup attempts to restore the test reader's settings and previous enabled state, recording a failure if that cannot finish. Off-before/off-after cleanup is proved; a real prior-on restoration trial remains pending. Native checkpoints share the same two-slot focused-check allowance; they do not establish that every screen-reader task or browser works.
 
 Earlier native attempts timed out or were refused synthetic keystrokes. The supported VoiceOver commander interface and an explicit browser-focus request now pass the known-control test while retaining the strict foreground guard. No security restrictions were disabled. A copied per-command speech delta prevents a later announcement from appearing in an earlier command record.
 
@@ -68,7 +73,11 @@ The planned limits remain $3 per run, $110 routine project spend and $40 held ba
 
 ## Scope and remaining proof
 
-Day 1–2 code can be checked offline. The first paid test remains a partial result. Current model/native/SAM proof and its limits are recorded in [Day 2 validation](docs/DAY-TWO-VALIDATION.md). Full criterion coverage, model-backed live findings through the existing host, decoded SAM mask rendering, complete report reconciliation, independent human validation and the final video remain later work. An automatic accessibility scan is not a screen-reader test or a compliance certificate.
+Day 1–3 code can be checked offline. The first paid test remains a partial result. Current model/native/SAM proof and its limits are recorded in [Day 2 validation](docs/DAY-TWO-VALIDATION.md). The Day 3 criterion, visual and missing-evidence implementation is described in [Day 3 validation](docs/DAY-THREE-VALIDATION.md). Actual Spark quality under the new instructions, complete model-backed Cavioo delivery, decoded masks, human validation and the video remain unproved. An automatic accessibility scan is not a screen-reader test or a compliance certificate.
+
+The public definitions and permitted verdicts live together in `src/criteria.ts` as `access-walk/criteria-v1`. Required checks are recorded before analysis, including captured states that remain unanalysed. The engine binds the exact declared check to the analyst's screen/criterion rather than asking the model to invent those identifiers. A supported failure can coexist with incomplete coverage. Missing, unreviewed or conflicting evidence never becomes a pass. A partial report shows counts, not an overall percentage. Ordinary visible price text cannot prove comparable basket selections, paid-choice control or preserved entries after Back.
+
+The optional authenticated `GET /api/host/runs/:id/assessment` reads `access-walk/assessment-v1` without starting work or changing saved records. It carries the limited fifteen-criterion method separately from the existing `access-walk/host-v1` presentation contract. Its existing coverage and score fields remain unchanged. Connecting this richer data to the private Cavioo readers is later integration work using the existing components, without a new layout or customer engine selector.
 
 The twelve-case evaluation set is a draft for owner review. Offline code tests establish record, limit and publication behaviour; they do not establish model accuracy or represent the experiences of all disabled people.
 

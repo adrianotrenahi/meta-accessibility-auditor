@@ -91,9 +91,10 @@ export function exportHostSnapshot(store: Store, runId: string) {
         id: candidate.id,
         candidateHash: candidate.hash,
         reviewHash: review.hash,
-        reviewProvenance: review.author.startsWith('saved_')
-          ? ('saved-example' as const)
-          : ('model' as const),
+        reviewProvenance:
+          review.payload.provenance === 'saved-example' || review.author.startsWith('saved_')
+            ? ('saved-example' as const)
+            : ('model' as const),
         title: finding.title,
         detail: finding.detail,
         recommendation: finding.recommendation,

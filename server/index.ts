@@ -11,6 +11,7 @@ import { shopPage } from './shop.js';
 import { z } from 'zod';
 import { hostRequest } from './host.js';
 import { sessionLock } from '../src/lock.js';
+import { assessmentForRun } from '../src/assessment.js';
 export const visibleKinds = new Set([
   'plan',
   'action',
@@ -135,14 +136,24 @@ export async function startServer(port = 4317, dir = dataDir, frontend = true) {
           req.on('close', () => clearInterval(timer));
           return;
         }
-        const records = store.records(id).filter((r) => visibleKinds.has(r.kind));
+        const findings = store.published(id);
+        const acceptedSources = new Set(findings.flatMap((f) => f.evidence));
+        const records = store
+          .records(id)
+          .filter(
+            (r) =>
+              visibleKinds.has(r.kind) ||
+              (r.kind === 'visual_observation' && acceptedSources.has(r.id)),
+          );
+        const assessment = assessmentForRun(store, id);
         return json(res, 200, {
           run: store.run(id),
           records,
-          findings: store.published(id),
+          findings,
           limits: store.publicationLimits(id),
           usage: store.usage(id),
-          score: null,
+          assessment,
+          score: assessment.criteria.score,
         });
       }
       if (url.pathname.startsWith('/api/')) return json(res, 404, { error: 'Resource not found.' });

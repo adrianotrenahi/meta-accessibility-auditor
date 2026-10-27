@@ -1,0 +1,294 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { z } from 'zod';
+import { Store, digest } from '../src/store.js';
+import { EvidenceRequestLimit } from '../src/request-evidence.js';
+import { CAPS } from '../src/types.js';
+import {
+  MetaModels,
+  IncompleteModelResult,
+  analysisSchema,
+  reviewSchema,
+  actionSchema,
+} from '../src/models.js';
+
+const analysisResult = {
+  findings: [],
+  coverage: [],
+  visualObservations: [],
+  criterionProposals: [],
+  missingEvidence: [],
+};
+const reviewerResult = { decisions: [], criterionDecisions: [] };
+const usage = { input_tokens: 100, output_tokens: 20 };
+const expectedCost = Math.ceil(usage.input_tokens * 1.25 + usage.output_tokens * 4.25);
+const message = (text: string) => ({
+  id: 'msg_mock_result',
+  type: 'message',
+  status: 'completed',
+  role: 'assistant',
+  content: [{ type: 'output_text', text, annotations: [] }],
+});
+
+function setup(response: any, inputTokens = 100) {
+  const dir = mkdtempSync(join(tmpdir(), 'access-walk-structured-results-'));
+  const store = new Store(dir);
+  const run = store.create(
+    'Mocked constrained result adapter',
+    'http://127.0.0.1:4317/shop/',
+    'offline',
+  );
+  const requests: { url: string; body: any }[] = [];
+  const model = new MetaModels(
+    store,
+    (async (url, init) => {
+      const requestUrl = String(url);
+      requests.push({ url: requestUrl, body: JSON.parse(String(init?.body)) });
+      return new Response(
+        JSON.stringify(
+          requestUrl.endsWith('/input_tokens') ? { input_tokens: inputTokens } : response,
+        ),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    }) as typeof fetch,
+    () => ({
+      approvedBy: 'Adriano',
+      maxUsd: 10,
+      maxRunUsd: 3,
+      approvedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }),
+    () => 'mock-key-no-provider-access',
+  );
+  return {
+    store,
+    run,
+    requests,
+    model,
+    close() {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+test('Analyst and reviewer send constrained JSON and pin the exact transmitted instructions', async () => {
+  for (const role of ['analyst', 'reviewer'] as const) {
+    const result = role === 'analyst' ? analysisResult : reviewerResult;
+    const schema = role === 'analyst' ? analysisSchema : reviewSchema;
+    const output = [message(JSON.stringify(result))];
+    const x = setup({ status: 'completed', usage, output });
+    try {
+      assert.deepEqual(await x.model.reason<unknown>(x.run.id, role, [], [], schema), result);
+      assert.equal(x.requests.length, 2);
+      assert(x.requests[0].url.endsWith('/responses/input_tokens'));
+      assert(x.requests[1].url.endsWith('/responses'));
+      const body = x.requests[1].body;
+      assert.deepEqual(
+        x.requests[0].body,
+        body,
+        'Counting and generation use the same constrained request.',
+      );
+      assert.equal(body.text.format.type, 'json_schema');
+      assert.equal(body.text.format.name, `${role}_result`);
+      assert.deepEqual(body.text.format.schema, z.toJSONSchema(schema));
+      assert.equal(Object.hasOwn(body, 'tools'), false);
+      assert.equal(Object.hasOwn(body, 'tool_choice'), false);
+      assert.equal(Object.hasOwn(body, 'parallel_tool_calls'), false);
+      assert.equal(body.reasoning.effort, role === 'analyst' ? 'low' : 'medium');
+      assert.equal(body.max_output_tokens, 8192);
+      assert.equal(body.store, false);
+      assert.match(body.instructions, /Return only the schema-constrained JSON result/);
+      assert(!body.instructions.includes('Use return_result.'));
+      const record = x.store.records(x.run.id).find((entry) => entry.kind === 'model_response')!;
+      assert.equal(record.payload.instructionHash, digest(body.instructions));
+      assert.deepEqual(record.payload.output, output, 'Original provider messages remain intact.');
+      assert.equal(x.store.usage(x.run.id).spent, expectedCost);
+      assert.equal(x.store.usage(x.run.id).reserved, 0);
+      assert.equal(x.store.usage(x.run.id).requests[0].status, 'completed');
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('Completed provider message content parses output_text fragments without requiring a function call', async () => {
+  const text = JSON.stringify(analysisResult);
+  const split = Math.floor(text.length / 2);
+  const output = [
+    { type: 'reasoning', summary: [] },
+    {
+      ...message(''),
+      content: [
+        { type: 'output_text', text: text.slice(0, split), annotations: [] },
+        { type: 'output_text', text: text.slice(split), annotations: [] },
+      ],
+    },
+  ];
+  const x = setup({ status: 'completed', usage, output });
+  try {
+    assert.deepEqual(
+      await x.model.reason(x.run.id, 'analyst', [], [], analysisSchema),
+      analysisResult,
+    );
+    assert.equal(x.requests.filter((request) => request.url.endsWith('/responses')).length, 1);
+    assert.deepEqual(
+      x.store.records(x.run.id).find((entry) => entry.kind === 'model_response')!.payload.output,
+      output,
+    );
+  } finally {
+    x.close();
+  }
+});
+
+test('An incomplete response is never parsed even when its text is valid schema JSON', async () => {
+  for (const role of ['analyst', 'reviewer'] as const) {
+    const result = role === 'analyst' ? analysisResult : reviewerResult;
+    const base = role === 'analyst' ? analysisSchema : reviewSchema;
+    let parseCalls = 0;
+    const schema = new Proxy(base, {
+      get(target, property, receiver) {
+        if (property === 'parse')
+          return (value: unknown) => {
+            parseCalls++;
+            return target.parse(value);
+          };
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const output = [message(JSON.stringify(result))];
+    const x = setup({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      usage,
+      output,
+    });
+    try {
+      await assert.rejects(
+        () => x.model.reason<unknown>(x.run.id, role, [], [], schema),
+        IncompleteModelResult,
+      );
+      assert.equal(
+        parseCalls,
+        0,
+        'Incomplete content cannot enter result validation or publication.',
+      );
+      assert.equal(x.requests.length, 2, 'No automatic request retry.');
+      assert.equal(x.store.usage(x.run.id).spent, expectedCost);
+      assert.equal(x.store.usage(x.run.id).reserved, 0);
+      assert.equal(x.store.usage(x.run.id).requests[0].status, 'incomplete');
+      assert.deepEqual(x.store.published(x.run.id), []);
+      assert(x.store.records(x.run.id).every((entry) => entry.kind === 'model_response'));
+      assert.deepEqual(x.store.records(x.run.id)[0].payload.output, output);
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('Malformed, schema-invalid and refusal results retain known charges without retry or publication', async () => {
+  const refusal = { type: 'refusal', refusal: 'The provider declined this requested result.' };
+  const valid = message(JSON.stringify(analysisResult));
+  const responses = [
+    { output: [message('{not valid JSON')] },
+    { output: [message(JSON.stringify({ findings: 'not an array' }))] },
+    { output: [{ ...valid, content: [refusal] }] },
+    { output: [{ ...valid, content: [refusal, ...valid.content] }] },
+    { output_text: JSON.stringify(analysisResult), output: [{ ...valid, content: [refusal] }] },
+    {
+      output: [
+        { type: 'function_call', name: 'return_result', arguments: JSON.stringify(analysisResult) },
+      ],
+    },
+  ];
+  for (const result of responses) {
+    const x = setup({ status: 'completed', usage, ...result });
+    try {
+      await assert.rejects(() => x.model.reason(x.run.id, 'analyst', [], [], analysisSchema));
+      assert.equal(x.requests.length, 2, 'A failed constrained result is not silently retried.');
+      const recorded = x.store.usage(x.run.id);
+      assert.equal(recorded.spent, expectedCost);
+      assert.equal(recorded.reserved, 0);
+      assert.equal(recorded.requests[0].status, 'invalid_result');
+      assert.deepEqual(x.store.published(x.run.id), []);
+      assert(x.store.records(x.run.id).every((entry) => entry.kind === 'model_response'));
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('The driver keeps its automatic function-call contract while structured jobs use text', async () => {
+  const result = { kind: 'finish', note: 'The controlled safe boundary is reached.' };
+  const output = [
+    { type: 'function_call', name: 'return_result', arguments: JSON.stringify(result) },
+  ];
+  const x = setup({ status: 'completed', usage, output });
+  try {
+    assert.deepEqual(await x.model.reason(x.run.id, 'driver', [], [], actionSchema), result);
+    const body = x.requests[1].body;
+    assert.equal(body.tool_choice, 'auto');
+    assert.equal(body.tools.length, 1);
+    assert.equal(body.tools[0].name, 'return_result');
+    assert.equal(Object.hasOwn(body, 'text'), false);
+    assert.equal(body.max_output_tokens, 4096);
+    assert.equal(x.store.usage(x.run.id).requests[0].status, 'completed');
+  } finally {
+    x.close();
+  }
+});
+
+test('Oversized analyst and reviewer inputs produce the existing typed limit without generation or reservation', async () => {
+  for (const role of ['analyst', 'reviewer'] as const) {
+    const schema = role === 'analyst' ? analysisSchema : reviewSchema;
+    const x = setup({ status: 'completed', usage, output: [] }, CAPS[role].input + 1);
+    try {
+      await assert.rejects(
+        () => x.model.reason<unknown>(x.run.id, role, [], [], schema),
+        (error) => error instanceof EvidenceRequestLimit && error.role === role,
+      );
+      assert.equal(x.requests.length, 1, 'Only the input-count request is sent.');
+      assert(x.requests[0].url.endsWith('/responses/input_tokens'));
+      assert.equal(x.requests.filter((request) => request.url.endsWith('/responses')).length, 0);
+      const recorded = x.store.usage(x.run.id);
+      assert.equal(recorded.spent, 0);
+      assert.equal(recorded.reserved, 0);
+      assert.deepEqual(recorded.requests, []);
+      assert.deepEqual(x.store.records(x.run.id), []);
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('Invalid negative or fractional provider counts remain errors rather than recoverable evidence limits', async () => {
+  for (const role of ['analyst', 'reviewer'] as const) {
+    const schema = role === 'analyst' ? analysisSchema : reviewSchema;
+    for (const inputTokens of [-1, 0.5]) {
+      const x = setup({ status: 'completed', usage, output: [] }, inputTokens);
+      try {
+        await assert.rejects(
+          () => x.model.reason<unknown>(x.run.id, role, [], [], schema),
+          (error) =>
+            error instanceof Error &&
+            !(error instanceof EvidenceRequestLimit) &&
+            /valid evidence input count/.test(error.message),
+        );
+        assert.equal(x.requests.length, 1);
+        assert(x.requests[0].url.endsWith('/responses/input_tokens'));
+        assert.deepEqual(x.store.usage(x.run.id).requests, []);
+        assert.equal(x.store.usage(x.run.id).spent, 0);
+        assert.equal(x.store.usage(x.run.id).reserved, 0);
+        assert.deepEqual(x.store.records(x.run.id), []);
+      } finally {
+        x.close();
+      }
+    }
+  }
+});

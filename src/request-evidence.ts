@@ -2,8 +2,15 @@ import { recordIsIntact, type Store } from './store.js';
 import type { RecordEntry, Role } from './types.js';
 
 export class EvidenceRequestLimit extends Error {
-  constructor(public role: Exclude<Role, 'sam'>) {
-    super('Required original screens exceed this request allowance; review remains incomplete.');
+  constructor(
+    public role: Exclude<Role, 'sam'>,
+    kind: 'screens' | 'input' = 'screens',
+  ) {
+    super(
+      kind === 'input'
+        ? 'Required original evidence exceeds the input allowance; this check remains incomplete.'
+        : 'Required original screens exceed this request allowance; review remains incomplete.',
+    );
   }
 }
 
@@ -49,10 +56,41 @@ export function requestEvidence(
   const captureIds = new Set(originals.filter((r) => r.kind === 'capture').map((r) => r.id));
   if (captureIds.size > (role === 'reviewer' ? 8 : role === 'analyst' ? 3 : 1))
     throw new EvidenceRequestLimit(role);
+  if (role === 'reviewer') {
+    // Optional criteria reuse the mandatory original pictures; they cannot enlarge the finding packet.
+    const selectedIds = new Set(originals.map((record) => record.id));
+    let selectedProposals = 0;
+    for (const proposal of records
+      .filter((record) => record.kind === 'criterion_proposal')
+      .reverse()) {
+      if (selectedProposals === 5) break;
+      let closure: RecordEntry[];
+      try {
+        closure = originalClosure(records, [proposal.id]);
+      } catch {
+        // Missing or changed optional evidence cannot prevent review of intact existing findings.
+        continue;
+      }
+      const addedCaptures = closure
+        .filter((record) => record.kind === 'capture')
+        .map((record) => record.id);
+      if (addedCaptures.some((id) => !captureIds.has(id))) continue;
+      for (const record of closure)
+        if (!selectedIds.has(record.id)) {
+          selectedIds.add(record.id);
+          originals.push(record);
+        }
+      selectedProposals++;
+    }
+  }
   roots = originals.map((r) => r.id);
   // Measurements and reader results for the selected originals are read directly too.
   for (const r of records)
-    if (['observation', 'at_check'].includes(r.kind) && r.sources.some((id) => captureIds.has(id)))
+    if (
+      role !== 'driver' &&
+      ['observation', 'at_check', 'criterion_scope'].includes(r.kind) &&
+      r.sources.some((id) => captureIds.has(id))
+    )
       roots.push(r.id);
   // Prior claims prevent repeat proposals; they are not a substitute for original evidence.
   if (role === 'analyst') roots.push(...candidates.map((r) => r.id));

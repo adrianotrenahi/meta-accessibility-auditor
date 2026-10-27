@@ -114,3 +114,22 @@ verdict from the fact that a key was pressed. Full Tab-order, visible-focus and
 native-reader checks remain unassessed; missing original images withhold the map.
 Only known native-control attempts are currently exported. This remains a local
 controlled proof with no customer activation or model spending.
+
+## Day 3 limited assessment
+
+The new public engine adds a separate authenticated, read-only
+`/api/host/runs/:id/assessment` reply, identified as `access-walk/assessment-v1`.
+It contains fifteen versioned criterion outcomes, required-check coverage and
+six visual topics per analysed original viewport. Existing `host-v1` remains
+unchanged: the optional assessment does not turn its limited report into complete
+Cavioo coverage. A missing original image, changed evidence or unreviewed result
+cannot supply a pass; incomplete or unfinished runs receive no overall score.
+
+For example, the same unnamed Add button can have a reviewed naming failure
+while its keyboard operation stays untested. Reading either report starts no new
+work and writes no evidence. The controlled host-control proof still passes fresh
+start, live pictures, reload, Stop and confirmed Discard after this addition.
+The private Cavioo layout/components and default customer browser remain unchanged
+by Day 3. Consuming the additional criterion/visual content through those actual
+components is part of the remaining complete model-backed host work, rather than
+proof already supplied by this optional reply. See DAY-THREE-VALIDATION.md.
