@@ -11,6 +11,12 @@ export type RecordKind =
   | 'sam_mapping'
   | 'read_snapshot'
   | 'coverage'
+  | 'criterion_scope'
+  | 'criterion_proposal'
+  | 'criterion_review'
+  | 'visual_coverage'
+  | 'visual_observation'
+  | 'focused_check'
   | 'limit'
   | 'model_response';
 export type RunState = 'running' | 'complete' | 'partial' | 'stopped' | 'interrupted';
@@ -85,6 +91,8 @@ export interface Candidate {
   targetCaptureId: string | null;
   targetId: string | null;
   recommendation: string;
+  visualTopic?: string | null;
+  visualObservationId?: string | null;
 }
 export interface Decision {
   candidateId: string;
@@ -123,6 +131,6 @@ export const PHASE = {
 } as const;
 export const CAPS = {
   driver: { input: 30000, output: 4096, effort: 'low' },
-  analyst: { input: 40000, output: 8192, effort: 'medium' },
+  analyst: { input: 40000, output: 8192, effort: 'low' },
   reviewer: { input: 60000, output: 8192, effort: 'medium' },
 } as const;

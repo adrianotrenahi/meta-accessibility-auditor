@@ -1,6 +1,6 @@
 import { webkit, chromium, type Browser, type Page } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
-import { Store, digest } from './store.js';
+import { Store, digest, recordIsIntact } from './store.js';
 import { LIMITS, type Capture, type RecordEntry } from './types.js';
 import type { Action } from './models.js';
 import { permittedUrl } from './network.js';
@@ -8,12 +8,27 @@ import { randomUUID } from 'node:crypto';
 import { LiveFrames } from './live-frame.js';
 import { readPage } from './page-observation.js';
 import { safeError } from './config.js';
+import { collectBrowserFacts, summarizeAxe } from './evidence-checks.js';
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
 export const isCommitment = (name: string) =>
   /\b(place|confirm|submit|complete)\s+(?:my\s+|your\s+|the\s+)?(order|purchase|booking|reservation)|\b(pay|subscribe|sign\s*up|register|sign\s*in|log\s*in|buy\s*now)\b/i.test(
     name,
   );
+/** An intact original no longer describes the page; this is an observation limit. */
+export class MeasurementStateChanged extends Error {
+  constructor(
+    public captureId: string,
+    public stage: 'before' | 'during',
+    public observationId?: string,
+  ) {
+    super(
+      stage === 'before'
+        ? 'The original page state is no longer stable/current; no scan was attempted.'
+        : 'The page changed during measurement; its saved raw result remains untrusted.',
+    );
+  }
+}
 export class BrowserWalk {
   browser?: Browser;
   private closing?: Promise<void>;
@@ -321,6 +336,7 @@ export class BrowserWalk {
         urlBefore,
         urlAfter: this.page.url(),
         outcome,
+        waitAfterMs: 180,
         actionCount: this.actions,
       },
       [source.id],
@@ -339,46 +355,55 @@ export class BrowserWalk {
       );
     return record;
   }
+  async observationStamp() {
+    this.assertActive();
+    return readPage(this.page, async () => digest(JSON.stringify(await this.observedState())));
+  }
   async measurements(source: RecordEntry) {
     this.assertActive();
+    const original = this.store.record(this.runId, source.id);
     if (
       source.kind !== 'capture' ||
       source.runId !== this.runId ||
-      this.store.record(this.runId, source.id)?.hash !== source.hash
+      !original ||
+      original.hash !== source.hash ||
+      !recordIsIntact(original) ||
+      !recordIsIntact(source) ||
+      typeof source.payload.stable !== 'boolean' ||
+      typeof source.payload.stateStamp !== 'string'
     )
       throw Error('The measurement needs an original capture from this run.');
-    const before = await this.observedState();
+    if (source.payload.stable !== true) throw new MeasurementStateChanged(source.id, 'before');
+    const before = await this.observationStamp();
+    if (source.payload.stateStamp !== before)
+      throw new MeasurementStateChanged(source.id, 'before');
     const result = await new AxeBuilder({ page: this.page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
       .analyze();
-    return this.store.append(
+    const facts = await collectBrowserFacts(this.page, source, result);
+    const observation = this.store.append(
       this.runId,
       'observation',
       'axe-core',
       {
         method: 'automatic_accessibility_scan',
+        sourceCaptureId: source.id,
+        sourceCaptureHash: source.hash,
+        sourceImageHash: source.payload.imageHash,
         stable:
-          source.payload.stable &&
-          source.payload.stateStamp === digest(JSON.stringify(before)) &&
-          source.payload.stateStamp === digest(JSON.stringify(await this.observedState())),
+          source.payload.stateStamp === before &&
+          source.payload.stateStamp === (await this.observationStamp()),
         engine: result.testEngine,
-        violations: result.violations.map((v) => ({
-          id: v.id,
-          impact: v.impact,
-          description: v.description,
-          help: v.help,
-          nodes: v.nodes.map((n) => ({
-            target: n.target,
-            html: n.html,
-            failureSummary: n.failureSummary,
-          })),
-        })),
-        incomplete: result.incomplete.map((x) => ({ id: x.id, nodes: x.nodes.length })),
+        ...summarizeAxe(result),
+        facts,
         limit:
           'This scan is not a keyboard or screen-reader test and does not certify the website.',
       },
       [source.id],
     );
+    if (observation.payload.stable !== true)
+      throw new MeasurementStateChanged(source.id, 'during', observation.id);
+    return observation;
   }
   image(record: RecordEntry) {
     return (

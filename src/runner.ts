@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BrowserWalk } from './browser.js';
+import { BrowserWalk, MeasurementStateChanged } from './browser.js';
 import { VoiceOverProbe } from './voiceover.js';
 import { Store } from './store.js';
 import {
@@ -15,11 +15,34 @@ import { approval, safeError } from './config.js';
 import { mapElement } from './segmentation.js';
 import { EvidenceRequestLimit, requestEvidence } from './request-evidence.js';
 import { candidateTarget } from './candidate-target.js';
+import { CRITERIA_VERSION } from './criteria.js';
+import {
+  declareCriterionScopes,
+  recordAnalysisDetails,
+  visualCandidateSources,
+} from './assessment.js';
+import { FocusedCheckBudget, type MissingEvidenceRequest } from './evidence-checks.js';
+import { performFocusedCheck } from './focused-checks.js';
+import {
+  readJourneyContext,
+  compareJourneyTotals,
+  recordOptOutContext,
+  ReturnEvidence,
+} from './journey-evidence.js';
 export class Runner {
   active?: { run: Run; walk: BrowserWalk; probe: VoiceOverProbe; controller: AbortController };
   completion?: Promise<void>;
   private waiting?: { runId: string; release: () => void };
   private discarding = new Map<string, Promise<void>>();
+  private focusedBudgets = new Map<string, FocusedCheckBudget>();
+  private focusedBudget(runId: string, reserveVoiceOver = false) {
+    if (!this.focusedBudgets.has(runId))
+      this.focusedBudgets.set(
+        runId,
+        new FocusedCheckBudget({ reserveVoiceOver: reserveVoiceOver ? 2 : 0 }),
+      );
+    return this.focusedBudgets.get(runId)!;
+  }
   isWaiting(id: string) {
     return this.waiting?.runId === id;
   }
@@ -136,13 +159,26 @@ export class Runner {
         model:
           run.mode === 'offline' ? 'Saved offline examples; no AI inference' : 'muse-spark-1.3',
         stopBoundary: 'No orders, payments, account creation or bookings.',
+        criteriaVersion: CRITERIA_VERSION,
+        focusedChecks: {
+          maximum: 2,
+          reservedForVoiceOver: withVoiceOver ? 2 : 0,
+          extraModelRequests: 0,
+        },
         keyboardPattern:
           walk.engine === 'webkit'
             ? 'Mac WebKit Option-Tab includes links; Tab/Shift+Tab requests are performed as Alt+Tab/Alt+Shift+Tab and both requested and actual keys are recorded.'
             : 'Chromium Tab/Shift+Tab; requested and actual keys are recorded.',
       });
       let current = await walk.start(run.url);
-      const scan = await walk.measurements(current);
+      declareCriterionScopes(this.store, run.id);
+      const initialMeasurement = await this.automaticMeasurement(
+        run,
+        walk,
+        current,
+        controller.signal,
+      );
+      current = initialMeasurement.current;
       this.store.append(
         run.id,
         'navigator_note',
@@ -151,11 +187,24 @@ export class Runner {
           kind: 'progress',
           text: 'Initial page captured. Automatic scan results do not establish keyboard or screen-reader operation.',
         },
-        [current.id, scan.id],
+        [current.id, ...(initialMeasurement.scan ? [initialMeasurement.scan.id] : [])],
       );
       if (withVoiceOver) {
-        await probe.check(current);
-        current = await walk.capture();
+        current = await performFocusedCheck(
+          this.store,
+          run.id,
+          walk,
+          probe,
+          this.focusedBudget(run.id, true),
+          current,
+          {
+            method: 'voiceover',
+            captureId: current.id,
+            criterionId: null,
+            reason: 'Initial bounded real screen-reader checkpoint.',
+          },
+          controller.signal,
+        );
       } else
         this.store.append(
           run.id,
@@ -185,8 +234,19 @@ export class Runner {
         this.store.finish(run.id, 'partial', safeError(e));
       }
     } finally {
-      await probe.cleanup();
-      await walk.close();
+      try {
+        if (this.store.hasRun(run.id)) declareCriterionScopes(this.store, run.id);
+      } finally {
+        try {
+          await probe.cleanup();
+        } finally {
+          try {
+            await walk.close();
+          } finally {
+            this.focusedBudgets.delete(run.id);
+          }
+        }
+      }
     }
   }
   private async offline(
@@ -228,6 +288,33 @@ export class Runner {
           [source.id],
         )
       : undefined;
+    const namingScope =
+      original &&
+      analystRead.records.find(
+        (r) => r.kind === 'criterion_scope' && r.payload.captureId === original.id,
+      );
+    const namingProposal =
+      candidate && source && original && namingScope
+        ? this.store.append(
+            run.id,
+            'criterion_proposal',
+            'saved-example',
+            {
+              version: CRITERIA_VERSION,
+              scopeId: namingScope.id,
+              checkId: `${original.id}:C02`,
+              criterionId: 'C02',
+              verdict: 'FAIL',
+              reason:
+                'Saved fixture: the original automatic scan and browser facts show an empty control name. No keyboard or reader result is inferred.',
+              sources: [original.id, source.id],
+              missingEvidence: [],
+              screenReaderClaimed: false,
+              readSnapshotId: analystRead.read.id,
+            },
+            [namingScope.id, original.id, source.id],
+          )
+        : undefined;
     const review = () => {
       if (!candidate || !source) return;
       const read = this.store.snapshot(run.id, 'reviewer');
@@ -247,6 +334,24 @@ export class Runner {
         },
         [source.id, candidate.id, read.read.id],
       );
+      if (namingProposal && original)
+        this.store.append(
+          run.id,
+          'criterion_review',
+          'saved-example',
+          {
+            proposalId: namingProposal.id,
+            proposalHash: namingProposal.hash,
+            verdict: 'keep',
+            premise: 'supported',
+            reason:
+              'Saved review example: the exact original empty-name facts support only this scoped naming failure.',
+            sources: [original.id, source.id],
+            readSnapshotId: read.read.id,
+            provenance: 'saved-example',
+          },
+          [namingProposal.id, read.read.id, original.id, source.id],
+        );
     };
     const pause = async () => {
       review();
@@ -289,13 +394,14 @@ export class Runner {
       current = await walk.capture();
       if (manual) await pause();
     }
-    const scan = await walk.measurements(current);
+    const measured = await this.automaticMeasurement(run, walk, current, signal);
+    current = measured.current;
     const snap = this.store.snapshot(run.id, 'analyst');
     review();
     this.store.append(run.id, 'coverage', 'runner', {
       criteria: 'Foundation only; this is not the complete fifteen-criterion assessment.',
       analystRead: snap.read.id,
-      scan: scan.id,
+      scan: measured.scan?.id ?? null,
       modelEvaluation: 'NOT_TESTED',
       sam: 'NOT_TESTED',
     });
@@ -308,6 +414,7 @@ export class Runner {
     controller: AbortController,
   ) {
     const models = new MetaModels(this.store);
+    const returnEvidence = new ReturnEvidence(this.store, run.id);
     let current = start;
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15 * 60000)]);
     let unchangedTraversal = 0;
@@ -338,12 +445,59 @@ export class Runner {
         }
         if (action.kind === 'voiceover') {
           unchangedTraversal = 0;
-          await probe.check(current);
-          current = await walk.capture();
+          current = await performFocusedCheck(
+            this.store,
+            run.id,
+            walk,
+            probe,
+            this.focusedBudget(run.id),
+            current,
+            { method: 'voiceover', captureId: current.id, criterionId: null, reason: action.note },
+            signal,
+          );
         } else {
           const before = current;
-          await walk.act(action, current);
+          let beforeContext: RecordEntry | undefined;
+          try {
+            beforeContext = await readJourneyContext(walk, before);
+          } catch (error) {
+            this.store.append(
+              run.id,
+              'limit',
+              'runner',
+              {
+                reason:
+                  'Journey context was unavailable; no price, choice or return result is inferred.',
+                detail: safeError(error),
+              },
+              [before.id],
+            );
+          }
+          const performed = await walk.act(action, current);
           current = await walk.capture();
+          try {
+            const afterContext = await readJourneyContext(walk, current);
+            if (beforeContext?.payload.stable === true && afterContext.payload.stable === true) {
+              compareJourneyTotals(this.store, run.id, beforeContext, performed, afterContext);
+              if (performed.payload.before?.type === 'checkbox')
+                recordOptOutContext(this.store, run.id, beforeContext, performed, afterContext);
+            }
+            if (action.kind === 'type')
+              await returnEvidence.rememberTyped(walk, before, performed, current);
+            if (action.kind === 'back')
+              await returnEvidence.compareAfterBack(walk, before, performed, current);
+          } catch (error) {
+            this.store.append(
+              run.id,
+              'limit',
+              'runner',
+              {
+                reason: 'A journey comparison remains incomplete; this is not a website defect.',
+                detail: safeError(error),
+              },
+              [performed.id, current.id],
+            );
+          }
           unchangedTraversal =
             action.kind === 'press' &&
             ['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.key ?? '') &&
@@ -367,8 +521,8 @@ export class Runner {
           }
         }
         if (i % 3 === 2) {
-          await walk.measurements(current);
-          await this.analyseCheckpoint(models, run, current, walk, signal);
+          current = (await this.automaticMeasurement(run, walk, current, signal)).current;
+          current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
         }
       }
       if (decisionAllowanceSpent)
@@ -382,8 +536,9 @@ export class Runner {
           },
           [current.id],
         );
-      await this.analyseCheckpoint(models, run, current, walk, signal);
+      current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
     } finally {
+      returnEvidence.clear();
       if (!signal.aborted && this.store.run(run.id).state === 'running') {
         try {
           await this.review(models, run, current, walk, signal, true);
@@ -396,35 +551,80 @@ export class Runner {
       }
     }
   }
+  private async automaticMeasurement(
+    run: Run,
+    walk: BrowserWalk,
+    current: RecordEntry,
+    signal: AbortSignal,
+  ): Promise<{ current: RecordEntry; scan?: RecordEntry }> {
+    if (signal.aborted) throw Error('The run stopped before the automatic measurement.');
+    try {
+      const scan = await walk.measurements(current);
+      if (signal.aborted) throw Error('The run stopped during the automatic measurement.');
+      return { current, scan };
+    } catch (error) {
+      if (!(error instanceof MeasurementStateChanged) || signal.aborted) throw error;
+      this.store.append(
+        run.id,
+        'limit',
+        'browser',
+        {
+          method: 'automatic_accessibility_scan',
+          state: error.stage === 'before' ? 'NOT_TESTED' : 'INCONCLUSIVE',
+          reason:
+            'The page changed before its automatic measurement could settle. This check remains unknown; navigation resumes from one fresh observation without repeating input or the scan.',
+          sourceCaptureId: error.captureId,
+          unavailableObservationId: error.observationId ?? null,
+        },
+        [current.id, ...(error.observationId ? [error.observationId] : [])],
+      );
+      // One observation refresh only: another scan could make its replacement stale again.
+      const refreshed = await walk.capture();
+      if (signal.aborted) throw Error('The run stopped during the automatic observation refresh.');
+      walk.assertActive();
+      declareCriterionScopes(this.store, run.id);
+      return { current: refreshed };
+    }
+  }
   private async analyseCheckpoint(
     models: MetaModels,
     run: Run,
     current: RecordEntry,
     walk: BrowserWalk,
     signal: AbortSignal,
+    probe?: VoiceOverProbe,
   ) {
     try {
-      await this.analyse(models, run, current, walk, signal);
+      return (await this.analyse(models, run, current, walk, signal, probe)) ?? current;
     } catch (error) {
-      if (
-        !(error instanceof IncompleteModelResult || error instanceof EvidenceRequestLimit) ||
-        signal.aborted
-      )
-        throw error;
-      this.store.append(
-        run.id,
-        'limit',
-        error.role,
-        {
-          reason:
-            error instanceof EvidenceRequestLimit
-              ? `${error.message} Navigation continues; no over-limit request was sent.`
-              : 'An analysis or review response ended before returning a result. Navigation continues; this checkpoint remains incomplete.',
-          checkpointCaptureId: current.id,
-        },
-        [current.id],
-      );
+      return this.incompleteCheckpoint(error, run, current, signal);
     }
+  }
+  private incompleteCheckpoint(
+    error: unknown,
+    run: Run,
+    current: RecordEntry,
+    signal: AbortSignal,
+  ) {
+    if (
+      !(error instanceof IncompleteModelResult || error instanceof EvidenceRequestLimit) ||
+      signal.aborted
+    )
+      throw error;
+    this.store.append(
+      run.id,
+      'limit',
+      error.role,
+      {
+        reason:
+          error instanceof EvidenceRequestLimit
+            ? `${error.message} Navigation continues; no over-limit request was sent.`
+            : 'An analysis or review response ended before returning a result. Navigation continues; this checkpoint remains incomplete.',
+        checkpointCaptureId: current.id,
+      },
+      [current.id],
+    );
+    return current;
   }
   private async analyse(
     models: MetaModels,
@@ -432,16 +632,39 @@ export class Runner {
     current: RecordEntry,
     walk: BrowserWalk,
     signal: AbortSignal,
+    probe?: VoiceOverProbe,
   ) {
+    declareCriterionScopes(this.store, run.id);
+    if (typeof walk.observationStamp === 'function') {
+      try {
+        await readJourneyContext(walk, current);
+      } catch (error) {
+        this.store.append(
+          run.id,
+          'limit',
+          'analyst',
+          { reason: 'Original journey context could not be collected.', detail: safeError(error) },
+          [current.id],
+        );
+      }
+    }
     const snapshot = requestEvidence(this.store, run.id, 'analyst', current);
+    const images = walk.images(snapshot.records);
     const analysis = await models.reason(
       run.id,
       'analyst',
       snapshot.records,
-      walk.images(snapshot.records),
+      images,
       analysisSchema,
       false,
       signal,
+    );
+    const visual = recordAnalysisDetails(
+      this.store,
+      run.id,
+      snapshot,
+      images.map((image) => image.captureId),
+      analysis,
     );
     for (const c of analysis.findings) {
       if (!c.sources.every((id) => snapshot.records.some((r) => r.id === id)))
@@ -457,7 +680,25 @@ export class Runner {
         });
         continue;
       }
-      this.store.append(run.id, 'candidate', 'analyst', c, c.sources);
+      let visualSources: ReturnType<typeof visualCandidateSources>;
+      try {
+        visualSources = visualCandidateSources(c, visual);
+      } catch (error) {
+        this.store.append(run.id, 'limit', 'analyst', {
+          reason: safeError(error),
+          issueKey: c.issueKey,
+          claimStatus: 'withheld; visual support missing',
+        });
+        continue;
+      }
+      const { visualObservationIndex: _index, ...claim } = c;
+      this.store.append(
+        run.id,
+        'candidate',
+        'analyst',
+        { ...claim, visualObservationId: visualSources.visualObservationId },
+        visualSources.sources,
+      );
       if (target) {
         try {
           await mapElement(this.store, models, run.id, target.capture, target.target.id, signal);
@@ -480,8 +721,26 @@ export class Runner {
       topics: analysis.coverage,
       readSnapshotId: snapshot.read.id,
     });
+    let next = current;
+    for (const request of (analysis.missingEvidence ?? []) as MissingEvidenceRequest[])
+      next = await performFocusedCheck(
+        this.store,
+        run.id,
+        walk,
+        probe,
+        this.focusedBudget(run.id),
+        next,
+        request,
+        signal,
+      );
+    declareCriterionScopes(this.store, run.id);
     if (this.store.usage(run.id).requests.filter((r) => r.role === 'reviewer').length < 3)
-      await this.review(models, run, current, walk, signal, false);
+      try {
+        await this.review(models, run, next, walk, signal, false);
+      } catch (error) {
+        return this.incompleteCheckpoint(error, run, next, signal);
+      }
+    return next;
   }
   private async review(
     models: MetaModels,
@@ -492,7 +751,8 @@ export class Runner {
     final: boolean,
   ) {
     const candidates = this.store.records(run.id).filter((r) => r.kind === 'candidate');
-    if (!candidates.length) return;
+    const proposals = this.store.records(run.id).filter((r) => r.kind === 'criterion_proposal');
+    if (!candidates.length && !proposals.length) return;
     const snapshot = requestEvidence(this.store, run.id, 'reviewer', current);
     const result = await models.reason(
       run.id,
@@ -517,8 +777,40 @@ export class Runner {
         run.id,
         'review',
         'reviewer',
-        { ...d, verdict, readSnapshotId: snapshot.read.id },
+        {
+          ...d,
+          verdict,
+          readSnapshotId: snapshot.read.id,
+          provenance: run.mode === 'offline' ? 'saved-example' : 'model',
+        },
         [...d.sources, c.id, snapshot.read.id],
+      );
+    }
+    for (const decision of result.criterionDecisions ?? []) {
+      const proposal = snapshot.records.find(
+        (r) => r.id === decision.proposalId && r.kind === 'criterion_proposal',
+      );
+      if (
+        !proposal ||
+        proposal.hash !== decision.proposalHash ||
+        !decision.sources.every((id) => snapshot.records.some((r) => r.id === id))
+      ) {
+        this.store.append(run.id, 'limit', 'reviewer', {
+          reason:
+            'Criterion review did not match an exact supplied proposal and its original evidence.',
+        });
+        continue;
+      }
+      this.store.append(
+        run.id,
+        'criterion_review',
+        'reviewer',
+        {
+          ...decision,
+          readSnapshotId: snapshot.read.id,
+          provenance: run.mode === 'offline' ? 'saved-example' : 'model',
+        },
+        [...new Set([proposal.id, snapshot.read.id, ...decision.sources])],
       );
     }
   }

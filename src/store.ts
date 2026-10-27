@@ -235,6 +235,7 @@ export class Store {
     const records = this.records(runId).filter(
       (r) =>
         !['read_snapshot', 'model_response'].includes(r.kind) &&
+        r.kind !== 'visual_coverage' &&
         !(r.kind === 'coverage' && ['analyst', 'reviewer'].includes(r.author)),
     );
     const wanted = new Set(ids ?? records.map((r) => r.id));
@@ -332,6 +333,10 @@ export class Store {
         id: candidate.id,
         title: review.payload.title || candidate.payload.title,
         review: presentRecordPayload(review.payload),
+        reviewProvenance:
+          review.payload.provenance === 'saved-example' || review.author.startsWith('saved_')
+            ? 'saved-example'
+            : 'model',
         evidence: candidate.sources,
       });
     }

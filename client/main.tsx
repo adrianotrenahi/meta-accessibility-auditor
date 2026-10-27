@@ -277,7 +277,16 @@ function App() {
                     {report.findings.length ? (
                       report.findings.map((f: any) => (
                         <article className="finding" key={f.id}>
-                          <span className="pill warm">Saved review example · {f.criterion}</span>
+                          <span className="pill warm">
+                            {f.reviewProvenance === 'saved-example'
+                              ? 'Saved review example'
+                              : 'Reviewed model finding'}
+                            {f.criterion
+                              ? ` · ${f.criterion}`
+                              : f.visualTopic
+                                ? ' · Unscored visual concern'
+                                : ' · Unscored concern'}
+                          </span>
                           <h4>{f.title}</h4>
                           <p>{f.detail}</p>
                           <h5>Suggested action</h5>
@@ -312,7 +321,8 @@ function App() {
                       </div>
                     )}
                     <p className="small">
-                      SAM has not been called. No outline is presented as SAM output.
+                      SAM outlines are not displayed in this engineering view. Original page images
+                      remain separate from annotations.
                     </p>
                   </section>
                 </div>
@@ -361,9 +371,51 @@ function App() {
                     <article>
                       <h4>Full assessment</h4>
                       <p>
-                        The complete fifteen-criterion review and model accuracy have not been
-                        tested. No overall score is shown.
+                        {report.assessment?.criteria?.coverage?.assessedCriteria ?? 0} of 15
+                        criteria assessed;{' '}
+                        {report.assessment?.criteria?.coverage?.unassessedCriteria ?? 15} remain
+                        unassessed.
                       </p>
+                      <p>
+                        {report.score == null
+                          ? 'No overall score is shown before the run and its required reviewed checks are complete.'
+                          : `Limited journey score: ${report.score}/100.`}
+                      </p>
+                      <p>
+                        This covers the recorded journey, not a full Cavioo assessment or
+                        accessibility certification.
+                      </p>
+                      <details>
+                        <summary>Read the fifteen criterion results</summary>
+                        <ol>
+                          {report.assessment?.criteria?.results?.map((criterion: any) => (
+                            <li key={criterion.id}>
+                              <strong>
+                                {criterion.id}: {criterion.question}
+                              </strong>
+                              <p>
+                                {criterion.verdict} · {criterion.reason}
+                              </p>
+                              <p>
+                                {criterion.assessedChecks} of {criterion.requiredChecks} required
+                                checks assessed.
+                              </p>
+                            </li>
+                          ))}
+                        </ol>
+                      </details>
+                      <details>
+                        <summary>Read visual inspection coverage</summary>
+                        <p>Examined means the topic was inspected; it is not an automatic pass.</p>
+                        <ul>
+                          {report.assessment?.visualCoverage?.map((row: any) => (
+                            <li key={row.captureId + ':' + row.topic}>
+                              {row.topic.replaceAll('_', ' ')}: {row.state.replaceAll('_', ' ')}.{' '}
+                              {row.reason}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
                       <p>Reserved spending: ${((report.usage.reserved ?? 0) / 1e6).toFixed(2)}</p>
                     </article>
                   </div>
