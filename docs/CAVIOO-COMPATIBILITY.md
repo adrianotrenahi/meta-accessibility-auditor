@@ -106,7 +106,7 @@ report coverage still need separate implementation and proof.
 
 ## Recorded keyboard attempts in the existing report
 
-The host reply now optionally includes original Enter/Space input attempts from
+The host reply now optionally includes original Enter/Space keypresses from
 the shared records, using `access-walk/keyboard-v1`. The private host checks the
 run and exact source image, then uses the existing report keyboard map with an
 unconfirmed result. It creates no keyboard failure finding or successful-route

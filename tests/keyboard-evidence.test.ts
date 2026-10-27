@@ -66,10 +66,10 @@ test('Keyboard export contains only original browser activation attempts, never 
     x.append('Enter', {}, [x.capture.id], 'saved_analyst_response');
     const data = exportKeyboardEvidence(x.run.id, x.store.records(x.run.id));
     assert.deepEqual(
-      data.activations.map((a) => a.id),
+      data.keyPresses.map((a) => a.id),
       [enter.id, space.id],
     );
-    assert.deepEqual(data.activations[0], {
+    assert.deepEqual(data.keyPresses[0], {
       id: enter.id,
       sequence: enter.seq,
       recordHash: enter.hash,
@@ -112,8 +112,15 @@ test('Broken, unstable or unrelated sources and rewritten actions are withheld e
     });
     x.append('Enter', {}, [unstable.id]);
     const data = exportKeyboardEvidence(x.run.id, x.store.records(x.run.id));
-    assert.equal(data.activations.length, 0);
+    assert.equal(data.keyPresses.length, 0);
     assert.equal(data.limits.length, 6);
+    assert.equal(data.limits.filter((reason) => reason.includes('integrity check')).length, 1);
+    assert.equal(
+      data.limits.filter((reason) => reason.includes('not recorded as performed')).length,
+      1,
+    );
+    assert.equal(data.limits.filter((reason) => reason.includes('unsupported control')).length, 1);
+    assert.equal(data.limits.filter((reason) => reason.includes('no verified link')).length, 3);
     assert(!JSON.stringify(data).includes('Invented'));
   } finally {
     x.close();
@@ -127,12 +134,12 @@ test('Activation-only changes advance the host version, and tampering withdraws 
     const next = exportHostSnapshot(x.store, x.run.id);
     assert(next.snapshot.sequence > first.snapshot.sequence);
     assert.deepEqual(next.snapshot.captures, first.snapshot.captures);
-    assert.equal(next.keyboard.activations.length, 1);
+    assert.equal(next.keyboard.keyPresses.length, 1);
     assert.equal(exportHostSnapshot(x.store, x.run.id).snapshot.sequence, next.snapshot.sequence);
     x.store.db.prepare('UPDATE records SET hash=? WHERE id=?').run('a'.repeat(64), action.id);
     const withdrawn = exportHostSnapshot(x.store, x.run.id);
     assert(withdrawn.snapshot.sequence > next.snapshot.sequence);
-    assert.equal(withdrawn.keyboard.activations.length, 0);
+    assert.equal(withdrawn.keyboard.keyPresses.length, 0);
   } finally {
     x.close();
   }
@@ -144,19 +151,19 @@ test('Keyboard contract refuses reordered/duplicate identities, unsupported outc
     x.append('Space');
     const data = exportHostSnapshot(x.store, x.run.id).keyboard;
     assert.throws(() =>
-      keyboardEvidenceSchema.parse({ ...data, activations: [...data.activations].reverse() }),
+      keyboardEvidenceSchema.parse({ ...data, keyPresses: [...data.keyPresses].reverse() }),
     );
     assert.throws(() =>
       keyboardEvidenceSchema.parse({
         ...data,
-        activations: [data.activations[0], data.activations[0]],
+        keyPresses: [data.keyPresses[0], data.keyPresses[0]],
       }),
     );
     assert.throws(() => keyboardEvidenceSchema.parse({ ...data, throughSequence: 0 }));
     assert.throws(() =>
       keyboardEvidenceSchema.parse({
         ...data,
-        activations: [{ ...data.activations[0], result: 'works' }],
+        keyPresses: [{ ...data.keyPresses[0], result: 'works' }],
       }),
     );
     assert.throws(() => keyboardEvidenceSchema.parse({ ...data, privateValue: 'PRIVATE_VALUE' }));
@@ -178,8 +185,28 @@ test('Repointed source links and legacy inputs without a saved source binding ca
       .run(JSON.stringify([other.id]), action.id);
     x.append('Enter', { sourceCaptureId: undefined, sourceImageHash: undefined });
     const data = exportKeyboardEvidence(x.run.id, x.store.records(x.run.id));
-    assert.equal(data.activations.length, 0);
+    assert.equal(data.keyPresses.length, 0);
     assert.equal(data.limits.length, 2);
+  } finally {
+    x.close();
+  }
+});
+
+test('Text-field Enter and Space remain literal keypresses, never control activations', () => {
+  const x = sample();
+  try {
+    x.append('Space', { before: { tag: 'textarea', name: 'Message' } });
+    x.append('Enter', { before: { tag: 'input', name: 'Email', type: 'text' } });
+    const data = exportKeyboardEvidence(x.run.id, x.store.records(x.run.id));
+    assert.equal('activations' in data, false);
+    assert.deepEqual(
+      data.keyPresses.map((record) => [record.key, record.control.tag, record.result]),
+      [
+        ['Space', 'textarea', 'not-confirmed'],
+        ['Enter', 'input', 'not-confirmed'],
+      ],
+    );
+    assert.equal(data.limits.length, 0);
   } finally {
     x.close();
   }
