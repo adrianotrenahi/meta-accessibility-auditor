@@ -10,13 +10,13 @@ The new engine owns navigation, original evidence, keyboard and VoiceOver checks
 
 | Existing experience | Parts to reuse in Cavioo | New work to supply |
 | --- | --- | --- |
-| Audit setup and progress | Existing audit funnel, RunProgress, LiveRunTopBar and LiveRunPipeline | Validated goal/settings, progress and task states |
-| Browser during the run | LiveRunPreview, CavBrowserFrame and the current browser-frame delivery path | Current URL, real live frames, dimensions and connection state; saved screenshots remain separate evidence |
-| Screens visited | LiveRunPagesStrip and CavScreenshotFrame | Ordered screen records with stable identity and their original screenshots |
-| Finding bubbles | CavFindingPin, AnnotationPin, AnnotationPostit and the existing annotation canvas where applicable | Accepted claim, exact screen/capture identity and correctly transformed element coordinates |
-| Final report and evidence | AuditReportClient, AuditReportView, EvidenceChapter, CavFindingRow, CavFindingCardSection and FullScreenAnnotationViewer | Compatible report records, accepted findings and original screenshots for every captured screen |
+| Audit setup and progress | Existing audit funnel, top bar and progress components | Validated goal/settings, progress and task states |
+| Browser during the run | Existing live-browser frame and frame delivery | Current URL, real live frames, dimensions and connection state; saved screenshots remain separate evidence |
+| Screens visited | Existing screen strip and screenshot frames | Ordered screen records with stable identity and their original screenshots |
+| Finding bubbles | Existing finding pins, cards and annotation canvas where applicable | Accepted claim, exact screen/capture identity and correctly transformed element coordinates |
+| Final report and evidence | Existing report, finding details and full-screen screenshot viewer | Compatible report records, accepted findings and original screenshots for every captured screen |
 
-These are integration targets identified in the current Cavioo source. Their presence does not establish that the new engine already drives them. Compose the existing parts inside the existing layout; add only the necessary connection code and supported extensions.
+The private integration plan maps these roles to the actual existing components. Their presence does not establish that the new engine already drives them. Compose the existing parts inside the existing layout; add only the necessary connection code and supported extensions.
 
 The connector must handle:
 
@@ -24,7 +24,7 @@ The connector must handle:
 - **Identity:** keep a durable mapping between the engine run, Cavioo job/session, screen, capture, finding and review version. Replayed events must update the same items rather than create duplicates.
 - **Live browser and screenshots:** supply actual frame delivery for the existing browser view. After-action screenshots alone are not a continuous browser stream. Preserve viewport, original image dimensions, scroll and capture identity so zoomed pins and SAM outlines stay on the right element.
 - **Findings:** publish only the accepted exact claim version. Map supported fields into Cavioo's existing finding readers; preserve evidence, uncertainty, severity, grouping, visibility and withdrawals separately. Do not invent a second customer-facing finding model.
-- **Controls:** preserve Cavioo's own finish, discard, pause/resume and reconnect meanings. In particular, its discard action removes the run's findings and screenshots; it must not be connected directly to the prototype's evidence-preserving Stop. A partial run must remain visibly incomplete. Unsupported capabilities need explicit existing states rather than apparently working controls.
+- **Controls:** preserve Cavioo's own finish, discard, pause/resume and reconnect meanings. In particular, its confirmed discard removes the linked run's findings, screenshots and engine evidence; it must not be connected directly to the prototype's evidence-preserving Stop. Do not retain a hidden original-evidence archive after promising deletion. Preserve originals for retained runs, and stop in-flight work before applying discard. A partial run must remain visibly incomplete. Unsupported capabilities need explicit existing states rather than apparently working controls.
 - **Report and scoring:** preserve report structure, screen ordering, screenshots, filters, details and permissions. Version the new method and fifteen-criterion scope. Only map criteria with explicitly equivalent meaning; do not present a partial new audit as full Cavioo coverage or turn unassessed checks into a pass or zero score.
 - **Access and spending:** keep keys in the engine service, and enforce Cavioo workspace access through the host. Ordinary report reads and reconnects never start paid work. Production account, billing and audit settings are not changed by this plan.
 
@@ -32,7 +32,7 @@ The connector must handle:
 
 A customer starts an audit through the same Cavioo funnel, watches the website in the same browser layout, sees reviewed bubbles using the same pin/card styling and opens the same report. For example, a finding about an unnamed Add to basket button opens that exact product screenshot in Cavioo's existing evidence viewer. It does not open a separate Access Walk report.
 
-The public repository holds the new engine, compatible connector interfaces, tests and controlled examples. Cavioo's pre-existing components remain private and are imported by the Cavioo host. The public engine and connector fixtures must run without Cavioo credentials or source. The video and submission identify the existing Cavioo interface and components as prior work, and the new engine and integration as event work.
+The public repository must hold the new engine, compatible connector interfaces, tests and controlled examples as they are implemented. The connector and its compatibility fixtures do not exist yet. Cavioo's pre-existing components remain private and are imported by the Cavioo host. Standalone proofs must run without Cavioo credentials, source or production-service calls. The video and submission identify the existing Cavioo interface and components as prior work, and the new engine and integration as event work.
 
 ## Still pending
 
