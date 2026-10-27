@@ -92,3 +92,14 @@ work. Confirmed discard waits for all writes to stop before removing original
 run evidence and images; Stop keeps them. Minimal financial totals and deletion
 identifiers survive without retaining the discarded actions, prompts or images.
 Private UI source and production credentials remain outside this repository.
+
+## Local live browser connection
+
+The host surface now supplies demand-paced, display-only live PNG pictures from
+the active controlled browser. Its private consumer draws them through the
+existing canvas rather than relabelling saved evidence as live. The private host
+checks the run, PNG bytes, fingerprint and dimensions; pins require the exact
+original capture, unchanged browser state and the picture actually drawn. Broken connections fall back to
+labelled saved evidence, and hidden tabs request nothing. This establishes the
+local controlled stream; production dispatch/access, broader controls and complete
+report coverage still need separate implementation and proof.

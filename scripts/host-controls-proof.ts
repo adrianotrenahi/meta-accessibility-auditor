@@ -69,6 +69,68 @@ try {
   assert.equal(current.snapshot.findings.length, 1);
   assert(current.snapshot.findings[0].anchor);
   const image = current.snapshot.captures[0].imageHash;
+  const recordCount = app.store.records(run.id).length,
+    actionCount = app.runner.active!.walk.actions;
+  const fresh = (await request(`/api/host/runs/${run.id}/frame`)).body;
+  assert.equal((await fetch(`${app.origin}/api/host/runs/${run.id}/frame`)).status, 403);
+  assert.equal(fresh.protocol, 'access-walk/frame-v1');
+  assert.equal(fresh.imageHash, image);
+  assert.equal(fresh.captureId, current.snapshot.captures[0].id);
+  const frames = app.runner.active!.walk.frames,
+    readFrame = frames.read.bind(frames);
+  frames.read = async () => {
+    throw Error('INTERNAL picture failure');
+  };
+  const failedPicture = await request(`/api/host/runs/${run.id}/frame`);
+  assert.equal(failedPicture.status, 503);
+  assert(!failedPicture.body.error.includes('INTERNAL'));
+  frames.read = readFrame;
+  const page = app.runner.active!.walk.page;
+  await page.locator('#add').evaluate((el) => el.setAttribute('aria-label', 'Add to basket'));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const renamed = (await request(`/api/host/runs/${run.id}/frame`)).body;
+  assert.equal(
+    renamed.imageHash,
+    fresh.imageHash,
+    'An accessible-name change can leave the picture identical',
+  );
+  assert.equal(renamed.captureId, null, 'A changed accessible name must withhold the old live pin');
+  await page.locator('#add').evaluate((el) => el.removeAttribute('aria-label'));
+  await page.evaluate(() => {
+    const marker = document.createElement('div');
+    marker.id = 'live-proof-marker';
+    marker.style.cssText =
+      'position:fixed;left:0;top:0;width:80px;height:80px;background:rgb(255,0,0);z-index:999999';
+    const style = document.createElement('style');
+    style.id = 'live-proof-animation';
+    style.textContent =
+      '@keyframes proofMotion {from {transform:translateX(0)} to {transform:translateX(300px)}} #live-proof-marker {animation:proofMotion 2s linear infinite}';
+    document.head.append(style);
+    document.body.append(marker);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const changed = (await request(`/api/host/runs/${run.id}/frame`)).body;
+  assert(changed.sequence > fresh.sequence);
+  assert.notEqual(changed.imageHash, fresh.imageHash);
+  assert.equal(changed.captureId, null);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const animated = (await request(`/api/host/runs/${run.id}/frame`)).body;
+  assert.notEqual(
+    animated.imageHash,
+    changed.imageHash,
+    'Live viewing must preserve motion instead of freezing the site',
+  );
+  assert.equal(
+    animated.captureId,
+    null,
+    'Animated pixels must not inherit an unmatched original pin',
+  );
+  assert.equal(app.store.records(run.id).length, recordCount);
+  assert.equal(app.runner.active!.walk.actions, actionCount);
+  await page.evaluate(() => {
+    document.getElementById('live-proof-marker')?.remove();
+    document.getElementById('live-proof-animation')?.remove();
+  });
   for (let n = 0; current.waiting && n < 25; n++) {
     assert.equal(
       (
@@ -149,8 +211,28 @@ try {
     await request('/api/host/runs', 'POST', { mode: 'offline', requestId: randomUUID() })
   ).body;
   await waiting(next.id);
+  const nextFrames = app.runner.active!.walk.frames;
+  let releaseFrame!: () => void, enteredFrame!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enteredFrame = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    releaseFrame = resolve;
+  });
+  nextFrames.read = async () => {
+    enteredFrame();
+    await release;
+    throw Error('INTERNAL closed picture');
+  };
+  const latePicture = request(`/api/host/runs/${next.id}/frame`);
+  await entered;
   await request('/api/host/runs/' + next.id + '/stop', 'POST', {});
+  releaseFrame();
+  const endedPicture = await latePicture;
+  assert.equal(endedPicture.status, 409);
+  assert(!endedPicture.body.error.includes('INTERNAL'));
   assert.equal((await request('/api/host/runs/' + next.id)).body.snapshot.run.state, 'stopped');
+  assert.equal((await request(`/api/host/runs/${next.id}/frame`)).status, 409);
   assert(existsSync(join(dir, next.id)));
   const nextRequest = app.store.db
     .prepare('SELECT request_id FROM host_starts WHERE run_id=?')
@@ -184,6 +266,8 @@ try {
       freshBrowserRun: true,
       discardedOriginals: true,
       ordinaryStopRetains: true,
+      livePictures: true,
+      noEvidenceOnView: true,
       modelCalls: 0,
       creditsSpent: 0,
     }),

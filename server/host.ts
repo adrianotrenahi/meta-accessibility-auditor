@@ -31,7 +31,7 @@ export async function hostRequest(
       goal: HOST_GOAL,
       devices: ['desktop_1440_900'],
       capabilities: {
-        liveBrowser: false,
+        liveBrowser: true,
         deleteScreens: false,
         discard: true,
         manualCheckpoints: true,
@@ -136,6 +136,51 @@ export async function hostRequest(
       discarded: !pending && (requestedDiscard || (id ? !store.hasRun(id) : false)),
       discardPending: pending,
     });
+    return;
+  }
+  const frame = url.pathname.match(/^\/api\/host\/runs\/([a-f0-9-]{36})\/frame$/);
+  if (frame && req.method === 'GET') {
+    const id = frame[1],
+      active = runner.active;
+    if (!store.hasRun(id)) {
+      json(res, 404, { error: 'Run not found.' });
+      return;
+    }
+    if (
+      active?.run.id !== id ||
+      active.controller.signal.aborted ||
+      !active.walk.page ||
+      store.run(id).state !== 'running'
+    ) {
+      json(res, 409, { error: 'The live browser is not available.' });
+      return;
+    }
+    let picture;
+    try {
+      picture = await active.walk.frames.read();
+    } catch {
+      const ended =
+        runner.active !== active ||
+        active.controller.signal.aborted ||
+        !store.hasRun(id) ||
+        store.run(id).state !== 'running';
+      json(res, ended ? 409 : 503, {
+        error: ended
+          ? 'The live browser has ended.'
+          : 'The live picture is temporarily unavailable.',
+      });
+      return;
+    }
+    if (
+      runner.active !== active ||
+      active.controller.signal.aborted ||
+      !store.hasRun(id) ||
+      store.run(id).state !== 'running'
+    ) {
+      json(res, 409, { error: 'The live browser has ended.' });
+      return;
+    }
+    json(res, 200, picture);
     return;
   }
   const read = url.pathname.match(

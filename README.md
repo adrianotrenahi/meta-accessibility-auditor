@@ -127,6 +127,26 @@ start mappings are replaced by minimal discarded-start identifiers.
 `npm run proof:host-controls` checks a fresh headless browser walk, source-bound
 accepted finding, repeated starts, stale advances, ordinary Stop, confirmed
 discard and original-image removal with zero model calls. Native VoiceOver,
-continuous live video, per-screen deletion, model accuracy and SAM are not
+per-screen deletion, model accuracy and SAM are not
 established by this controlled proof. Provider awards now include Meta's $150 and
 Baseten's separately held $100; paid runs still need a new bounded approval.
+
+### Live browser pictures
+
+`GET /api/host/runs/:id/frame` uses the same host token and reads a fresh PNG
+from the already-running browser. It returns `access-walk/frame-v1`, run/picture
+identity, capture time, dimensions, image fingerprint and pixels. An original
+capture ID is supplied only for identical stable original pixels and unchanged
+browser state, including its accessible names and focus. Live pictures
+are display-only: they create no audit actions, retained images or model calls.
+Concurrent readers share work, with at most four screenshots per second. Closing
+the browser clears cached pixels and refuses late replies; Stop and Discard end
+the live view. The controlled host proof changes the page between picture reads
+and confirms live pixels change while the original audit record stays unchanged.
+
+The live view preserves animations. A moving picture that differs from a saved
+original intentionally has no original binding, so it cannot carry that pin;
+saved report evidence stays available. Full accessibility-state comparisons are
+retained for correctness, shared and paced with the picture reads. Large real-site
+performance remains outside the controlled proof. Temporary picture failures
+return a safe unavailable response; stopped browsers return an ended response.

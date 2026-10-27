@@ -5,6 +5,7 @@ import { LIMITS, type Capture, type RecordEntry } from './types.js';
 import type { Action } from './models.js';
 import { permittedUrl } from './network.js';
 import { randomUUID } from 'node:crypto';
+import { LiveFrames } from './live-frame.js';
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
 export const isCommitment = (name: string) =>
@@ -19,13 +20,22 @@ export class BrowserWalk {
   page!: Page;
   actions = 0;
   started = Date.now();
+  readonly frames: LiveFrames;
   constructor(
     public store: Store,
     public runId: string,
     public controlledOrigin: string,
     public headless = false,
     public engine: 'webkit' | 'chromium' = 'webkit',
-  ) {}
+  ) {
+    this.frames = new LiveFrames(
+      runId,
+      () => this.page.screenshot({ type: 'png', timeout: 5000 }),
+      () => this.assertActive(),
+      () => this.store.records(this.runId),
+      async () => digest(JSON.stringify(await this.observedState())),
+    );
+  }
   assertActive() {
     if (this.closingRequested) throw Error('The browser is closing; no further action is allowed.');
     if (this.store.run(this.runId).state !== 'running') throw Error('The run has stopped.');
@@ -295,6 +305,7 @@ export class BrowserWalk {
   }
   async close() {
     this.closingRequested = true;
+    this.frames.close();
     if (!this.closing)
       this.closing = (async () => {
         const browser = this.browser ?? (await this.launching?.catch(() => undefined));
