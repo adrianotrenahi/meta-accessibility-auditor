@@ -9,6 +9,43 @@ import { mapElement } from './segmentation.js';
 export class Runner {
   active?: { run: Run; walk: BrowserWalk; probe: VoiceOverProbe; controller: AbortController };
   completion?: Promise<void>;
+  private waiting?: { runId: string; release: () => void };
+  private discarding = new Map<string, Promise<void>>();
+  isWaiting(id: string) {
+    return this.waiting?.runId === id;
+  }
+  advance(id: string) {
+    if (this.waiting?.runId !== id) throw Error('The next controlled checkpoint is not ready.');
+    const wait = this.waiting;
+    this.waiting = undefined;
+    wait.release();
+  }
+  private checkpoint(runId: string, signal: AbortSignal) {
+    if (signal.aborted) return Promise.reject(Error('The run has stopped.'));
+    return new Promise<void>((resolve) => {
+      const release = () => {
+        signal.removeEventListener('abort', release);
+        if (this.waiting?.release === release) this.waiting = undefined;
+        resolve();
+      };
+      this.waiting = { runId, release };
+      signal.addEventListener('abort', release, { once: true });
+    });
+  }
+  async discard(id: string) {
+    const prior = this.discarding.get(id);
+    if (prior) return prior;
+    const work = (async () => {
+      if (this.active?.run.id === id) await this.stop(id);
+      if (this.store.hasRun(id)) this.store.discard(id);
+    })();
+    this.discarding.set(id, work);
+    try {
+      await work;
+    } finally {
+      this.discarding.delete(id);
+    }
+  }
   constructor(
     public store: Store,
     public origin: string,
@@ -20,6 +57,8 @@ export class Runner {
     headless?: boolean;
     voiceOver?: boolean;
     engine?: 'webkit' | 'chromium';
+    manualCheckpoints?: boolean;
+    requestId?: string;
   }) {
     if (this.active) throw Error('Another run is using the browser.');
     if (options.mode === 'live') approval();
@@ -29,6 +68,7 @@ export class Runner {
         'Add the canvas bag to the basket and review the form, stopping before any order.',
       url,
       options.mode,
+      options.requestId,
     );
     const walk = new BrowserWalk(
       this.store,
@@ -40,7 +80,14 @@ export class Runner {
     const probe = new VoiceOverProbe(walk),
       controller = new AbortController();
     this.active = { run, walk, probe, controller };
-    this.completion = this.execute(run, walk, probe, controller, options.voiceOver !== false)
+    this.completion = this.execute(
+      run,
+      walk,
+      probe,
+      controller,
+      options.voiceOver !== false,
+      options.manualCheckpoints === true,
+    )
       .catch((e) => {
         this.store.append(run.id, 'limit', 'runner', { cleanup: safeError(e) });
         if (this.store.run(run.id).state === 'running')
@@ -56,12 +103,14 @@ export class Runner {
     return run;
   }
   async stop(id: string) {
-    if (this.active?.run.id !== id) throw Error('This run is not active.');
+    const active = this.active,
+      completion = this.completion;
+    if (active?.run.id !== id) throw Error('This run is not active.');
     this.store.finish(id, 'stopped', 'Stopped by the owner.');
-    this.active.controller.abort();
-    await this.active.probe.cleanup();
-    await this.active.walk.close();
-    await this.completion;
+    active.controller.abort();
+    await active.probe.cleanup();
+    await active.walk.close();
+    await completion;
   }
   private async execute(
     run: Run,
@@ -69,6 +118,7 @@ export class Runner {
     probe: VoiceOverProbe,
     controller: AbortController,
     withVoiceOver: boolean,
+    manualCheckpoints: boolean,
   ) {
     try {
       this.store.append(run.id, 'plan', 'driver', {
@@ -105,7 +155,8 @@ export class Runner {
           },
           [current.id],
         );
-      if (run.mode === 'offline') await this.offline(run, walk, current);
+      if (run.mode === 'offline')
+        await this.offline(run, walk, current, controller.signal, manualCheckpoints);
       else await this.live(run, walk, probe, current, controller);
       if (this.store.run(run.id).state === 'running')
         this.store.finish(
@@ -125,8 +176,71 @@ export class Runner {
       await walk.close();
     }
   }
-  private async offline(run: Run, walk: BrowserWalk, start: RecordEntry) {
-    // These are newly written deterministic demonstration responses, not claimed model output.
+  private async offline(
+    run: Run,
+    walk: BrowserWalk,
+    start: RecordEntry,
+    signal: AbortSignal,
+    manual: boolean,
+  ) {
+    // Newly written saved responses; no model inference or native reader claim.
+    const analystRead = this.store.snapshot(run.id, 'analyst');
+    const source = analystRead.records.find(
+      (r) =>
+        r.kind === 'observation' &&
+        r.payload.stable !== false &&
+        r.payload.violations?.some((v: any) => v.id === 'button-name'),
+    );
+    const original = source?.sources
+      .map((id) => this.store.record(run.id, id))
+      .find((r) => r?.kind === 'capture');
+    const target = original?.payload.elements?.find(
+      (element: any) => element.tag === 'button' && !element.name,
+    );
+    const candidate = source
+      ? this.store.append(
+          run.id,
+          'candidate',
+          'saved_analyst_response',
+          {
+            title: 'The add-to-basket button has no accessible name',
+            detail:
+              'The original controlled product page exposes an unnamed button. Its automatic button-name measurement supports this naming finding; no keyboard or spoken-reader failure is inferred.',
+            criterion: 'C02',
+            basis: 'measured',
+            severity: 'serious',
+            targetId: target?.id,
+            recommendation: 'Give this button a useful accessible name, such as Add to basket.',
+          },
+          [source.id],
+        )
+      : undefined;
+    const review = () => {
+      if (!candidate || !source) return;
+      const read = this.store.snapshot(run.id, 'reviewer');
+      this.store.append(
+        run.id,
+        'review',
+        'saved_reviewer_response',
+        {
+          candidateId: candidate.id,
+          candidateHash: candidate.hash,
+          verdict: 'keep',
+          title: candidate.payload.title,
+          reason:
+            'Saved review example: the original controlled button-name measurement supports only this naming claim.',
+          sources: [source.id],
+          readSnapshotId: read.read.id,
+        },
+        [source.id, candidate.id, read.read.id],
+      );
+    };
+    const pause = async () => {
+      review();
+      if (manual) await this.checkpoint(run.id, signal);
+      walk.assertActive();
+    };
+    if (manual) await pause();
     let current = start;
     const tab = walk.engine === 'webkit' ? 'Alt+Tab' : 'Tab';
     for (const target of ['add', 'basket'] as const) {
@@ -147,6 +261,7 @@ export class Runner {
           current,
         );
         current = await walk.capture();
+        if (manual) await pause();
       }
       if (!reached)
         throw Error('The known controlled target was not reached within the keyboard limit.');
@@ -159,55 +274,13 @@ export class Runner {
         current,
       );
       current = await walk.capture();
+      if (manual) await pause();
     }
     const scan = await walk.measurements(current);
     const snap = this.store.snapshot(run.id, 'analyst');
-    const source = this.store
-      .records(run.id)
-      .filter((r) => r.kind === 'observation')
-      .find(
-        (r) =>
-          r.payload.stable !== false &&
-          r.payload.violations?.some((v: any) => v.id === 'button-name'),
-      );
-    if (source) {
-      const candidate = this.store.append(
-        run.id,
-        'candidate',
-        'saved_analyst_response',
-        {
-          title: 'The add-to-basket button has no accessible name',
-          detail:
-            'The controlled broken example contains an icon-only button with no accessible name. The automatic button-name check supports this scoped naming finding.',
-          criterion: 'C02',
-          basis: 'measured',
-          severity: 'serious',
-          recommendation: 'Give this button a useful accessible name, such as Add to basket.',
-          sources: [source.id],
-        },
-        [source.id],
-      );
-      const read = this.store.snapshot(run.id, 'reviewer');
-      this.store.append(
-        run.id,
-        'review',
-        'saved_reviewer_response',
-        {
-          candidateId: candidate.id,
-          candidateHash: candidate.hash,
-          verdict: 'keep',
-          title: candidate.payload.title,
-          reason:
-            'Saved-response demonstration: the original button-name measurement matches the claim. No keyboard or VoiceOver failure is inferred.',
-          sources: [source.id],
-          readSnapshotId: read.read.id,
-        },
-        [source.id, candidate.id, read.read.id],
-      );
-    }
+    review();
     this.store.append(run.id, 'coverage', 'runner', {
-      criteria:
-        'Day 1–2 foundation only; the complete fifteen-criterion assessment is scheduled for Day 3.',
+      criteria: 'Foundation only; this is not the complete fifteen-criterion assessment.',
       analystRead: snap.read.id,
       scan: scan.id,
       modelEvaluation: 'NOT_TESTED',

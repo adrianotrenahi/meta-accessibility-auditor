@@ -203,3 +203,73 @@ test('One unavailable screenshot withholds its claim without hiding unrelated in
     x.close();
   }
 });
+
+test('Confirmed discard removes evidence while keeping incurred and uncertain costs in the project limit', () => {
+  const x = sample();
+  try {
+    x.review();
+    exportHostSnapshot(x.store, x.run.id);
+    x.store.db
+      .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
+      .run('known-cost', x.run.id, 'analyst', 100, 80, 'done', new Date().toISOString());
+    x.store.db
+      .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
+      .run('unknown-cost', x.run.id, 'reviewer', 120, null, 'unknown', new Date().toISOString());
+    assert.throws(() => x.store.discard(x.run.id), /Stop/);
+    x.store.finish(x.run.id, 'stopped', 'Discard requested');
+    x.store.discard(x.run.id);
+    assert.equal(x.store.hasRun(x.run.id), false);
+    assert.deepEqual(x.store.records(x.run.id), []);
+    assert.equal(x.store.usage().spent, 80);
+    assert.equal(x.store.usage().reserved, 120);
+    assert(!JSON.stringify(x.store.usage()).includes(x.run.id));
+    x.store.settle('unknown-cost', 90, 'done');
+    assert.equal(x.store.usage().spent, 170);
+    assert.equal(x.store.usage().reserved, 0);
+    x.store.discard(x.run.id);
+  } finally {
+    x.close();
+  }
+});
+
+test('A start request keeps its identity across reopen and cannot resurrect discarded evidence', () => {
+  const x = sample();
+  try {
+    const key = '10000000-0000-4000-8000-000000000000';
+    const run = x.store.create(
+      'Controlled host request',
+      'https://controlled.example/',
+      'offline',
+      key,
+    );
+    assert.equal(x.store.hostStart(key), run.id);
+    const reopened = new Store(x.store.dir);
+    try {
+      assert.equal(reopened.hostStart(key), run.id);
+    } finally {
+      reopened.close();
+    }
+    assert.throws(() => x.store.create('Duplicate', 'https://controlled.example/', 'offline', key));
+    assert.equal(x.store.runs().length, 2);
+    x.store.finish(run.id, 'stopped');
+    x.store.discard(run.id);
+    assert.equal(x.store.hostStart(key), run.id);
+    assert.equal(x.store.hasRun(run.id), false);
+    const cancelled = '20000000-0000-4000-8000-000000000000';
+    assert.equal(x.store.discardHostStart(cancelled), null);
+    const afterDiscard = new Store(x.store.dir);
+    try {
+      assert.equal(afterDiscard.hostStartDiscarded(cancelled), true);
+      assert.throws(
+        () =>
+          afterDiscard.create('Late start', 'https://controlled.example/', 'offline', cancelled),
+        /discarded/,
+      );
+      assert.equal(afterDiscard.runs().length, 1);
+    } finally {
+      afterDiscard.close();
+    }
+  } finally {
+    x.close();
+  }
+});
