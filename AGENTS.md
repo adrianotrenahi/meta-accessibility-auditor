@@ -1,6 +1,9 @@
 # Working on Access Walk
 
-This is a new standalone hackathon project. It must not import Cavioo code, private prompts, production data or services.
+This is a fresh hackathon audit engine that must plug into Cavioo's existing funnel, live browser view, finding bubbles and screen-by-screen report. The public engine must remain runnable without Cavioo. Existing Cavioo components are reused inside the private Cavioo app; do not copy that private source, prompts, production data or credentials into this public repository.
+
+- Required product direction: preserve Cavioo's existing layout, components, design tokens, labels and interaction patterns. Use the actual components in the Cavioo host, rather than drawing replacements. The current standalone green interface is an engineering test harness, not the approved product design. Follow docs/CAVIOO-COMPATIBILITY.md before further interface work.
+- Current work is paused for this compatibility plan update. Do not treat documentation as proof that the Cavioo connection is implemented, or resume a redesign while the pause is in effect.
 
 - Explain changes in plain English, with a concrete example.
 - Current owner instruction: no model-credit spending. A key is not permission. Keep live launch disabled until the owner separately approves a bounded batch.

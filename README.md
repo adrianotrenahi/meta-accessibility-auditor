@@ -2,6 +2,8 @@
 
 A fresh Meta hackathon project that investigates barriers to completing website tasks with keyboards and screen readers. Access Walk is a working name.
 
+The product target is a new walk that plugs into Cavioo's existing audit flow and keeps its current visuals: the browser during the run, finding bubbles, then the existing report with each screen's screenshots. Reuse the actual Cavioo components inside the private Cavioo app. The green standalone interface below is an engineering test harness; Cavioo integration is planned and is not implemented yet. See [Cavioo compatibility](docs/CAVIOO-COMPATIBILITY.md). The public engine remains independently runnable and contains no pre-existing Cavioo source.
+
 The application saves one original walk, navigator notes, page images, measurements and screen-reader records. Analysis and review read that same evidence independently. Only reviewed findings reach the viewer.
 
 ## What works now
