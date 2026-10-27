@@ -1,5 +1,6 @@
 import { digest, type Store } from './store.js';
 import { hostSnapshotSchema } from './host-contract.js';
+import { exportKeyboardEvidence } from './keyboard-evidence.js';
 
 /** A whitelist projection: model prompts, raw candidates and private settings never leave here. */
 export function exportHostSnapshot(store: Store, runId: string) {
@@ -120,6 +121,7 @@ export function exportHostSnapshot(store: Store, runId: string) {
     limits,
     cost: { usageEstimateUsd: usage.spent / 1e6, heldUnknownUsd: usage.reserved / 1e6 },
   });
-  snapshot.sequence = store.hostRevision(runId, digest(JSON.stringify(snapshot)));
-  return { snapshot, assets };
+  const keyboard = exportKeyboardEvidence(runId, records);
+  snapshot.sequence = store.hostRevision(runId, digest(JSON.stringify({ snapshot, keyboard })));
+  return { snapshot, assets, keyboard };
 }

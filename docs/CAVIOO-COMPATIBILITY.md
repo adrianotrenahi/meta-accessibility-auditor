@@ -2,7 +2,7 @@
 
 Required direction, 27 October 2026. Build a fresh audit engine that works behind Cavioo's existing experience. Keep the current audit setup, visible browser, finding bubbles and final report with screenshots for every captured screen. Use the actual Cavioo components in the private app, including its typography, colours, spacing, icons, focus behaviour and responsive layout. A similar-looking replacement is not component reuse.
 
-The current standalone interface is an engineering test harness, not an approved new product design. Implementation work is paused while this direction is recorded. The connection described below is planned, not working proof.
+The current standalone interface is an engineering test harness, not an approved new product design. Implementation continues through the controlled offline proofs recorded below. Production dispatch and activation remain separate work.
 
 ## Impact on the system
 
@@ -103,3 +103,14 @@ original capture, unchanged browser state and the picture actually drawn. Broken
 labelled saved evidence, and hidden tabs request nothing. This establishes the
 local controlled stream; production dispatch/access, broader controls and complete
 report coverage still need separate implementation and proof.
+
+## Recorded keyboard attempts in the existing report
+
+The host reply now optionally includes original Enter/Space input attempts from
+the shared records, using `access-walk/keyboard-v1`. The private host checks the
+run and exact source image, then uses the existing report keyboard map with an
+unconfirmed result. It creates no keyboard failure finding or successful-route
+verdict from the fact that a key was pressed. Full Tab-order, visible-focus and
+native-reader checks remain unassessed; missing original images withhold the map.
+Only known native-control attempts are currently exported. This remains a local
+controlled proof with no customer activation or model spending.
