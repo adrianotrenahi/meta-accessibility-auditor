@@ -1,0 +1,39 @@
+{
+  "name": "meta-accessibility-auditor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "predev": "npm run build",
+    "dev": "node --import tsx server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit && node --import tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "preflight": "node --import tsx scripts/preflight.ts",
+    "demo": "node --import tsx scripts/run.ts --mode offline",
+    "run:live": "node --import tsx scripts/run.ts --mode live",
+    "proof:browser": "node --import tsx scripts/browser-proof.ts",
+    "proof:voiceover": "node --import tsx scripts/voiceover-proof.ts",
+    "format:check": "prettier --check src server scripts tests client vite.config.ts tsconfig.json package.json .prettierrc.json"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@guidepup/guidepup": "0.38.0",
+    "playwright": "1.64.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}
