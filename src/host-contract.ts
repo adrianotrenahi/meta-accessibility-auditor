@@ -105,7 +105,9 @@ export const hostSnapshotSchema = z
       if (finding.captureIds.some((captureId) => !ids.has(captureId)))
         ctx.addIssue({ code: 'custom', message: 'Finding refers to missing original capture' });
       if (
-        finding.captureIds.some((captureId) => capturesById.get(captureId)?.imageAvailable !== true)
+        finding.captureIds.some(
+          (captureId) => capturesById.get(captureId)?.imageAvailable === false,
+        )
       )
         ctx.addIssue({
           code: 'custom',

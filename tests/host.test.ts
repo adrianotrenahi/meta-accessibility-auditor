@@ -235,6 +235,15 @@ test('Every original behind a grouped host finding must be available, including 
       imageAvailable: false,
     });
     assert.equal(hostSnapshotSchema.safeParse(unrelated).success, true);
+    const absent = structuredClone(grouped);
+    absent.findings[0].captureIds.push('absent-original');
+    const refused = hostSnapshotSchema.safeParse(absent);
+    assert.equal(refused.success, false);
+    if (!refused.success)
+      assert.deepEqual(
+        refused.error.issues.map((issue) => issue.message),
+        ['Finding refers to missing original capture'],
+      );
     const withdrawn = structuredClone(grouped);
     withdrawn.captures[0].imageAvailable = false;
     withdrawn.findings = [];
