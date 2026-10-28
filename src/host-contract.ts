@@ -97,12 +97,20 @@ export const hostSnapshotSchema = z
         ctx.addIssue({ code: 'custom', message: 'Capture image hash and file disagree' });
     }
     const findings = new Set<string>();
+    const capturesById = new Map(snapshot.captures.map((capture) => [capture.id, capture]));
     for (const finding of snapshot.findings) {
       if (findings.has(finding.id))
         ctx.addIssue({ code: 'custom', message: 'Duplicate finding identity' });
       findings.add(finding.id);
       if (finding.captureIds.some((captureId) => !ids.has(captureId)))
         ctx.addIssue({ code: 'custom', message: 'Finding refers to missing original capture' });
+      if (
+        finding.captureIds.some((captureId) => capturesById.get(captureId)?.imageAvailable !== true)
+      )
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Finding requires every original image to be available',
+        });
       if (finding.anchor) {
         const capture = snapshot.captures.find((c) => c.id === finding.anchor!.captureId);
         const b = finding.anchor.box;
