@@ -32,7 +32,11 @@ export async function startServer(
     throw Error('Public website runs require the separately configured local live host.');
   if (options.controlledLiveProof && frontend)
     throw Error('Controlled model testing uses the separate local host.');
-  const hostMode = controlledHostMode(options.controlledLiveProof);
+  const hostMode = controlledHostMode(
+    options.controlledLiveProof,
+    undefined,
+    options.publicWebsites === true,
+  );
   const store = new Store(dir);
   let release: () => void;
   try {
