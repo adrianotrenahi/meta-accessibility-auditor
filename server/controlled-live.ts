@@ -8,16 +8,23 @@ export function controlledHostMode(
     readApproval: approval,
     readKey: key,
   },
+  publicWebsites = false,
 ): 'offline' | 'live' {
   if (!enabled) return 'offline';
   const allowed = settings.readApproval();
+  // The separate public-site batch includes earlier local costs and held charges.
+  const totalLimit = publicWebsites === true ? 10 : 3;
   if (
+    !allowed ||
+    typeof allowed !== 'object' ||
+    Array.isArray(allowed) ||
     allowed.approvedBy !== 'Adriano' ||
+    typeof allowed.expiresAt !== 'string' ||
     !Number.isFinite(Date.parse(allowed.expiresAt)) ||
     Date.parse(allowed.expiresAt) <= Date.now() ||
     !Number.isFinite(allowed.maxUsd) ||
     allowed.maxUsd <= 0 ||
-    allowed.maxUsd > 3 ||
+    allowed.maxUsd > totalLimit ||
     !Number.isFinite(allowed.maxRunUsd) ||
     allowed.maxRunUsd <= 0 ||
     allowed.maxRunUsd > allowed.maxUsd ||
@@ -25,7 +32,9 @@ export function controlledHostMode(
     !settings.readKey()
   )
     throw Error(
-      'Controlled model testing needs a key and a current approval capped at $3 total and per run.',
+      publicWebsites === true
+        ? 'Public website model testing needs a key and a current approval capped at $10 total and $3 per run.'
+        : 'Controlled model testing needs a key and a current approval capped at $3 total and per run.',
     );
   return 'live';
 }
