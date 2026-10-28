@@ -204,6 +204,61 @@ test('One unavailable screenshot withholds its claim without hiding unrelated in
   }
 });
 
+test('Every original behind a grouped host finding must be available, including an unpinned claim', () => {
+  const x = sample();
+  try {
+    x.review();
+    const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+    const grouped = structuredClone(first);
+    const earlier = grouped.captures[0];
+    const later = { ...earlier, id: 'later-original', sequence: earlier.sequence + 1 };
+    grouped.captures.push(later);
+    grouped.findings[0].captureIds.push(later.id);
+    grouped.findings[0].anchor!.captureId = later.id;
+    assert.equal(hostSnapshotSchema.safeParse(grouped).success, true);
+    const before = JSON.stringify(grouped);
+    for (const anchored of [true, false]) {
+      const missing = structuredClone(grouped);
+      missing.captures[0].imageAvailable = false;
+      if (!anchored) missing.findings[0].anchor = null;
+      assert.equal(
+        hostSnapshotSchema.safeParse(missing).success,
+        false,
+        'A readable later anchor cannot replace a missing earlier original.',
+      );
+    }
+    const unrelated = structuredClone(grouped);
+    unrelated.captures.push({
+      ...later,
+      id: 'unrelated-missing',
+      sequence: later.sequence + 1,
+      imageAvailable: false,
+    });
+    assert.equal(hostSnapshotSchema.safeParse(unrelated).success, true);
+    const absent = structuredClone(grouped);
+    absent.findings[0].captureIds.push('absent-original');
+    const refused = hostSnapshotSchema.safeParse(absent);
+    assert.equal(refused.success, false);
+    if (!refused.success)
+      assert.deepEqual(
+        refused.error.issues.map((issue) => issue.message),
+        ['Finding refers to missing original capture'],
+      );
+    const withdrawn = structuredClone(grouped);
+    withdrawn.captures[0].imageAvailable = false;
+    withdrawn.findings = [];
+    withdrawn.sequence++;
+    assert.equal(applyHostSnapshot(grouped, withdrawn).findings.length, 0);
+    assert.equal(
+      JSON.stringify(grouped),
+      before,
+      'Reading must preserve the original grouped packet.',
+    );
+  } finally {
+    x.close();
+  }
+});
+
 test('Confirmed discard removes evidence while keeping incurred and uncertain costs in the project limit', () => {
   const x = sample();
   try {
