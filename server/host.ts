@@ -1,9 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
-import type { Store } from '../src/store.js';
+import { digest, type Store } from '../src/store.js';
 import type { Runner } from '../src/runner.js';
 import { exportHostSnapshot } from '../src/host-export.js';
 import { assessmentForRun } from '../src/assessment.js';
+import { publicTarget, type PublicTarget } from '../src/public-target.js';
+import { probePublicWebsite } from '../src/public-network.js';
 
 export const HOST_GOAL = 'Add the canvas bag to the basket, stopping before any order.';
 /** Generic local host surface. It knows no private application components. */
@@ -17,11 +19,15 @@ export async function hostRequest(
     store: Store;
     runner: Runner;
     mode?: 'offline' | 'live';
+    publicWebsites?: boolean;
     json: (res: ServerResponse, status: number, value: unknown) => void;
   },
 ) {
   const { store, runner, json } = kit;
   const mode = kit.mode ?? 'offline';
+  const publicWebsites = kit.publicWebsites === true;
+  if (publicWebsites && mode !== 'live')
+    throw Error('Public website runs require actual model mode.');
   if (req.headers['x-session-token'] !== kit.token) {
     json(res, 403, { error: 'A local host connection is required.' });
     return;
@@ -30,14 +36,15 @@ export async function hostRequest(
     json(res, 200, {
       protocol: 'access-walk/host-v1',
       mode,
-      url: kit.origin + '/shop/?case=broken',
-      goal: HOST_GOAL,
+      url: publicWebsites ? null : kit.origin + '/shop/?case=broken',
+      goal: publicWebsites ? null : HOST_GOAL,
       devices: ['desktop_1440_900'],
       capabilities: {
         liveBrowser: true,
         deleteScreens: false,
         discard: true,
         manualCheckpoints: mode === 'offline',
+        publicWebsites,
       },
       modelCalls: store.usage().requests.filter((request) => request.role !== 'sam').length,
       modelCallsScope: 'local-history-including-discarded-runs',
@@ -48,16 +55,32 @@ export async function hostRequest(
     let raw = '';
     for await (const chunk of req) {
       raw += chunk;
-      if (raw.length > 4096) {
+      if (raw.length > 32768) {
         json(res, 413, { error: 'Request too large.' });
         return;
       }
     }
     const body = raw ? JSON.parse(raw) : {};
-    if (url.pathname === '/api/host/runs') {
-      z.object({ mode: z.literal(mode), requestId: z.uuid() })
+    if (url.pathname === '/api/host/target-check' && publicWebsites) {
+      const request = z
+        .object({ url: z.string().url().max(2048) })
         .strict()
         .parse(body);
+      json(res, 200, await probePublicWebsite(request.url));
+      return;
+    }
+    if (url.pathname === '/api/host/runs') {
+      let target: PublicTarget | undefined;
+      if (publicWebsites) {
+        const request = z
+          .object({ mode: z.literal('live'), requestId: z.uuid(), target: z.unknown() })
+          .strict()
+          .parse(body);
+        target = await publicTarget(request.target);
+      } else
+        z.object({ mode: z.literal(mode), requestId: z.uuid() })
+          .strict()
+          .parse(body);
       if (store.hostStartDiscarded(body.requestId)) {
         json(res, 409, {
           error:
@@ -67,6 +90,22 @@ export async function hostRequest(
       }
       const prior = store.hostStart(body.requestId);
       if (prior) {
+        if (target && store.hasRun(prior)) {
+          const run = store.run(prior),
+            plan = store.records(prior).find((record) => record.kind === 'plan');
+          if (
+            run.url !== target.url ||
+            run.goal !== target.goal ||
+            plan?.payload.requestTargetHash !== digest(JSON.stringify(target))
+          ) {
+            json(res, 409, {
+              error: !plan?.payload.requestTargetHash
+                ? 'The original plan is unavailable, so this start cannot be verified. Review the retained run before opening a new setup.'
+                : 'This start belongs to a different website, journey or plan. Open a new setup.',
+            });
+            return;
+          }
+        }
         json(
           res,
           store.hasRun(prior) ? 200 : 409,
@@ -81,7 +120,15 @@ export async function hostRequest(
         headless: true,
         engine: 'chromium',
         voiceOver: false,
-        goal: HOST_GOAL,
+        goal: target?.goal ?? HOST_GOAL,
+        ...(target
+          ? {
+              url: target.url,
+              publicWebsite: true,
+              steps: target.steps,
+              requestTargetHash: digest(JSON.stringify(target)),
+            }
+          : {}),
         manualCheckpoints: mode === 'offline',
         requestId: body.requestId,
       });

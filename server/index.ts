@@ -26,8 +26,10 @@ export async function startServer(
   port = 4317,
   dir = dataDir,
   frontend = true,
-  options: { controlledLiveProof?: boolean } = {},
+  options: { controlledLiveProof?: boolean; publicWebsites?: boolean } = {},
 ) {
+  if (options.publicWebsites && (!options.controlledLiveProof || frontend))
+    throw Error('Public website runs require the separately configured local live host.');
   if (options.controlledLiveProof && frontend)
     throw Error('Controlled model testing uses the separate local host.');
   const hostMode = controlledHostMode(options.controlledLiveProof);
@@ -72,6 +74,7 @@ export async function startServer(
           runner,
           json,
           mode: hostMode,
+          publicWebsites: options.publicWebsites === true,
         });
       if (url.pathname.startsWith('/shop')) {
         res.writeHead(200, {
