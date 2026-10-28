@@ -1317,3 +1317,47 @@ test('Unrelated target-read failures remain hard errors and send no guessed inpu
     await x.close();
   }
 });
+
+test('Combined final review keeps its own allowance incomplete while driver, global and Stop failures stay hard', async () => {
+  for (const scenario of ['reviewer', 'driver', 'analyst', 'global', 'stopped'] as const) {
+    const x = await setup('chromium', '<button>Target</button>');
+    const runner = new Runner(x.app.store, x.app.origin);
+    const failure =
+      scenario === 'global'
+        ? Error('Run spending limit reached.')
+        : new RoleAllowanceLimit(
+            scenario === 'driver' || scenario === 'analyst' ? scenario : 'reviewer',
+            'Role spending limit reached.',
+          );
+    const reason = mock.method(MetaModels.prototype, 'reason', async () => ({
+      kind: 'finish',
+      note: 'Stop at the safe original.',
+    }));
+    const analyse = mock.method(runner as any, 'analyse', async () => x.current);
+    const review = mock.method(runner as any, 'review', async () => {
+      if (scenario === 'stopped') x.signal.abort();
+      throw failure;
+    });
+    try {
+      const execute = () =>
+        (runner as any).live(x.run, x.walk, new VoiceOverProbe(x.walk), x.current, x.signal);
+      if (scenario === 'reviewer') await execute();
+      else await assert.rejects(execute(), (error) => error === failure, scenario);
+      const final = x.app.store
+        .records(x.run.id)
+        .filter((row) => row.kind === 'limit' && row.payload.finalReview === 'incomplete');
+      assert.equal(final.length, scenario === 'reviewer' ? 1 : 0, scenario);
+      assert.equal(
+        x.app.store.records(x.run.id).filter((row) => row.kind === 'action').length,
+        0,
+        scenario,
+      );
+      assert.equal(x.app.store.usage().requests.length, 0, scenario);
+    } finally {
+      reason.mock.restore();
+      analyse.mock.restore();
+      review.mock.restore();
+      await x.close();
+    }
+  }
+});
