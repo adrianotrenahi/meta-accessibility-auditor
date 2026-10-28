@@ -305,7 +305,7 @@ test('All roles share the documented model window with unchanged output allowanc
   );
 });
 
-test('Requests above the old role ceilings retain full selected originals in count and generation', async () => {
+test('Simulated counts above the old role ceilings retain full selected originals in count and generation', async () => {
   for (const role of ['driver', 'analyst', 'reviewer'] as const) {
     const result =
       role === 'driver'
@@ -315,6 +315,8 @@ test('Requests above the old role ceilings retain full selected originals in cou
           : reviewerResult;
     const schema =
       role === 'driver' ? actionSchema : role === 'analyst' ? analysisSchema : reviewSchema;
+    // Simulated counts test admission and unchanged bodies, not real tokenization.
+    // Character/byte length cannot stand in for the provider's multimodal count.
     const count = role === 'driver' ? 34655 : 60001;
     const output =
       role === 'driver'
@@ -440,5 +442,44 @@ test('The existing final-review money reserve stays available independently of c
     assert.equal(x.store.usage().spent, PHASE.reviewer);
   } finally {
     x.close();
+  }
+});
+
+test('A driver request at the exact context boundary is admitted only when its money allowance fits', async () => {
+  const count = CAPS.driver.input;
+  const result = { kind: 'finish', note: 'The safe boundary is reached.' };
+  const output = [
+    { type: 'function_call', name: 'return_result', arguments: JSON.stringify(result) },
+  ];
+  for (const maxRunUsd of [3, 1]) {
+    const x = setup(
+      { status: 'completed', usage: { input_tokens: count, output_tokens: 20 }, output },
+      count,
+      { maxUsd: 10, maxRunUsd },
+    );
+    try {
+      if (maxRunUsd === 3) {
+        assert.deepEqual(await x.model.reason(x.run.id, 'driver', [], [], actionSchema), result);
+        assert.equal(x.requests.length, 2);
+        assert.equal(x.requests[1].body.max_output_tokens + count, MODEL_CONTEXT_TOKENS);
+        const charge = x.store.usage(x.run.id);
+        assert.equal(charge.requests[0].reserved, 1323008);
+        assert.equal(charge.spent, Math.ceil(count * 1.25 + 20 * 4.25));
+        assert.equal(charge.reserved, 0);
+      } else {
+        await assert.rejects(
+          () => x.model.reason(x.run.id, 'driver', [], [], actionSchema),
+          /Run spending limit/,
+        );
+        assert.equal(
+          x.requests.length,
+          1,
+          'The same full-context request cannot bypass a smaller owner budget.',
+        );
+        assert.deepEqual(x.store.usage().requests, []);
+      }
+    } finally {
+      x.close();
+    }
   }
 });

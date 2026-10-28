@@ -136,7 +136,8 @@ export const PHASE = {
 // https://dev.meta.ai/docs/models — input and reserved output share this window.
 // This is documented configuration, not automatic provider-capability discovery.
 export const MODEL_CONTEXT_TOKENS = 1_048_576;
-// Preserve the existing final-review money reserve independently of model capacity.
+// Preserve the legacy final-review money reserve independently of model capacity.
+// It does not guarantee that a full-context final review fits the remaining budget.
 export const FINAL_REVIEW_RESERVE_MICROS = 109_816;
 export const CAPS = {
   driver: { input: MODEL_CONTEXT_TOKENS - 4096, output: 4096, effort: 'low' },
