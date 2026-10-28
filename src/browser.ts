@@ -8,6 +8,7 @@ import { permittedUrl } from './network.js';
 import { randomUUID } from 'node:crypto';
 import { LiveFrames } from './live-frame.js';
 import { documentWasReplaced, readPage } from './page-observation.js';
+import { readNavigationCapture } from './navigation-observation.js';
 import { safeError } from './config.js';
 import { collectBrowserFacts, summarizeAxe } from './evidence-checks.js';
 import { installControlIdentity } from './control-identity.js';
@@ -92,6 +93,7 @@ export class BrowserWalk {
   actions = 0;
   started = Date.now();
   readonly frames: LiveFrames;
+  private lastOriginal?: { id: string; url: string; documentEpoch: number };
   private readonly controlIdentityKey = '__access_walk_control_' + randomUUID();
   constructor(
     public store: Store,
@@ -238,7 +240,27 @@ export class BrowserWalk {
     };
   }
   async capture(): Promise<RecordEntry> {
-    return readPage(this.page, () => this.captureOnce());
+    const previous = this.lastOriginal;
+    return readNavigationCapture(
+      this.page,
+      () => readPage(this.page, () => this.captureOnce()),
+      previous,
+      () => this.assertActive(),
+      () => {
+        this.store.append(
+          this.runId,
+          'limit',
+          'browser',
+          {
+            method: 'navigation_observation_wait',
+            reason:
+              'The new document has not supplied its page body yet. Wait once for a fresh original; the earlier input remains saved and is not repeated.',
+            maximumWaitMs: 20000,
+          },
+          previous ? [previous.id] : [],
+        );
+      },
+    );
   }
   /**
    * Stable during capture, not a promise that the page stays unchanged afterwards.
@@ -426,7 +448,9 @@ export class BrowserWalk {
         animations: 'Disabled for the saved screenshot',
       },
     };
-    return this.store.append(this.runId, 'capture', 'browser', payload);
+    const original = this.store.append(this.runId, 'capture', 'browser', payload);
+    this.lastOriginal = { id: original.id, url: payload.url, documentEpoch: state.documentEpoch };
+    return original;
   }
   async verifyOriginalCapture(source: RecordEntry) {
     this.assertActive();

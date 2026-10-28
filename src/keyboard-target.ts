@@ -3,6 +3,7 @@ import { stripRecordedFocusHelp, recordedFocusHelpRows } from './focus-help.js';
 import { nativeTraversalKey, sameNativeArrowGroup } from './native-keyboard.js';
 import { recordIsIntact, type Store } from './store.js';
 import type { BrowserWalk } from './browser.js';
+import { documentWasReplaced } from './page-observation.js';
 import type { RecordEntry } from './types.js';
 import type { Action } from './models.js';
 
@@ -21,6 +22,7 @@ export const TARGET_ROLES = [
   'spinbutton',
 ] as const;
 export const MAX_TARGET_KEYS = 24;
+class TraversalObservationChanged extends Error {}
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
 
@@ -158,129 +160,164 @@ export async function walkToKeyboardTarget(
     JSON.stringify(original.sources) !== JSON.stringify(start.sources)
   )
     throw Error('Keyboard traversal needs its intact original screen.');
-  await walk.verifyOriginalCapture(start);
-  const epoch = await walk.page.evaluate(() => performance.timeOrigin);
-  let target: Locator;
-  if (decision.targetId) {
-    const matches = start.payload.elements.filter(
-      (element: any) => element.id === decision.targetId,
-    );
-    if (matches.length !== 1 || !/^e\d+$/.test(decision.targetId))
-      return stop(
-        'unavailable',
-        'The requested keyboard target is not in this original screen. No input was sent.',
-      );
-    const info = matches[0];
-    if (!info.name || !TARGET_ROLES.includes(info.role))
-      return stop(
-        'unavailable',
-        'This target has no unique supported keyboard name. No input was sent.',
-      );
-    // A unique actual semantic match prevents source-order changes from retargeting a key walk.
-    target = walk.page.getByRole(info.role, { name: info.name, exact: true });
-    const indexed = walk.page.locator(controls).nth(Number(decision.targetId.slice(1)));
-    if (
-      (await target.count()) !== 1 ||
-      (await indexed.count()) !== 1 ||
-      !(await target.evaluate((element, other) => element === other, await indexed.elementHandle()))
-    )
-      return stop(
-        'unavailable',
-        'The original keyboard target is missing or ambiguous. No input was sent.',
-      );
-  } else {
-    if (
-      !decision.targetRole ||
-      !TARGET_ROLES.includes(decision.targetRole) ||
-      !decision.targetName?.trim()
-    )
-      return stop(
-        'unavailable',
-        'A keyboard target needs an exact name and role from the current page. No input was sent.',
-      );
-    target = walk.page.getByRole(decision.targetRole, { name: decision.targetName, exact: true });
-  }
-  if ((await target.count()) !== 1 || !(await target.isVisible()) || !(await target.isEnabled()))
-    return stop(
-      'unavailable',
-      'The requested keyboard control is missing, ambiguous or unavailable. No input was sent.',
-    );
-  const handle = await target.elementHandle();
-  if (!handle)
-    return stop('unavailable', 'The requested keyboard target disappeared. No input was sent.');
-  const connected = async () =>
-    handle
-      .evaluate((element) => element.isConnected && element.ownerDocument === document)
-      .catch(() => false);
-  const focused = async () =>
-    handle.evaluate((element) => document.activeElement === element).catch(() => false);
-  const focusHandles: ElementHandle[] = [];
-  const requestedKey = decision.traversalKey ?? 'Tab';
-  const arrow = requestedKey.startsWith('Arrow');
-  const rovingTarget = await handle.evaluate((element) =>
-    ['menuitem', 'tab'].includes(element.getAttribute('role') ?? ''),
-  );
-  const canTraverseGrid = !arrow || (await sameNativeArrowGroup(handle));
-  if (!canTraverseGrid) {
-    await handle.dispose();
-    return stop(
-      'unavailable',
-      'Arrow traversal requires a focused item in the same native keyboard group. No input was sent.',
-    );
-  }
-  const targetName =
-    decision.targetName ??
-    start.payload.elements.find((element: any) => element.id === decision.targetId)?.name ??
-    '';
-  const comparisonAria = (capture: RecordEntry) =>
-    traversalPageShape(stripRecordedFocusHelp(capture.payload.aria, capture.payload.focusHelp));
-  const shapeOf = (capture: RecordEntry) =>
-    arrow || rovingTarget
-      ? nativeGridShape(comparisonAria(capture), targetName)
-      : comparisonAria(capture);
-  // One history for the whole intent, including helpers hidden between keys.
-  // Structural display-only qualification never establishes harmless meaning.
-  const descriptionHistory = new Map<string, string>();
-  const roleTooltipHistory = new Set<string>();
-  let newlyObservedDescription = false;
-  const recordDescriptions = (capture: RecordEntry, initial = false) => {
-    for (const block of tooltipProjection(capture.payload.aria).descriptions) {
-      if (!roleTooltipHistory.has(block)) {
-        roleTooltipHistory.add(block);
-        if (!initial) newlyObservedDescription = true;
-      }
+  const readTarget = async <T>(read: () => Promise<T>): Promise<T> => {
+    try {
+      return await read();
+    } catch (error) {
+      active();
+      if (!walk.page.isClosed() && documentWasReplaced(error))
+        throw new TraversalObservationChanged();
+      throw error;
     }
-    for (const row of recordedFocusHelpRows(capture.payload.focusHelp)) {
-      const focus = capture.payload.focus ?? {};
-      const signature = JSON.stringify({
-        row,
-        owner: {
-          tag: focus.tag,
-          id: focus.id,
-          role: focus.role,
-          name: focus.name,
-        },
-      });
-      const previous = descriptionHistory.get(row.descriptionId);
-      if (previous !== undefined && previous !== signature) return true;
-      if (previous === undefined) {
-        descriptionHistory.set(row.descriptionId, signature);
-        if (!initial) newlyObservedDescription = true;
-      }
-    }
-    return false;
   };
-  recordDescriptions(start, true);
-  const changedDescription = () =>
-    stop(
-      'changed',
-      'A previously recorded description changed during traversal. Its full original remains saved; a fresh decision is needed before further input.',
-    );
+  let cleanupHandle: ElementHandle | undefined;
+  const focusHandles: ElementHandle[] = [];
   try {
+    await readTarget(() => walk.verifyOriginalCapture(start));
+    const epoch = await readTarget(() => walk.page.evaluate(() => performance.timeOrigin));
+    let target: Locator;
+    if (decision.targetId) {
+      const matches = start.payload.elements.filter(
+        (element: any) => element.id === decision.targetId,
+      );
+      if (matches.length !== 1 || !/^e\d+$/.test(decision.targetId))
+        return stop(
+          'unavailable',
+          'The requested keyboard target is not in this original screen. No input was sent.',
+        );
+      const info = matches[0];
+      if (!info.name || !TARGET_ROLES.includes(info.role))
+        return stop(
+          'unavailable',
+          'This target has no unique supported keyboard name. No input was sent.',
+        );
+      // A unique actual semantic match prevents source-order changes from retargeting a key walk.
+      target = walk.page.getByRole(info.role, { name: info.name, exact: true });
+      const indexed = walk.page.locator(controls).nth(Number(decision.targetId.slice(1)));
+      if (
+        (await readTarget(() => target.count())) !== 1 ||
+        (await readTarget(() => indexed.count())) !== 1
+      )
+        return stop(
+          'unavailable',
+          'The original keyboard target is missing or ambiguous. No input was sent.',
+        );
+      const indexedHandle = await readTarget(() => indexed.elementHandle());
+      try {
+        if (
+          !indexedHandle ||
+          !(await readTarget(() =>
+            target.evaluate((element, other) => element === other, indexedHandle),
+          ))
+        )
+          return stop(
+            'unavailable',
+            'The original keyboard target is missing or ambiguous. No input was sent.',
+          );
+      } finally {
+        await indexedHandle?.dispose().catch(() => {});
+      }
+    } else {
+      if (
+        !decision.targetRole ||
+        !TARGET_ROLES.includes(decision.targetRole) ||
+        !decision.targetName?.trim()
+      )
+        return stop(
+          'unavailable',
+          'A keyboard target needs an exact name and role from the current page. No input was sent.',
+        );
+      target = walk.page.getByRole(decision.targetRole, { name: decision.targetName, exact: true });
+    }
+    if (
+      (await readTarget(() => target.count())) !== 1 ||
+      !(await readTarget(() => target.isVisible())) ||
+      !(await readTarget(() => target.isEnabled()))
+    )
+      return stop(
+        'unavailable',
+        'The requested keyboard control is missing, ambiguous or unavailable. No input was sent.',
+      );
+    const handle = await readTarget(() => target.elementHandle());
+    if (!handle)
+      return stop('unavailable', 'The requested keyboard target disappeared. No input was sent.');
+    cleanupHandle = handle;
+    const connected = async () =>
+      handle
+        .evaluate((element) => element.isConnected && element.ownerDocument === document)
+        .catch(() => false);
+    const focused = async () =>
+      handle.evaluate((element) => document.activeElement === element).catch(() => false);
+    const requestedKey = decision.traversalKey ?? 'Tab';
+    const arrow = requestedKey.startsWith('Arrow');
+    const rovingTarget = await readTarget(() =>
+      handle.evaluate((element) =>
+        ['menuitem', 'tab'].includes(element.getAttribute('role') ?? ''),
+      ),
+    );
+    const canTraverseGrid = !arrow || (await sameNativeArrowGroup(handle));
+    if (!canTraverseGrid) {
+      return stop(
+        'unavailable',
+        'Arrow traversal requires a focused item in the same native keyboard group. No input was sent.',
+      );
+    }
+    const targetName =
+      decision.targetName ??
+      start.payload.elements.find((element: any) => element.id === decision.targetId)?.name ??
+      '';
+    const comparisonAria = (capture: RecordEntry) =>
+      traversalPageShape(stripRecordedFocusHelp(capture.payload.aria, capture.payload.focusHelp));
+    const shapeOf = (capture: RecordEntry) =>
+      arrow || rovingTarget
+        ? nativeGridShape(comparisonAria(capture), targetName)
+        : comparisonAria(capture);
+    // One history for the whole intent, including helpers hidden between keys.
+    // Structural display-only qualification never establishes harmless meaning.
+    const descriptionHistory = new Map<string, string>();
+    const roleTooltipHistory = new Set<string>();
+    let newlyObservedDescription = false;
+    const recordDescriptions = (capture: RecordEntry, initial = false) => {
+      for (const block of tooltipProjection(capture.payload.aria).descriptions) {
+        if (!roleTooltipHistory.has(block)) {
+          roleTooltipHistory.add(block);
+          if (!initial) newlyObservedDescription = true;
+        }
+      }
+      for (const row of recordedFocusHelpRows(capture.payload.focusHelp)) {
+        const focus = capture.payload.focus ?? {};
+        const signature = JSON.stringify({
+          row,
+          owner: {
+            tag: focus.tag,
+            id: focus.id,
+            role: focus.role,
+            name: focus.name,
+          },
+        });
+        const previous = descriptionHistory.get(row.descriptionId);
+        if (previous !== undefined && previous !== signature) return true;
+        if (previous === undefined) {
+          descriptionHistory.set(row.descriptionId, signature);
+          if (!initial) newlyObservedDescription = true;
+        }
+      }
+      return false;
+    };
+    recordDescriptions(start, true);
+    const changedDescription = () =>
+      stop(
+        'changed',
+        'A previously recorded description changed during traversal. Its full original remains saved; a fresh decision is needed before further input.',
+      );
     const shape = shapeOf(start);
     for (let i = 0; i <= MAX_TARGET_KEYS; i++) {
       active();
-      if (!(await connected()) || !(await handle.isVisible()) || !(await handle.isEnabled()))
+      if (
+        !(await connected()) ||
+        !(await readTarget(() => handle.isVisible())) ||
+        !(await readTarget(() => handle.isEnabled()))
+      )
         return stop(
           'changed',
           'The original keyboard target changed during traversal. A fresh decision is needed; no target was activated.',
@@ -318,34 +355,39 @@ export async function walkToKeyboardTarget(
           'limit',
           'The keyboard target was not reached within this bounded traversal. This does not establish a website keyboard barrier.',
         );
-      const activeHandle = await walk.page.evaluateHandle(() => document.activeElement);
+      const activeHandle = await readTarget(() =>
+        walk.page.evaluateHandle(() => document.activeElement),
+      );
       const focus = activeHandle.asElement();
       if (focus) {
+        focusHandles.push(focus);
         // The document's placeholder is not a visited control. A first Tab after
         // a popup closes can leave body focused before the next real Tab enters
         // the page. All keys/content changes and the ordinary bound still apply.
-        const pagePlaceholder = await focus.evaluate(
-          (element) => element === document.body || element === document.documentElement,
+        const pagePlaceholder = await readTarget(() =>
+          focus.evaluate(
+            (element) => element === document.body || element === document.documentElement,
+          ),
         );
         const seen = pagePlaceholder
           ? []
           : await Promise.all(
-              focusHandles.map((old) =>
-                old.evaluate((element, other) => element === other, focus).catch(() => false),
-              ),
+              focusHandles
+                .slice(0, -1)
+                .map((old) =>
+                  old.evaluate((element, other) => element === other, focus).catch(() => false),
+                ),
             );
         if (seen.some(Boolean)) {
-          await focus.dispose();
           return stop(
             'cycle',
             'Keyboard focus returned to a previously visited control. The robot stopped this traversal; no website keyboard barrier is inferred.',
           );
         }
-        focusHandles.push(focus);
-      }
+      } else await activeHandle.dispose();
       active();
       const beforeStep = current;
-      const key = await nativeTraversalKey(handle, requestedKey);
+      const key = await readTarget(() => nativeTraversalKey(handle, requestedKey));
       const arrowGuard = key.startsWith('Arrow')
         ? async () => (await connected()) && (await sameNativeArrowGroup(handle))
         : undefined;
@@ -375,7 +417,7 @@ export async function walkToKeyboardTarget(
           .catch(() => false)) &&
         next.current.payload.url === beforeStep.payload.url &&
         comparisonAria(next.current) === comparisonAria(beforeStep) &&
-        (await walk.page.evaluate(() => performance.timeOrigin)) === epoch
+        (await readTarget(() => walk.page.evaluate(() => performance.timeOrigin))) === epoch
       ) {
         const withoutAppearance = (value: any) => {
           const { appearance: _appearance, ...rest } = value ?? {};
@@ -412,7 +454,7 @@ export async function walkToKeyboardTarget(
       if (
         !next.performed ||
         current.payload.url !== start.payload.url ||
-        (await walk.page.evaluate(() => performance.timeOrigin)) !== epoch ||
+        (await readTarget(() => walk.page.evaluate(() => performance.timeOrigin))) !== epoch ||
         shapeOf(current) !== shape
       )
         return stop(
@@ -421,8 +463,16 @@ export async function walkToKeyboardTarget(
         );
     }
     throw Error('Keyboard traversal did not return its bounded result.');
+  } catch (error) {
+    if (!(error instanceof TraversalObservationChanged)) throw error;
+    active();
+    current = await walk.captureSettled();
+    return stop(
+      'changed',
+      'The document changed while reading the original keyboard target. Any earlier keys remain recorded; a fresh decision is needed before further input.',
+    );
   } finally {
-    await handle.dispose().catch(() => {});
+    await cleanupHandle?.dispose().catch(() => {});
     for (const focus of focusHandles) await focus.dispose().catch(() => {});
   }
 }

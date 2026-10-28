@@ -411,6 +411,9 @@ for (const engine of ['chromium', 'webkit'] as const) {
         'activation_sent',
         JSON.stringify({
           staleRefusals: x.staleRefusals,
+          originalAria: current.payload.aria,
+          currentAria: result.current.payload.aria,
+          currentStable: result.current.payload.stable,
           actions: result.actions.map((row) => row.payload.action.key),
           limits: x.app.store
             .records(x.run.id)
@@ -1112,6 +1115,205 @@ test('Description history includes the normal control name when two owners have 
     assert(captures.some((row) => row.payload.focus.name === 'Owner B'));
     assert(captures.every((row) => row.payload.focusHelp[0].focus.domId === ''));
   } finally {
+    await x.close();
+  }
+});
+
+test('Fresh navigation rejects target-only options on other actions while legacy records remain readable', async () => {
+  const { actionSchema } = await import('../src/models.js');
+  for (const kind of ['press', 'type', 'wait', 'finish'] as const)
+    for (const extra of [
+      { targetId: 'e1' },
+      { targetRole: 'button' },
+      { targetName: 'Target' },
+      { traversalKey: 'Tab' },
+      { activation: 'Space' },
+    ]) {
+      const action = {
+        kind,
+        key: kind === 'press' ? 'Enter' : undefined,
+        note: 'Ambiguous fresh intent',
+        ...extra,
+      };
+      assert(actionSchema.safeParse(action).success, 'Legacy actions keep their reader contract.');
+      assert(!navigationActionSchema.safeParse(action).success, JSON.stringify(action));
+    }
+  assert(
+    navigationActionSchema.safeParse({ kind: 'wait', waitMs: 1500, note: 'Wait for results' })
+      .success,
+  );
+  for (const kind of ['press', 'type', 'finish'] as const)
+    assert(
+      !navigationActionSchema.safeParse({ kind, waitMs: 1500, note: 'Misplaced wait' }).success,
+    );
+});
+
+test('A recognized native-key document loss refreshes originals without sending a guessed key', async () => {
+  const x = await setup('chromium', '<button>A</button><button>Target</button>');
+  const getByRole = x.walk.page.getByRole.bind(x.walk.page);
+  let injected = false;
+  const locatorMock = mock.method(x.walk.page, 'getByRole', (role: any, options: any) => {
+    const locator = getByRole(role, options);
+    const elementHandle = locator.elementHandle.bind(locator);
+    mock.method(locator, 'elementHandle', async (...args: any[]) => {
+      const handle = await (elementHandle as any)(...args);
+      if (handle) {
+        const evaluate = handle.evaluate.bind(handle);
+        mock.method(handle, 'evaluate', async (fn: any, ...rest: any[]) => {
+          if (!injected && String(fn).includes('const groups')) {
+            injected = true;
+            throw Error('Execution context was destroyed, most likely because of a navigation');
+          }
+          return (evaluate as any)(fn, ...rest);
+        });
+      }
+      return handle;
+    });
+    return locator;
+  });
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
+    );
+    assert(injected, 'The native-key selection read must actually be exercised.');
+    assert.equal(result.outcome, 'changed');
+    assert.equal(result.actions.length, 0);
+    assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length, 0);
+    assert.notEqual(result.current.id, x.current.id);
+    assert(x.app.store.record(x.run.id, result.current.id));
+  } finally {
+    locatorMock.mock.restore();
+    await x.close();
+  }
+});
+
+test('A post-step epoch loss preserves the one sent key and takes a fresh original', async () => {
+  const x = await setup('chromium', '<button>A</button><button>Target</button>');
+  const evaluate = x.walk.page.evaluate.bind(x.walk.page);
+  let arm = false,
+    injected = false;
+  const evaluateMock = mock.method(x.walk.page, 'evaluate', async (fn: any, ...rest: any[]) => {
+    if (arm && !injected && String(fn).includes('performance.timeOrigin')) {
+      injected = true;
+      throw Error('Execution context was destroyed, most likely because of a navigation');
+    }
+    return (evaluate as any)(fn, ...rest);
+  });
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      async (...args) => {
+        const next = await x.step(...args);
+        arm = true;
+        return next;
+      },
+    );
+    assert(injected, 'The post-step epoch read must actually be exercised.');
+    assert.equal(result.outcome, 'changed');
+    assert.equal(result.actions.length, 1);
+    const sent = x.app.store.records(x.run.id).filter((r) => r.kind === 'action');
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].payload.outcome, 'performed');
+    assert.equal(sent[0].payload.requestedAction.key, 'Tab');
+    assert(result.current.seq > sent[0].seq);
+  } finally {
+    evaluateMock.mock.restore();
+    await x.close();
+  }
+});
+
+test('Temporary indexed handles and non-element active handles are explicitly released', async () => {
+  const x = await setup('chromium', '<button>A</button><button>Target</button>');
+  const locator = x.walk.page.locator.bind(x.walk.page);
+  const evaluateHandle = x.walk.page.evaluateHandle.bind(x.walk.page);
+  let indexedDisposed = 0,
+    nullDisposed = 0,
+    suppliedNull = false;
+  const wrapHandle = (handle: any, released: () => void) => {
+    const dispose = handle.dispose.bind(handle);
+    mock.method(handle, 'dispose', async () => {
+      released();
+      return dispose();
+    });
+    return handle;
+  };
+  const locatorMock = mock.method(x.walk.page, 'locator', (selector: any, ...rest: any[]) => {
+    const found = (locator as any)(selector, ...rest);
+    if (
+      selector ===
+      'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]'
+    ) {
+      const nth = found.nth.bind(found);
+      mock.method(found, 'nth', (index: number) => {
+        const item = nth(index);
+        const elementHandle = item.elementHandle.bind(item);
+        mock.method(item, 'elementHandle', async (...args: any[]) => {
+          const handle = await (elementHandle as any)(...args);
+          return handle ? wrapHandle(handle, () => indexedDisposed++) : handle;
+        });
+        return item;
+      });
+    }
+    return found;
+  });
+  const activeMock = mock.method(x.walk.page, 'evaluateHandle', async (fn: any, ...rest: any[]) => {
+    if (!suppliedNull && String(fn).includes('document.activeElement')) {
+      suppliedNull = true;
+      return wrapHandle(await evaluateHandle(() => null), () => nullDisposed++);
+    }
+    return (evaluateHandle as any)(fn, ...rest);
+  });
+  try {
+    const target = x.current.payload.elements.find((e: any) => e.name === 'Target');
+    assert(target);
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { kind: 'focus_target', targetId: target.id, note: 'Reach original indexed target' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'reached');
+    assert.equal(result.actions.length, 2);
+    assert.equal(indexedDisposed, 1);
+    assert(suppliedNull);
+    assert.equal(nullDisposed, 1);
+  } finally {
+    locatorMock.mock.restore();
+    activeMock.mock.restore();
+    await x.close();
+  }
+});
+
+test('Unrelated target-read failures remain hard errors and send no guessed input', async () => {
+  const x = await setup('chromium', '<button>A</button><button>Target</button>');
+  const evaluate = x.walk.page.evaluate.bind(x.walk.page);
+  const failure = Error('A source is unavailable');
+  const evaluateMock = mock.method(x.walk.page, 'evaluate', async (fn: any, ...rest: any[]) => {
+    if (String(fn).includes('performance.timeOrigin')) throw failure;
+    return (evaluate as any)(fn, ...rest);
+  });
+  try {
+    await assert.rejects(
+      walkToKeyboardTarget(x.walk, x.app.store, x.run.id, x.current, seek, x.signal.signal, x.step),
+      (error) => error === failure,
+    );
+    assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length, 0);
+  } finally {
+    evaluateMock.mock.restore();
     await x.close();
   }
 });

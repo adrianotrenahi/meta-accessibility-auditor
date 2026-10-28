@@ -72,7 +72,27 @@ export const navigationActionSchema = actionSchema
       .optional(),
   })
   .superRefine((action, context) => {
-    if (action.kind !== 'focus_target') return;
+    if (action.kind !== 'wait' && action.waitMs !== undefined)
+      context.addIssue({
+        code: 'custom',
+        message: 'A loading wait belongs only to a wait action.',
+      });
+    if (action.kind !== 'focus_target') {
+      if (
+        [
+          action.targetId,
+          action.targetRole,
+          action.targetName,
+          action.traversalKey,
+          action.activation,
+        ].some((value) => value !== undefined)
+      )
+        context.addIssue({
+          code: 'custom',
+          message: 'Keyboard targets and their activation belong only to a focus_target action.',
+        });
+      return;
+    }
     const byId = !!action.targetId;
     const byName = !!action.targetRole && !!action.targetName;
     if (
