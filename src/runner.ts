@@ -152,6 +152,16 @@ export class Runner {
     await active.walk.close();
     await completion;
   }
+  private stopForDeniedPage(run: Run, walk: BrowserWalk, current: RecordEntry, initial = false) {
+    const entryLimit = walk.publicWebsite ? publicEntryLimit(current.payload.title) : null;
+    if (!entryLimit || this.store.run(run.id).state !== 'running') return false;
+    const reason = initial
+      ? entryLimit
+      : 'The website presented an access-denied page during the journey. This page was not assessed; earlier evidence remains limited.';
+    this.store.append(run.id, 'limit', 'runner', { reason }, [current.id]);
+    this.store.finish(run.id, 'partial', reason);
+    return true;
+  }
   private async execute(
     run: Run,
     walk: BrowserWalk,
@@ -188,12 +198,7 @@ export class Runner {
             : 'Chromium Tab/Shift+Tab; requested and actual keys are recorded.',
       });
       let current = await walk.start(run.url);
-      const entryLimit = walk.publicWebsite ? publicEntryLimit(current.payload.title) : null;
-      if (entryLimit) {
-        this.store.append(run.id, 'limit', 'runner', { reason: entryLimit }, [current.id]);
-        this.store.finish(run.id, 'partial', entryLimit);
-        return;
-      }
+      if (this.stopForDeniedPage(run, walk, current, true)) return;
       declareCriterionScopes(this.store, run.id);
       const initialMeasurement = await this.automaticMeasurement(
         run,
@@ -202,6 +207,7 @@ export class Runner {
         controller.signal,
       );
       current = initialMeasurement.current;
+      if (this.stopForDeniedPage(run, walk, current, true)) return;
       this.store.append(
         run.id,
         'navigator_note',
@@ -445,6 +451,7 @@ export class Runner {
     try {
       for (let i = 0; i < 20; i++) {
         walk.assertActive();
+        if (this.stopForDeniedPage(run, walk, current)) return;
         const snap = requestEvidence(this.store, run.id, 'driver', current);
         const action = await models.reason(
           run.id,
@@ -499,6 +506,7 @@ export class Runner {
           }
           const performed = await walk.act(action, current);
           current = await walk.capture();
+          if (this.stopForDeniedPage(run, walk, current)) return;
           try {
             const afterContext = await readJourneyContext(walk, current);
             if (beforeContext?.payload.stable === true && afterContext.payload.stable === true) {
@@ -544,11 +552,14 @@ export class Runner {
             break;
           }
         }
+        if (this.stopForDeniedPage(run, walk, current)) return;
         if (i % 3 === 2) {
           current = (await this.automaticMeasurement(run, walk, current, signal)).current;
+          if (this.stopForDeniedPage(run, walk, current)) return;
           current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
         }
       }
+      if (this.stopForDeniedPage(run, walk, current)) return;
       if (decisionAllowanceSpent)
         this.store.append(
           run.id,
@@ -563,7 +574,11 @@ export class Runner {
       current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
     } finally {
       returnEvidence.clear();
-      if (!signal.aborted && this.store.run(run.id).state === 'running') {
+      if (
+        !signal.aborted &&
+        this.store.run(run.id).state === 'running' &&
+        !this.stopForDeniedPage(run, walk, current)
+      ) {
         try {
           await this.review(models, run, current, walk, signal, true);
         } catch (e) {
@@ -618,6 +633,7 @@ export class Runner {
     signal: AbortSignal,
     probe?: VoiceOverProbe,
   ) {
+    if (this.stopForDeniedPage(run, walk, current)) return current;
     try {
       return (await this.analyse(models, run, current, walk, signal, probe)) ?? current;
     } catch (error) {
@@ -767,6 +783,7 @@ export class Runner {
         request,
         signal,
       );
+    if (this.stopForDeniedPage(run, walk, next)) return next;
     declareCriterionScopes(this.store, run.id);
     if (this.store.usage(run.id).requests.filter((r) => r.role === 'reviewer').length < 3)
       try {

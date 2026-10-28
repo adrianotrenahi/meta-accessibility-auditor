@@ -1,5 +1,13 @@
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { isIP, BlockList } from 'node:net';
+const specialV6 = new BlockList();
+for (const [address, prefix] of [
+  ['2001::', 23],
+  ['2001:db8::', 32],
+  ['2002::', 16],
+  ['3fff::', 20],
+] as const)
+  specialV6.addSubnet(address, prefix, 'ipv6');
 export function isPublicAddress(ip: string) {
   if (isIP(ip) === 4) {
     const [a, b, c] = ip.split('.').map(Number);
@@ -19,7 +27,7 @@ export function isPublicAddress(ip: string) {
   }
   if (isIP(ip) === 6) {
     const s = ip.toLowerCase();
-    return /^[23]/.test(s) && !s.startsWith('2001:db8:');
+    return /^[23]/.test(s) && !specialV6.check(s, 'ipv6');
   }
   return false;
 }

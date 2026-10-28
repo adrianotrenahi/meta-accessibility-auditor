@@ -38,26 +38,49 @@ export async function publicDestination(raw: string, resolve: PublicLookup = dns
       );
     return {
       url,
-      address: addresses[0],
+      address: addresses.find((item) => item.family === 4) ?? addresses[0],
       port: Number(url.port || (url.protocol === 'https:' ? 443 : 80)),
     };
   } finally {
     if (timer) clearTimeout(timer);
   }
 }
+/** CONNECT contains an authority, never a URL path. Public non-default ports are valid. */
+export async function connectDestination(authority: string, resolve: PublicLookup = dns) {
+  const match = authority.match(/^(\[[a-f0-9:.]+\]|[a-z0-9.-]+):([0-9]{1,5})$/i);
+  if (!match || Number(match[2]) < 1 || Number(match[2]) > 65535)
+    throw Error('Invalid tunnel destination.');
+  return publicDestination('https://' + authority, resolve);
+}
 export function pinnedLookup(address: Address) {
   return (_host: string, options: any, callback: any) => {
     if (typeof options === 'function') callback = options;
+    if (options?.family && options.family !== address.family) {
+      callback(Error('The checked address does not match the requested address family.'));
+      return;
+    }
     callback(null, options?.all ? [address] : address.address, address.family);
   };
 }
-const forwardHeaders = (headers: IncomingMessage['headers']) =>
-  Object.fromEntries(
-    Object.entries(headers).filter(
-      ([name]) =>
-        !['proxy-authorization', 'proxy-connection', 'connection', 'upgrade'].includes(name),
-    ),
+/** Connection-specific headers belong to this hop, not to its forwarded message. */
+export function forwardHeaders(headers: IncomingMessage['headers']) {
+  const hop = new Set([
+    'proxy-authorization',
+    'proxy-authenticate',
+    'proxy-connection',
+    'connection',
+    'upgrade',
+    'keep-alive',
+    'te',
+    'trailer',
+    'transfer-encoding',
+  ]);
+  for (const name of (headers.connection ?? '').split(',')) hop.add(name.trim().toLowerCase());
+  if (headers['transfer-encoding']) hop.add('content-length');
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => !hop.has(name.toLowerCase())),
   );
+}
 
 /** Public preflight follows real HTTP redirects without reading page contents or starting models. */
 export async function probePublicWebsite(raw: string) {
@@ -123,7 +146,7 @@ export async function publicBrowserProxy(resolve: PublicLookup = dns) {
             upstream.destroy();
             return;
           }
-          response.writeHead(upstream.statusCode ?? 502, upstream.headers);
+          response.writeHead(upstream.statusCode ?? 502, forwardHeaders(upstream.headers));
           upstream.pipe(response);
         },
       );
@@ -150,11 +173,13 @@ export async function publicBrowserProxy(resolve: PublicLookup = dns) {
   server.on('connect', (incoming, downstream, head) => {
     downstream.on('error', () => downstream.destroy());
     void (async () => {
-      const target = await publicDestination('https://' + incoming.url, resolve);
-      if (target.url.pathname !== '/' || target.url.search || target.url.hash)
-        throw Error('Invalid tunnel destination.');
+      const target = await connectDestination(incoming.url ?? '', resolve);
       if (closed || downstream.destroyed) return;
-      const upstream = connect({ host: target.address.address, port: target.port });
+      const upstream = connect({
+        host: target.address.address,
+        port: target.port,
+        family: target.address.family,
+      });
       sockets.add(upstream);
       upstream.on('close', () => sockets.delete(upstream));
       upstream.setTimeout(30000, () => upstream.destroy());

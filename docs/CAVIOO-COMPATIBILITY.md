@@ -163,3 +163,11 @@ pictures. Completed model decisions do not prove the requested appointment exist
 
 No private application source, production database, existing customer browser
 settings, model key or local ownership session belongs in this public repository.
+
+The first review correction also stops an explicitly denied later page before
+error-page analysis or final review. Public browser requests use the checked
+forwarding connection without a second resource-name lookup. Its address-only
+connection requests reject paths/credentials while retaining valid custom web
+ports; already-checked IPv4 is preferred when both families exist. Transition
+and documentation IPv6 ranges are refused. A missing original plan refuses a
+retry as unverifiable without creating another run.

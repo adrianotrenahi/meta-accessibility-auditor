@@ -56,7 +56,14 @@ export function publicSearchInput(
     return false;
   const label = focus.name + ' ' + (focus.fieldName ?? '');
   if (
-    /\b(patient|paciente|nombre|apellido|name|dni|nie|passport|email|tel[eé]fono|address|direcci[oó]n|card|tarjeta|password|contrase[nñ]a)\b/i.test(
+    /\b(patient|paciente|dni|nie|passport|email|tel[eé]fono|address|direcci[oó]n|card|tarjeta|password|contrase[nñ]a)\b/i.test(
+      label,
+    )
+  )
+    return false;
+  if (
+    /\b(name|nombre|apellido)\b/i.test(label) &&
+    !/\b(doctor|m[eé]dico|specialist|especialista|product|producto|business|empresa)\b|search by name|buscar por nombre/i.test(
       label,
     )
   )
@@ -145,13 +152,16 @@ export class BrowserWalk {
       try {
         const u = new URL(route.request().url());
         if (u.protocol === 'data:') return route.continue();
-        await permittedUrl(
-          u.href,
-          controlledOrigin,
-          !this.publicWebsite && route.request().isNavigationRequest()
-            ? approved.origin
-            : undefined,
-        );
+        if (this.publicWebsite) {
+          // The proxy resolves once and pins the actual socket. Do not resolve resources again here.
+          if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password)
+            throw Error('Invalid public website request.');
+        } else
+          await permittedUrl(
+            u.href,
+            controlledOrigin,
+            route.request().isNavigationRequest() ? approved.origin : undefined,
+          );
         await route.continue();
       } catch {
         await route.abort('blockedbyclient');

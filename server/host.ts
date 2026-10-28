@@ -99,8 +99,9 @@ export async function hostRequest(
             plan?.payload.requestTargetHash !== digest(JSON.stringify(target))
           ) {
             json(res, 409, {
-              error:
-                'This start belongs to a different website, journey or plan. Open a new setup.',
+              error: !plan?.payload.requestTargetHash
+                ? 'The original plan is unavailable, so this start cannot be verified. Review the retained run before opening a new setup.'
+                : 'This start belongs to a different website, journey or plan. Open a new setup.',
             });
             return;
           }

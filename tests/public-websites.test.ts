@@ -7,11 +7,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { randomUUID } from 'node:crypto';
-import { publicDestination, publicBrowserProxy, pinnedLookup } from '../src/public-network.js';
+import {
+  publicDestination,
+  publicBrowserProxy,
+  pinnedLookup,
+  connectDestination,
+  forwardHeaders,
+} from '../src/public-network.js';
 import { publicTarget, publicEntryLimit } from '../src/public-target.js';
 import { isCommitment, publicSearchInput } from '../src/browser.js';
 import { Runner } from '../src/runner.js';
 import { MetaModels } from '../src/models.js';
+import { isPublicAddress } from '../src/network.js';
 import { Store } from '../src/store.js';
 import { hostRequest } from '../server/host.js';
 import { startServer } from '../server/index.js';
@@ -149,6 +156,12 @@ test('Public typing accepts search terms but refuses patient, account, payment a
   ])
     assert.equal(publicSearchInput({ ...focus, ...change }, 'Barcelona'), false);
   assert(publicSearchInput({ ...focus, type: 'text', name: 'Especialidad' }, 'Dermatología'));
+  assert(publicSearchInput({ ...focus, name: 'Search by doctor name' }, 'Public Doctor'));
+  assert(publicSearchInput({ ...focus, name: 'Search by name' }, 'Public Product'));
+  assert.equal(
+    publicSearchInput({ ...focus, name: 'Patient full name' }, 'Private Patient'),
+    false,
+  );
   for (const label of [
     'Confirmar cita',
     'Finalizar la reserva',
@@ -233,6 +246,15 @@ test('The public host binds a repeated start to its exact original target and le
         409,
       );
     assert.equal(starts, 1);
+    const missingPlanId = randomUUID();
+    store.create(target().goal, target().url, 'live', missingPlanId);
+    const unverifiable = await call('POST', '/api/host/runs', {
+      ...body,
+      requestId: missingPlanId,
+    });
+    assert.equal(unverifiable.status, 409);
+    assert.match(unverifiable.body.error, /original plan is unavailable/);
+    assert.equal(starts, 1);
     assert.equal(store.run(created.body.id).goal, target().goal);
     assert.equal(store.usage().requests.length, 0);
   } finally {
@@ -293,4 +315,123 @@ test('A denied entry retains its original, skips inference and still closes the 
     store.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('CONNECT accepts a public authority on standard or custom ports and rejects URL syntax', async () => {
+  const resolve = async () => [{ address: '8.8.8.8', family: 4 }];
+  for (const port of [80, 443, 8443])
+    assert.equal((await connectDestination('public.test:' + port, resolve)).port, port);
+  for (const authority of [
+    'public.test:443/',
+    'public.test:443/path',
+    'public.test:443?q=1',
+    'user@public.test:443',
+    'https://public.test:443',
+    'public.test:0',
+    'public.test:65536',
+  ])
+    await assert.rejects(connectDestination(authority, resolve));
+});
+test('Public destinations prefer checked IPv4 and refuse transition IPv6 ranges in every spelling', async () => {
+  const selected = await publicDestination('https://public.test', async () => [
+    { address: '2001:4860:4860::8888', family: 6 },
+    { address: '8.8.8.8', family: 4 },
+  ]);
+  assert.equal(selected.address.family, 4);
+  for (const address of [
+    '2001::1',
+    '2001:0000:0:0:0:0:0:1',
+    '2002:7f00:1::',
+    '2001:db8::1',
+    '3fff::1',
+  ])
+    assert.equal(isPublicAddress(address), false, address);
+  assert.equal(isPublicAddress('2001:4860:4860::8888'), true);
+});
+test('A denied page after an actual requested input stops before error-page analysis and final review', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'meta-later-denied-')),
+    store = new Store(dir);
+  const run = store.create('Find the latest safe appointment step', 'https://8.8.8.8/', 'live');
+  store.append(run.id, 'plan', 'driver', { goal: run.goal });
+  const picture = store.asset(
+    run.id,
+    'input.png',
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl7m8kAAAAASUVORK5CYII=',
+      'base64',
+    ),
+  );
+  const original = store.append(run.id, 'capture', 'browser', {
+    imageFile: picture.file,
+    imageHash: picture.hash,
+    width: 1,
+    height: 1,
+    title: 'Home',
+    url: run.url,
+    stable: true,
+  });
+  const roles: string[] = [];
+  const reason = mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+    roles.push(role);
+    return { kind: 'press', key: 'Tab', note: 'Inspect the next control' } as any;
+  });
+  const walk = {
+    publicWebsite: true,
+    assertActive() {},
+    images() {
+      return [];
+    },
+    async act() {
+      return store.append(run.id, 'action', 'browser', { key: 'Tab' }, [original.id]);
+    },
+    async capture() {
+      return store.append(run.id, 'capture', 'browser', {
+        title: 'Access Denied',
+        url: run.url,
+        stable: true,
+      });
+    },
+  };
+  try {
+    await (new Runner(store, 'http://127.0.0.1:4317') as any).live(
+      run,
+      walk,
+      {},
+      original,
+      new AbortController(),
+    );
+    assert.deepEqual(roles, ['driver']);
+    assert.equal(store.run(run.id).state, 'partial');
+    assert.match(store.run(run.id).stopReason!, /during the journey/);
+    assert(!store.run(run.id).stopReason!.includes('no model request'));
+    assert.equal(store.records(run.id).filter((r) => r.kind === 'capture').length, 2);
+    assert.equal(store.published(run.id).length, 0);
+  } finally {
+    reason.mock.restore();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Forwarding removes hop headers while preserving content and refusing a family mismatch', () => {
+  assert.deepEqual(
+    forwardHeaders({
+      connection: 'keep-alive, x-private-hop',
+      'keep-alive': 'timeout=1',
+      'x-private-hop': 'local',
+      'transfer-encoding': 'chunked',
+      'content-length': '12',
+      'content-type': 'text/html',
+    }),
+    { 'content-type': 'text/html' },
+  );
+  assert.deepEqual(forwardHeaders({ 'content-length': '12', 'content-type': 'text/html' }), {
+    'content-length': '12',
+    'content-type': 'text/html',
+  });
+  pinnedLookup({ address: '2001:4860:4860::8888', family: 6 })(
+    'public.test',
+    { family: 4 },
+    (error: any) => assert.match(error.message, /does not match/),
+  );
 });
