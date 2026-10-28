@@ -35,9 +35,28 @@ export async function publicTarget(value: unknown): Promise<PublicTarget> {
 }
 
 /** A denied entry is retained as a limit rather than spending models on an error page. */
-export function publicEntryLimit(title: unknown) {
-  return typeof title === 'string' &&
+export const PUBLIC_TRAFFIC_CHALLENGE =
+  'The website presented an automated-traffic challenge. The requested journey was not reached; no model request was made.';
+
+export function publicEntryLimit(title: unknown, page?: { url?: unknown; text?: unknown }) {
+  try {
+    const url = new URL(typeof page?.url === 'string' ? page.url : '');
+    if (
+      /^(?:www\.)?google\.(?:com|es)$/.test(url.hostname) &&
+      url.pathname === '/sorry/index' &&
+      typeof page?.text === 'string' &&
+      /our systems have detected unusual traffic from your computer network|nuestros sistemas han detectado.*tr[aá]fico inusual/i.test(
+        page.text,
+      )
+    )
+      return PUBLIC_TRAFFIC_CHALLENGE;
+  } catch {
+    /* No explicit page evidence: do not infer a challenge. */
+  }
+  if (
+    typeof title === 'string' &&
     /^(access denied|403 forbidden|request blocked)$/i.test(title.trim())
-    ? 'The website presented an access-denied entry page. The requested journey was not reached; no model request was made.'
-    : null;
+  )
+    return 'The website presented an access-denied entry page. The requested journey was not reached; no model request was made.';
+  return null;
 }

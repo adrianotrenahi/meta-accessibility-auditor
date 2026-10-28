@@ -1,4 +1,4 @@
-import { publicEntryLimit } from './public-target.js';
+import { publicEntryLimit, PUBLIC_TRAFFIC_CHALLENGE } from './public-target.js';
 import { z } from 'zod';
 import {
   BrowserWalk,
@@ -158,11 +158,15 @@ export class Runner {
     await completion;
   }
   private stopForDeniedPage(run: Run, walk: BrowserWalk, current: RecordEntry, initial = false) {
-    const entryLimit = walk.publicWebsite ? publicEntryLimit(current.payload.title) : null;
+    const entryLimit = walk.publicWebsite
+      ? publicEntryLimit(current.payload.title, current.payload)
+      : null;
     if (!entryLimit || this.store.run(run.id).state !== 'running') return false;
     const reason = initial
       ? entryLimit
-      : 'The website presented an access-denied page during the journey. This page was not assessed; earlier evidence remains limited.';
+      : entryLimit === PUBLIC_TRAFFIC_CHALLENGE
+        ? 'The website presented an automated-traffic challenge during the journey. That page was not assessed; earlier evidence remains limited.'
+        : 'The website presented an access-denied page during the journey. This page was not assessed; earlier evidence remains limited.';
     this.store.append(run.id, 'limit', 'runner', { reason }, [current.id]);
     this.store.finish(run.id, 'partial', reason);
     return true;
