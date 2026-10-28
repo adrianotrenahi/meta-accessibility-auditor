@@ -3,7 +3,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RecordEntry, RecordKind, Role, Run, RunState, Approval } from './types.js';
-import { LIMITS, PHASE, CAPS } from './types.js';
+import { LIMITS, PHASE, FINAL_REVIEW_RESERVE_MICROS } from './types.js';
 import { groupPublished } from './finding-key.js';
 import { presentRecordPayload } from './presentation.js';
 import { readHashMatches, suppliedImageIds, type ImageReceipt } from './image-receipt.js';
@@ -510,8 +510,10 @@ export class Store {
       if (phase.length >= LIMITS[role]) throw Error('Request count limit reached.');
       const charged = (r: any) => r.actual ?? r.reserved;
       const used = phase.reduce((n, r) => n + charged(r), 0);
-      const finalReserve = Math.ceil(CAPS.reviewer.input * 1.25 + CAPS.reviewer.output * 4.25);
-      if (used + micros + (role === 'reviewer' && !final ? finalReserve : 0) > PHASE[role])
+      if (
+        used + micros + (role === 'reviewer' && !final ? FINAL_REVIEW_RESERVE_MICROS : 0) >
+        PHASE[role]
+      )
         throw Error('Phase spending limit reached.');
       if (role === 'reviewer' && !final && phase.length >= 3)
         throw Error('Final review slot is reserved.');

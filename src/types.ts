@@ -132,8 +132,14 @@ export const PHASE = {
   reviewer: 650_000,
   sam: 100_000,
 } as const;
+// Configured capacity for the fixed muse-spark-1.3 model, verified 28 October 2026.
+// https://dev.meta.ai/docs/models — input and reserved output share this window.
+// This is documented configuration, not automatic provider-capability discovery.
+export const MODEL_CONTEXT_TOKENS = 1_048_576;
+// Preserve the existing final-review money reserve independently of model capacity.
+export const FINAL_REVIEW_RESERVE_MICROS = 109_816;
 export const CAPS = {
-  driver: { input: 30000, output: 4096, effort: 'low' },
-  analyst: { input: 40000, output: 8192, effort: 'low' },
-  reviewer: { input: 60000, output: 8192, effort: 'medium' },
+  driver: { input: MODEL_CONTEXT_TOKENS - 4096, output: 4096, effort: 'low' },
+  analyst: { input: MODEL_CONTEXT_TOKENS - 8192, output: 8192, effort: 'low' },
+  reviewer: { input: MODEL_CONTEXT_TOKENS - 8192, output: 8192, effort: 'medium' },
 } as const;
