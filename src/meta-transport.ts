@@ -36,14 +36,18 @@ function connectionCodes(error: unknown) {
       return;
     }
     seen.add(value);
+    const initialCodeCount = codes.length;
     const item = value as { code?: unknown; name?: unknown; cause?: unknown; errors?: unknown };
-    if (typeof item.code === 'string') codes.push(knownCodes.has(item.code) ? item.code : 'OTHER');
+    if (item.code !== undefined)
+      codes.push(typeof item.code === 'string' && knownCodes.has(item.code) ? item.code : 'OTHER');
     if (item.name === 'AbortError' || item.name === 'TimeoutError') codes.push('ABORT_ERR');
     if (item.cause !== undefined) visit(item.cause, depth + 1);
     if (Array.isArray(item.errors)) {
       if (!item.errors.length || item.errors.length > 8) codes.push('OTHER');
       else for (const nested of item.errors) visit(nested, depth + 1);
-    }
+    } else if (item.errors !== undefined) codes.push('OTHER');
+    // A wrapper may delegate to documented causes; an unexplained leaf cannot.
+    if (codes.length === initialCodeCount) codes.push('OTHER');
   };
   visit(error);
   return codes;
@@ -73,16 +77,25 @@ function retryAfter(response: Response, attempt: number): number | null {
   return delay <= retryDelayLimit ? Math.ceil(delay) : null;
 }
 export class MetaTransportError extends Error {
-  constructor(public diagnostic: MetaTransportDiagnostic) {
+  constructor(
+    public readonly diagnostic: MetaTransportDiagnostic,
+    public readonly generationNotSent = false,
+  ) {
     const d = diagnostic;
     const reason =
       d.phase === 'input_count'
         ? `Cavioo could not prepare the next model request with Meta after ${d.attempts} connection attempt${d.attempts === 1 ? '' : 's'}. No new model generation was sent.`
-        : 'Cavioo did not receive a complete result from Meta. Its possible charge remains reserved; no uncertain model request was repeated.';
+        : generationNotSent
+          ? 'The model request could not establish a connection to Meta. No answer was started.'
+          : 'Cavioo did not receive a complete result from Meta. Its possible charge remains reserved; no uncertain model request was repeated.';
     super(reason + (d.status ? ` Meta returned status ${d.status}.` : ''));
   }
 }
-export type MetaRetry = MetaTransportDiagnostic & { delayMs: number; nextAttempt: number };
+export type MetaRetry = MetaTransportDiagnostic & {
+  delayMs: number;
+  nextAttempt: number;
+  generationNotSent: boolean;
+};
 export type MetaPostOptions = {
   phase: MetaPhase;
   body: unknown;
@@ -122,6 +135,7 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
     let stage: MetaTransportDiagnostic['stage'] = 'requesting';
     let diagnostic: MetaTransportDiagnostic | undefined;
     let delay: number | null = null;
+    let generationNotSent = false;
     try {
       response = await options.fetcher('https://api.meta.ai/v1' + path, {
         method: 'POST',
@@ -151,20 +165,23 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
       if (signal.aborted) throw signal.reason;
       const cancelled = isCancelled(error, signal);
       const codes = connectionCodes(error);
-      diagnostic = {
-        version: 'meta-transport/1',
-        phase,
-        stage,
-        attempts: attempt,
-        code:
-          codes.find((code) => code !== 'OTHER') ??
-          (error instanceof SyntaxError ? 'INVALID_JSON' : 'CONNECTION_UNKNOWN'),
-      };
       const provedBeforeConnection =
         response === undefined &&
         stage === 'requesting' &&
         codes.length > 0 &&
         codes.every((code) => beforeConnection.has(code));
+      generationNotSent = phase === 'generation' && !cancelled && provedBeforeConnection;
+      const mixedCauses = new Set(codes).size > 1 && !provedBeforeConnection;
+      diagnostic = {
+        version: 'meta-transport/1',
+        phase,
+        stage,
+        attempts: attempt,
+        code: mixedCauses
+          ? 'MIXED_CAUSES'
+          : (codes.find((code) => code !== 'OTHER') ??
+            (error instanceof SyntaxError ? 'INVALID_JSON' : 'CONNECTION_UNKNOWN')),
+      };
       const repeatableCountFailure =
         phase === 'input_count' &&
         !(error instanceof SyntaxError) &&
@@ -173,10 +190,16 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
         delay = shortDelay(attempt);
     }
     if (!diagnostic) throw Error('Meta request ended without a result.');
-    if (delay === null || attempt === maximumAttempts) throw new MetaTransportError(diagnostic);
+    if (delay === null || attempt === maximumAttempts)
+      throw new MetaTransportError(diagnostic, generationNotSent);
     signal.throwIfAborted();
     options.assertActive();
-    options.onRetry?.({ ...diagnostic, delayMs: delay, nextAttempt: attempt + 1 });
+    options.onRetry?.({
+      ...diagnostic,
+      delayMs: delay,
+      nextAttempt: attempt + 1,
+      generationNotSent,
+    });
     await (options.wait ?? waitForMetaRetry)(delay, signal);
   }
   throw Error('Meta connection attempt limit reached.');

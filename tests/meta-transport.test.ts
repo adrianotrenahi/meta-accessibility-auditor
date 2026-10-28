@@ -192,6 +192,14 @@ test('Ambiguous generation failures, mixed causes and resets are never replayed'
     network('UND_ERR_HEADERS_TIMEOUT'),
     network('UND_ERR_BODY_TIMEOUT'),
     network('ENOTFOUND', Object.assign(Error('nested ambiguous failure'), { code: 'ECONNRESET' })),
+    network('ENOTFOUND', Error('nested failure with no documented code')),
+    network('ENOTFOUND', {}),
+    new TypeError('fetch failed', {
+      cause: new AggregateError([
+        Object.assign(Error(), { code: 'ENOTFOUND' }),
+        Error('another failure with no documented code'),
+      ]),
+    }),
     network(
       'ENOTFOUND',
       Object.assign(Error('nested unknown failure'), { code: 'UNKNOWN_PRIVATE_VALUE' }),
@@ -209,7 +217,10 @@ test('Ambiguous generation failures, mixed causes and resets are never replayed'
       calls++;
       throw error;
     }) as typeof fetch);
-    await assert.rejects(x.call);
+    await assert.rejects(
+      x.call,
+      (error) => error instanceof MetaTransportError && !error.generationNotSent,
+    );
     assert.equal(calls, 1);
     assert.deepEqual(x.events, []);
   }
@@ -348,10 +359,22 @@ test('Count reconnects stay before one reservation; generation reconnects reuse 
     assert.equal(x.store.usage().requests[0].status, 'completed');
     assert.equal(x.store.usage().reserved, 0);
     assert(requests.every((r) => JSON.stringify(r.body) === JSON.stringify(requests[0].body)));
-    assert.equal(
-      x.store.records(x.run.id).filter((r) => r.payload.method === 'meta_connection_retry').length,
-      2,
+    const retryRecords = x.store
+      .records(x.run.id)
+      .filter((r) => r.payload.method === 'meta_connection_retry');
+    assert.deepEqual(
+      retryRecords.map((r) => r.payload.diagnostic.phase),
+      ['input_count', 'generation'],
     );
+    assert.deepEqual(
+      retryRecords.map((r) => r.payload.diagnostic.code),
+      ['ECONNRESET', 'ECONNREFUSED'],
+    );
+    assert.match(
+      retryRecords[0].payload.reason,
+      /prepare this same request.*No new model generation/,
+    );
+    assert.match(retryRecords[1].payload.reason, /before any request could reach Meta/);
   } finally {
     x.close();
   }
@@ -464,4 +487,82 @@ test('A real HTTP redirect cannot hide a delivered generation before a later con
   } finally {
     await close(server);
   }
+});
+
+test('Proved-unsent exhaustion releases only its new logical reservation for navigation and SAM', async () => {
+  for (const operation of ['driver', 'sam'] as const) {
+    let generations = 0;
+    const x = setupModel((async (url) => {
+      if (String(url).endsWith('input_tokens')) return response();
+      generations++;
+      throw network('ECONNREFUSED');
+    }) as typeof fetch);
+    try {
+      const old = x.store.create(
+        'Earlier unknown model outcome',
+        'http://127.0.0.1/shop/',
+        'offline',
+      );
+      x.store.db
+        .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
+        .run(
+          'historical-unknown',
+          old.id,
+          'driver',
+          78087,
+          null,
+          'unknown',
+          new Date().toISOString(),
+        );
+      x.store.finish(old.id, 'partial', 'Earlier uncertain request remains held.');
+      await assert.rejects(() =>
+        operation === 'driver'
+          ? x.models.reason(x.run.id, 'driver', [], [], actionSchema)
+          : x.models.sam(x.run.id, 'data:image/png;base64,b3JpZ2luYWw=', 'original target', {
+              width: 1,
+              height: 1,
+            }),
+      );
+      assert.equal(generations, 2);
+      const current = x.store.usage(x.run.id);
+      assert.equal(current.requests.length, 1);
+      assert.equal(current.requests[0].status, 'not_sent');
+      assert.equal(current.requests[0].actual, 0);
+      assert.equal(current.reserved, 0);
+      const oldCharge = x.store.usage(old.id);
+      assert.equal(oldCharge.reserved, 78087);
+      assert.equal(oldCharge.requests[0].status, 'unknown');
+      assert.equal(oldCharge.requests[0].actual, null);
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('A proved-unsent first attempt cannot release a later ambiguous generation hold', async () => {
+  let generations = 0;
+  const x = setupModel((async (url) => {
+    if (String(url).endsWith('input_tokens')) return response();
+    throw network(++generations === 1 ? 'ECONNREFUSED' : 'ECONNRESET');
+  }) as typeof fetch);
+  try {
+    await assert.rejects(() => x.models.reason(x.run.id, 'driver', [], [], actionSchema));
+    assert.equal(generations, 2);
+    assert.equal(x.store.usage().requests[0].status, 'unknown');
+    assert.equal(x.store.usage().requests[0].actual, null);
+    assert(x.store.usage().reserved > 0);
+  } finally {
+    x.close();
+  }
+});
+
+test('Mixed connection causes are diagnosed as mixed rather than an address-lookup failure', async () => {
+  const x = transport('generation', (async () => {
+    throw network('ENOTFOUND', Object.assign(Error(), { code: 'ECONNRESET' }));
+  }) as typeof fetch);
+  await assert.rejects(
+    x.call,
+    (error) => error instanceof MetaTransportError && error.diagnostic.code === 'MIXED_CAUSES',
+  );
+  assert.deepEqual(x.events, []);
 });

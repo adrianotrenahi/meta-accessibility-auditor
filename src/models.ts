@@ -196,6 +196,7 @@ export class MetaModels {
           method: 'meta_connection_failure',
           reason: error.message,
           diagnostic: error.diagnostic,
+          generationNotSent: error.generationNotSent,
         });
       throw error;
     }
@@ -358,8 +359,11 @@ export class MetaModels {
       return result;
     } catch (e) {
       const request = this.store.usage(runId).requests.find((r) => r.id === id);
-      if (request?.actual === null) this.store.settle(id, null, 'unknown');
-      else if (request?.status === 'received')
+      if (request?.actual === null) {
+        if (e instanceof MetaTransportError && e.generationNotSent)
+          this.store.settle(id, 0, 'not_sent');
+        else this.store.settle(id, null, 'unknown');
+      } else if (request?.status === 'received')
         this.store.settle(id, request.actual, 'invalid_result');
       throw e;
     }
@@ -404,8 +408,11 @@ export class MetaModels {
       return { requestId: id, source: 'SAM 3.1', raw, objects };
     } catch (e) {
       const r = this.store.usage(runId).requests.find((r) => r.id === id);
-      if (r?.actual === null) this.store.settle(id, null, 'unknown');
-      else if (r?.status === 'received') this.store.settle(id, r.actual, 'invalid_result');
+      if (r?.actual === null) {
+        if (e instanceof MetaTransportError && e.generationNotSent)
+          this.store.settle(id, 0, 'not_sent');
+        else this.store.settle(id, null, 'unknown');
+      } else if (r?.status === 'received') this.store.settle(id, r.actual, 'invalid_result');
       throw e;
     }
   }
