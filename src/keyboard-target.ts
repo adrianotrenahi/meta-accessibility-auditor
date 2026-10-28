@@ -268,10 +268,8 @@ export async function walkToKeyboardTarget(
           'limit',
           'The keyboard target was not reached within this bounded traversal. This does not establish a website keyboard barrier.',
         );
-      const focusLocator = walk.page.locator(':focus');
-      const focus = (await focusLocator.count())
-        ? await focusLocator.elementHandle({ timeout: 500 })
-        : null;
+      const activeHandle = await walk.page.evaluateHandle(() => document.activeElement);
+      const focus = activeHandle.asElement();
       if (focus) {
         const seen = await Promise.all(
           focusHandles.map((old) =>
@@ -288,11 +286,47 @@ export async function walkToKeyboardTarget(
         focusHandles.push(focus);
       }
       active();
-      const next = await step(current, {
+      const beforeStep = current;
+      const keyAction: Action = {
         kind: 'press',
         key,
         note: 'Move keyboard focus toward the requested original control.',
-      });
+      };
+      let next = await step(current, keyAction);
+      if (
+        !next.performed &&
+        focus &&
+        (await connected()) &&
+        (await focus
+          .evaluate((element) => element.isConnected && document.activeElement === element)
+          .catch(() => false)) &&
+        next.current.payload.url === beforeStep.payload.url &&
+        next.current.payload.aria === beforeStep.payload.aria &&
+        (await walk.page.evaluate(() => performance.timeOrigin)) === epoch
+      ) {
+        const withoutAppearance = (value: any) => {
+          const { appearance: _appearance, ...rest } = value ?? {};
+          return rest;
+        };
+        if (
+          JSON.stringify(withoutAppearance(next.current.payload.focus)) ===
+          JSON.stringify(withoutAppearance(beforeStep.payload.focus))
+        ) {
+          store.append(
+            runId,
+            'limit',
+            'driver',
+            {
+              method: 'keyboard_target_observation_refresh',
+              reason:
+                'Focus appearance changed before input. A fresh original was recorded; the unsent key is attempted once with no repeated input or extra model decision.',
+            },
+            [beforeStep.id, next.current.id],
+          );
+          active();
+          next = await step(next.current, keyAction);
+        }
+      }
       current = next.current;
       if (next.performed) actions.push(next.performed);
       active();

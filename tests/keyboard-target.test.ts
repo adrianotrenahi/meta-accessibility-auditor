@@ -29,9 +29,24 @@ async function setup(engine: 'chromium' | 'webkit', html: string) {
   await walk.page.setContent(html);
   const current = await walk.captureSettled();
   const signal = new AbortController();
+  const verifyOriginal = walk.verifyOriginalCapture.bind(walk);
+  walk.verifyOriginalCapture = async (source) => {
+    try {
+      await verifyOriginal(source);
+    } catch (error) {
+      if (error instanceof ActionStateChanged)
+        error.message += ` Original focus: ${JSON.stringify(source.payload.focus)}. Current focus: ${JSON.stringify(await walk.focus())}.`;
+      throw error;
+    }
+  };
   const step = async (before: any, action: Action, guard?: () => Promise<boolean>) => {
-    const performed = await walk.act(action, before, guard);
-    return { performed, current: await walk.captureSettled() };
+    try {
+      const performed = await walk.act(action, before, guard);
+      return { performed, current: await walk.captureSettled() };
+    } catch (error) {
+      if (!(error instanceof ActionStateChanged)) throw error;
+      return { current: await walk.captureSettled() };
+    }
   };
   return {
     app,
@@ -668,6 +683,38 @@ test('Stop during a target path records the sent key and sends no next key', asy
     );
     assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length, 1);
     assert.equal((await x.walk.focus()).name, 'A');
+  } finally {
+    await x.close();
+  }
+});
+
+test('Focus-appearance changes refresh one unsent key without another model decision or duplicate input', async () => {
+  const x = await setup('chromium', '<button>A</button><button>Target</button>');
+  const runner = new Runner(x.app.store, x.app.origin);
+  let attempts = 0;
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      async (before, action, guard) => {
+        if (++attempts === 1)
+          await x.walk.page.locator('body').evaluate((e) => (e.style.outline = '3px solid red'));
+        return (runner as any).targetKeyboardStep(x.run, x.walk, before, action, guard);
+      },
+    );
+    assert.equal(result.outcome, 'reached');
+    assert.equal(result.actions.length, 2);
+    assert.equal(attempts, 3);
+    assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length, 2);
+    assert(
+      x.app.store
+        .records(x.run.id)
+        .some((r) => r.payload.method === 'keyboard_target_observation_refresh'),
+    );
   } finally {
     await x.close();
   }
