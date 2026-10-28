@@ -1,6 +1,7 @@
 import { recordIsIntact, type Store } from './store.js';
 import type { RecordEntry, Role } from './types.js';
 import { reviewFeedbackIds } from './review-feedback.js';
+import { JOURNEY_EVIDENCE_VERSION, INCOMPARABLE_TOTALS_LIMIT } from './journey-evidence.js';
 import {
   baselineHasIndependentUse,
   makeImageReceipt,
@@ -40,6 +41,88 @@ export function originalClosure(records: RecordEntry[], ids: string[]) {
   return records.filter((r) => selected.has(r.id));
 }
 
+/** Keep an older, empty price comparison outside a first analysis checkpoint.
+ * This does not declare its picture equivalent or checked. Preserve the raw pool,
+ * claims, material history, current tests and broken-source refusals.
+ */
+const comparisonFields = new Set([
+  'method',
+  'version',
+  'stable',
+  'beforeCaptureId',
+  'afterCaptureId',
+  'actionId',
+  'comparable',
+  'selectionSame',
+  'sameCurrency',
+  'currency',
+  'beforeTotal',
+  'afterTotal',
+  'disclosure',
+  'beforeDisclosure',
+  'afterDisclosure',
+  'limit',
+  '_sourcesHash',
+]);
+function emptyEarlierTraversal(record: RecordEntry, current: RecordEntry, records: RecordEntry[]) {
+  const p = record.payload;
+  if (
+    record.author !== 'browser' ||
+    !recordIsIntact(record) ||
+    p.method !== 'comparable_totals' ||
+    p.version !== JOURNEY_EVIDENCE_VERSION ||
+    p.stable !== true ||
+    p.comparable !== false ||
+    p.limit !== INCOMPARABLE_TOTALS_LIMIT ||
+    Object.keys(p).some((key) => !comparisonFields.has(key)) ||
+    record.seq >= current.seq ||
+    p.afterCaptureId === current.id ||
+    ![
+      'selectionSame',
+      'sameCurrency',
+      'currency',
+      'beforeTotal',
+      'afterTotal',
+      'disclosure',
+      'beforeDisclosure',
+      'afterDisclosure',
+    ].every((key) => p[key] === null)
+  )
+    return false;
+  const before = records.find((item) => item.id === p.beforeCaptureId);
+  const after = records.find((item) => item.id === p.afterCaptureId);
+  const action = records.find((item) => item.id === p.actionId);
+  if (
+    !before ||
+    !after ||
+    !action ||
+    before.kind !== 'capture' ||
+    after.kind !== 'capture' ||
+    before.author !== 'browser' ||
+    after.author !== 'browser' ||
+    typeof before.payload.url !== 'string' ||
+    before.payload.url !== after.payload.url ||
+    action.kind !== 'action' ||
+    action.author !== 'browser' ||
+    action.payload.method !== 'actual_keyboard_or_browser' ||
+    action.payload.outcome !== 'performed' ||
+    action.payload.sourceCaptureId !== before.id ||
+    action.payload.sourceImageHash !== before.payload.imageHash ||
+    !(before.seq < action.seq && action.seq < after.seq && after.seq < record.seq) ||
+    action.payload.action?.kind !== 'press' ||
+    !['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.payload.action.key) ||
+    ![before.id, after.id, action.id].every((id) => record.sources.includes(id))
+  )
+    return false;
+  try {
+    originalClosure(records, [record.id]);
+    return true;
+  } catch {
+    // A missing/changed dependency must still refuse the request, not disappear from it.
+    return false;
+  }
+}
+
 export function requestEvidence(
   store: Store,
   runId: string,
@@ -65,6 +148,7 @@ export function requestEvidence(
     const selectedCaptures = new Set(
       originals.filter((record) => record.kind === 'capture').map((record) => record.id),
     );
+    const requiredIds = new Set(originals.map((record) => record.id));
     // Read attached measurements and reader results with their entire original source
     // graph. A return comparison, for example, also needs the earlier typed-entry baseline.
     // Select attachments from this request's original pictures only: a historical source
@@ -72,7 +156,13 @@ export function requestEvidence(
     const attached = records.filter(
       (record) =>
         ['observation', 'at_check', 'criterion_scope'].includes(record.kind) &&
-        record.sources.some((id) => selectedCaptures.has(id)),
+        record.sources.some((id) => selectedCaptures.has(id)) &&
+        !(
+          role === 'analyst' &&
+          candidates.length === 0 &&
+          !requiredIds.has(record.id) &&
+          emptyEarlierTraversal(record, current, records)
+        ),
     );
     const available = attached.filter((record) => {
       if (record.kind !== 'observation' || record.payload.stable !== false) return true;

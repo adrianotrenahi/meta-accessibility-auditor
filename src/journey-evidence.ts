@@ -4,6 +4,8 @@ import { recordIsIntact, type Store } from './store.js';
 import type { RecordEntry } from './types.js';
 
 export const JOURNEY_EVIDENCE_VERSION = 'journey-evidence/1';
+export const INCOMPARABLE_TOTALS_LIMIT =
+  'Comparable selection, currency and original scope were not established. No unexplained increase or pass was inferred.';
 const key = z.string().min(1).max(200);
 const amount = z.number().finite().nonnegative().max(1_000_000_000);
 const currency = z.string().regex(/^[A-Z]{3}$/);
@@ -419,7 +421,7 @@ export function compareJourneyTotals(
       afterDisclosure: last?.disclosure ?? null,
       limit: comparable
         ? 'The explicit bundle selection and currency match. A price difference and disclosure quality still require independent contextual review; null structured description is not proof of absent visible disclosure.'
-        : 'Comparable selection, currency and original scope were not established. No unexplained increase or pass was inferred.',
+        : INCOMPARABLE_TOTALS_LIMIT,
     },
     [before.record.id, after.record.id, before.capture.id, action.id, after.capture.id],
   );

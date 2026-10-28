@@ -270,6 +270,28 @@ test('An explicit denied entry becomes an untested limit, never a finding or a f
     assert.equal(publicEntryLimit(title), null);
 });
 
+test('An explicit Google traffic challenge needs its actual host, path and text; ordinary pages stay available', () => {
+  const text = 'Our systems have detected unusual traffic from your computer network.';
+  const url = 'https://www.google.com/sorry/index?continue=search';
+  assert.match(publicEntryLimit('Google', { url, text })!, /automated-traffic challenge/);
+  assert.match(
+    publicEntryLimit('Google', {
+      url: 'https://google.es/sorry/index',
+      text: 'Nuestros sistemas han detectado tráfico inusual.',
+    })!,
+    /automated-traffic challenge/,
+  );
+  for (const page of [
+    { url: 'https://www.google.com/search?q=unusual+traffic', text },
+    { url: 'https://google.com.example.org/sorry/index', text },
+    { url: 'https://www.google.com/sorry/index', text: 'Ordinary page content' },
+    { url: 'invalid', text },
+    { text },
+    { url },
+  ])
+    assert.equal(publicEntryLimit('Google', page), null);
+});
+
 test('A denied entry retains its original, skips inference and still closes the browser', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'meta-denied-entry-'));
   const store = new Store(dir);
@@ -312,6 +334,68 @@ test('A denied entry retains its original, skips inference and still closes the 
     assert.equal(store.published(run.id).length, 0);
   } finally {
     model.mock.restore();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('A traffic challenge reached after input stops before challenge analysis, another driver or final review', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'meta-traffic-challenge-')),
+    store = new Store(dir);
+  const run = store.create('Perform the public search', 'https://www.google.com/', 'live');
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl7m8kAAAAASUVORK5CYII=',
+    'base64',
+  );
+  const asset = store.asset(run.id, 'source.png', png);
+  const first = store.append(run.id, 'capture', 'browser', {
+    imageFile: asset.file,
+    imageHash: asset.hash,
+    width: 1,
+    height: 1,
+    stable: true,
+    url: run.url,
+    title: 'Google',
+  });
+  const roles: string[] = [];
+  const reason = mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+    roles.push(role);
+    return { kind: 'press', key: 'Enter', note: 'Submit public search' } as any;
+  });
+  const walk = {
+    publicWebsite: true,
+    assertActive() {},
+    images() {
+      return [];
+    },
+    async act() {
+      return store.append(run.id, 'action', 'browser', { performed: true }, [first.id]);
+    },
+    async captureSettled() {
+      return store.append(run.id, 'capture', 'browser', {
+        stable: true,
+        title: 'Google',
+        url: 'https://www.google.com/sorry/index',
+        text: 'Our systems have detected unusual traffic from your computer network.',
+      });
+    },
+  };
+  try {
+    await (new Runner(store, 'http://127.0.0.1:4317') as any).live(
+      run,
+      walk,
+      {},
+      first,
+      new AbortController(),
+    );
+    assert.deepEqual(roles, ['driver']);
+    assert.equal(store.run(run.id).state, 'partial');
+    assert.match(store.run(run.id).stopReason!, /automated-traffic challenge during the journey/);
+    assert.doesNotMatch(store.run(run.id).stopReason!, /no model request/);
+    assert.equal(store.records(run.id).filter((r) => r.kind === 'capture').length, 2);
+    assert.equal(store.published(run.id).length, 0);
+  } finally {
+    reason.mock.restore();
     store.close();
     rmSync(dir, { recursive: true, force: true });
   }
