@@ -527,6 +527,19 @@ test('Final review keeps temporary failure unknown but propagates permanent reje
         records.some((record) => record.payload.method === 'analysis_network_unavailable'),
         status === 503,
       );
+      const workflowLimits = records.filter(
+        (record) =>
+          record.kind === 'limit' &&
+          record.author === 'reviewer' &&
+          (record.payload.method === 'analysis_network_unavailable' ||
+            record.payload.finalReview === 'incomplete'),
+      );
+      assert.equal(
+        workflowLimits.length,
+        status === 503 ? 1 : 0,
+        'One final network interruption must produce one workflow note.',
+      );
+      if (status === 503) assert.equal(workflowLimits[0].payload.finalReview, 'incomplete');
       if (status === 401) assert.match(x.store.run(x.run.id).stopReason!, /status 401/);
       assert.deepEqual(x.store.usage(x.old.id), x.previous);
     } finally {

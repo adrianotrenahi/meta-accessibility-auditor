@@ -619,16 +619,18 @@ export class Runner {
           await this.review(models, run, current, walk, signal, true);
         } catch (e) {
           if (e instanceof AnalysisNetworkUnavailable)
-            this.incompleteCheckpoint(e, run, current, signal);
-          else if (!(
-            (e instanceof IncompleteModelResult || e instanceof EvidenceRequestLimit) &&
-            e.role === 'reviewer'
-          ))
-            throw e;
-          this.store.append(run.id, 'limit', 'reviewer', {
-            reason: safeError(e),
-            finalReview: 'incomplete',
-          });
+            this.incompleteCheckpoint(e, run, current, signal, true);
+          else {
+            if (!(
+              (e instanceof IncompleteModelResult || e instanceof EvidenceRequestLimit) &&
+              e.role === 'reviewer'
+            ))
+              throw e;
+            this.store.append(run.id, 'limit', 'reviewer', {
+              reason: safeError(e),
+              finalReview: 'incomplete',
+            });
+          }
         }
       }
     }
@@ -706,6 +708,7 @@ export class Runner {
     run: Run,
     current: RecordEntry,
     signal: AbortSignal,
+    finalReview = false,
   ) {
     if (
       !(
@@ -723,6 +726,7 @@ export class Runner {
       'limit',
       error.role,
       {
+        ...(finalReview ? { finalReview: 'incomplete' } : {}),
         ...(error instanceof AnalysisNetworkUnavailable
           ? { method: 'analysis_network_unavailable', checkpointState: 'unknown' }
           : {}),
