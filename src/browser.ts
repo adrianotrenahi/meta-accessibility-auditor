@@ -9,6 +9,7 @@ import { LiveFrames } from './live-frame.js';
 import { readPage } from './page-observation.js';
 import { safeError } from './config.js';
 import { collectBrowserFacts, summarizeAxe } from './evidence-checks.js';
+import { installControlIdentity } from './control-identity.js';
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
 export const isCommitment = (name: string) =>
@@ -38,6 +39,7 @@ export class BrowserWalk {
   actions = 0;
   started = Date.now();
   readonly frames: LiveFrames;
+  private readonly controlIdentityKey = '__access_walk_control_' + randomUUID();
   constructor(
     public store: Store,
     public runId: string,
@@ -86,6 +88,7 @@ export class BrowserWalk {
       serviceWorkers: 'block',
       acceptDownloads: false,
     });
+    await installControlIdentity(context, this.controlIdentityKey);
     await context.route('**/*', async (route) => {
       try {
         const u = new URL(route.request().url());
@@ -188,39 +191,81 @@ export class BrowserWalk {
       if (!(await locator.isVisible().catch(() => false))) continue;
       const box = await locator.boundingBox();
       if (!box) continue;
-      const info = await locator.evaluate((e) => {
-        return {
-          selector: (() => {
-            const parts: string[] = [];
-            let current: Element | null = e;
-            while (current) {
-              if (current.id) {
-                parts.unshift('#' + CSS.escape(current.id));
-                break;
+      const { controlMarkup, controlInstance, ...info } = await locator.evaluate(
+        (e, identityKey) => {
+          let controlInstance: string | undefined;
+          const identityEligible = e.tagName === 'BUTTON' && !!e.id;
+          try {
+            const identify = (globalThis as any)[identityKey];
+            if (identityEligible && typeof identify === 'function') controlInstance = identify(e);
+          } catch {
+            // Missing optional identity only disables cross-screen grouping.
+          }
+          return {
+            controlInstance,
+            controlMarkup: identityEligible ? e.outerHTML : undefined,
+            selector: (() => {
+              const parts: string[] = [];
+              let current: Element | null = e;
+              while (current) {
+                if (current.id) {
+                  parts.unshift('#' + CSS.escape(current.id));
+                  break;
+                }
+                const tag = current.tagName.toLowerCase();
+                const siblings = current.parentElement
+                  ? [...current.parentElement.children].filter(
+                      (s) => s.tagName === current!.tagName,
+                    )
+                  : [current];
+                parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')');
+                current = current.parentElement;
               }
-              const tag = current.tagName.toLowerCase();
-              const siblings = current.parentElement
-                ? [...current.parentElement.children].filter((s) => s.tagName === current!.tagName)
-                : [current];
-              parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')');
-              current = current.parentElement;
-            }
-            return parts.join(' > ');
-          })(),
-          tag: e.tagName.toLowerCase(),
-          text: (e.textContent ?? '').trim().slice(0, 200),
-          type: e.getAttribute('type') ?? '',
-          disabled: e.hasAttribute('disabled'),
-        };
-      });
+              return parts.join(' > ');
+            })(),
+            tag: e.tagName.toLowerCase(),
+            text: (e.textContent ?? '').trim().slice(0, 200),
+            type: e.getAttribute('type') ?? '',
+            disabled: e.hasAttribute('disabled'),
+          };
+        },
+        this.controlIdentityKey,
+      );
       const aria = await locator.ariaSnapshot({ depth: 1 });
       const first = aria.split('\n')[0] ?? '';
       const role = first.match(/^- ([a-z]+)/)?.[1] ?? info.tag;
       const name = first.match(/"((?:\\.|[^"])*)"/)?.[1] ?? '';
-      elements.push({ ...info, contextFingerprint, id: `e${i}`, role, name, box });
+      elements.push({
+        ...info,
+        // Only unnamed native buttons with their own ID need this extra bookkeeping.
+        // Keep ordinary controls and model input size unchanged.
+        ...(role === 'button' && name === '' && controlMarkup !== undefined
+          ? { controlInstance, controlFingerprint: digest(controlMarkup) }
+          : {}),
+        contextFingerprint,
+        id: `e${i}`,
+        role,
+        name,
+        box,
+      });
     }
     const image = await this.page.screenshot({ type: 'png', animations: 'disabled' });
     const visibleText = await this.page.locator('body').innerText();
+    let identitiesStable = true;
+    for (const element of elements.filter((element) => element.controlFingerprint)) {
+      const current = await locators.nth(Number(element.id.slice(1))).evaluate(
+        (e, identityKey) => ({
+          identity: (globalThis as any)[identityKey]?.(e),
+          markup: e.outerHTML,
+        }),
+        this.controlIdentityKey,
+      );
+      if (
+        current.identity !== element.controlInstance ||
+        digest(current.markup) !== element.controlFingerprint
+      )
+        identitiesStable = false;
+    }
     const state = await this.observedState();
     if (before.documentEpoch !== state.documentEpoch)
       throw Error('Document changed during observation');
@@ -237,7 +282,7 @@ export class BrowserWalk {
       aria: state.aria,
       focus: state.focus,
       stateStamp: digest(JSON.stringify(state)),
-      stable: digest(JSON.stringify(before)) === digest(JSON.stringify(state)),
+      stable: identitiesStable && digest(JSON.stringify(before)) === digest(JSON.stringify(state)),
       limits: {
         totalControls: await locators.count(),
         maximumListedControls: 60,
