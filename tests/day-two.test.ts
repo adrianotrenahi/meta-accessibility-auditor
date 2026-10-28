@@ -8,6 +8,7 @@ import { requestEvidence } from '../src/request-evidence.js';
 import { candidateTarget } from '../src/candidate-target.js';
 import { candidateSchema, MetaModels, IncompleteModelResult } from '../src/models.js';
 import { Runner } from '../src/runner.js';
+import { ActionStateChanged, ObservationUnsettled } from '../src/browser.js';
 import { exportHostSnapshot } from '../src/host-export.js';
 import type { RecordEntry } from '../src/types.js';
 
@@ -379,7 +380,7 @@ test('An incomplete analysis cannot abort an otherwise safe continuing walk or i
       images: x.images,
       act: async (_action: any, source: RecordEntry) =>
         x.store.append(x.run.id, 'action', 'browser', { performed: true }, [source.id]),
-      capture: async () => x.capture(captures++),
+      captureSettled: async () => x.capture(captures++),
       measurements: async (source: RecordEntry) =>
         x.store.append(x.run.id, 'observation', 'browser', { measured: true }, [source.id]),
     };
@@ -402,6 +403,148 @@ test('An incomplete analysis cannot abort an otherwise safe continuing walk or i
     );
     assert.deepEqual(x.store.published(x.run.id), []);
     assert.equal(x.store.usage(x.run.id).requests.length, 0);
+  } finally {
+    mock.restoreAll();
+    x.close();
+  }
+});
+
+test('A stale navigation decision is discarded before input and the next decision reads the refreshed original', async () => {
+  const x = setup();
+  try {
+    const original = x.capture(0),
+      fresh = x.capture(1);
+    const readIds: string[] = [];
+    let decisions = 0,
+      attempted = 0,
+      captures = 0;
+    mock.method(
+      MetaModels.prototype,
+      'reason',
+      async (_id: string, role: string, records: RecordEntry[]) => {
+        if (role === 'driver') {
+          readIds.push(records.findLast((record) => record.kind === 'capture')!.id);
+          return {
+            kind: ++decisions === 1 ? 'press' : 'finish',
+            key: 'Tab',
+            note: 'Controlled decision',
+          };
+        }
+        if (role === 'analyst') return { findings: [], coverage: [] };
+        throw Error('No accepted finding needs review.');
+      },
+    );
+    const walk = {
+      assertActive() {},
+      images: x.images,
+      async act() {
+        attempted++;
+        throw new ActionStateChanged('Changed before input');
+      },
+      async captureSettled() {
+        captures++;
+        return fresh;
+      },
+    };
+    await (new Runner(x.store, 'http://127.0.0.1:4317') as any).live(
+      x.run,
+      walk,
+      {},
+      original,
+      new AbortController(),
+    );
+    assert.deepEqual(readIds, [original.id, fresh.id]);
+    assert.equal(attempted, 1);
+    assert.equal(captures, 1);
+    assert.equal(x.store.records(x.run.id).filter((record) => record.kind === 'action').length, 0);
+  } finally {
+    mock.restoreAll();
+    x.close();
+  }
+});
+
+test('Repeated stale decisions consume the twenty-decision allowance and stop without input', async () => {
+  const x = setup();
+  try {
+    let decisions = 0,
+      attempts = 0,
+      refreshes = 0;
+    const original = x.capture(0);
+    mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+      if (role === 'driver') {
+        decisions++;
+        return { kind: 'press', key: 'Tab', note: 'Controlled stale decision' };
+      }
+      if (role === 'analyst') return { findings: [], coverage: [] };
+      throw Error('No finding needs review');
+    });
+    const walk = {
+      assertActive() {},
+      images: x.images,
+      async act() {
+        attempts++;
+        throw new ActionStateChanged('Changed before input');
+      },
+      async captureSettled() {
+        return x.capture(++refreshes);
+      },
+    };
+    await (new Runner(x.store, 'http://127.0.0.1:4317') as any).live(
+      x.run,
+      walk,
+      {},
+      original,
+      new AbortController(),
+    );
+    assert.equal(decisions, 20);
+    assert.equal(attempts, 20);
+    assert.equal(refreshes, 20);
+    const records = x.store.records(x.run.id);
+    assert.equal(records.filter((record) => record.kind === 'action').length, 0);
+    assert(
+      records.some(
+        (record) =>
+          record.kind === 'limit' && record.payload.reason.includes('twenty navigation decisions'),
+      ),
+    );
+    assert.equal(x.store.usage().requests.length, 0);
+  } finally {
+    mock.restoreAll();
+    x.close();
+  }
+});
+
+test('Exhausted observation recovery stops before further model work, including final review', async () => {
+  const x = setup();
+  try {
+    const original = x.capture(0);
+    const roles: string[] = [];
+    mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+      roles.push(role);
+      return { kind: 'press', key: 'Tab', note: 'Controlled input' };
+    });
+    const runner = new Runner(x.store, 'http://127.0.0.1:4317');
+    let reviews = 0;
+    (runner as any).review = async () => {
+      reviews++;
+    };
+    const walk = {
+      assertActive() {},
+      images: x.images,
+      async act() {
+        return x.store.append(x.run.id, 'action', 'browser', { performed: true }, [original.id]);
+      },
+      async captureSettled() {
+        throw new ObservationUnsettled('Three observations did not settle');
+      },
+    };
+    await assert.rejects(
+      (runner as any).live(x.run, walk, {}, original, new AbortController()),
+      ObservationUnsettled,
+    );
+    assert.deepEqual(roles, ['driver']);
+    assert.equal(reviews, 0);
+    assert.equal(x.store.records(x.run.id).filter((record) => record.kind === 'action').length, 1);
   } finally {
     mock.restoreAll();
     x.close();
@@ -431,7 +574,7 @@ test('Repeated focus-navigation without progress stops early as a robot limit, n
       images: x.images,
       act: async (_action: any, source: RecordEntry) =>
         x.store.append(x.run.id, 'action', 'browser', { performed: true }, [source.id]),
-      capture: async () => screen(),
+      captureSettled: async () => screen(),
       measurements: async () => {
         throw Error('Repeated blocked navigation should stop before the normal checkpoint.');
       },

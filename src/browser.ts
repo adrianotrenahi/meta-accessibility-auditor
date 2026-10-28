@@ -31,6 +31,9 @@ export class MeasurementStateChanged extends Error {
     );
   }
 }
+/** No input has been sent: the decision's original no longer matches the page. */
+export class ActionStateChanged extends Error {}
+export class ObservationUnsettled extends Error {}
 export function publicSearchInput(
   focus: {
     tag: string;
@@ -232,6 +235,41 @@ export class BrowserWalk {
   async capture(): Promise<RecordEntry> {
     return readPage(this.page, () => this.captureOnce());
   }
+  /**
+   * Stable during capture, not a promise that the page stays unchanged afterwards.
+   * Actions and measurements must still check freshness. Never repeat input.
+   */
+  async captureSettled(first?: RecordEntry): Promise<RecordEntry> {
+    if (
+      first &&
+      (first.kind !== 'capture' ||
+        first.runId !== this.runId ||
+        !recordIsIntact(first) ||
+        this.store.record(this.runId, first.id)?.hash !== first.hash)
+    )
+      throw Error('Observation recovery needs an intact original capture from this run.');
+    const attempts: RecordEntry[] = [];
+    let current = first ?? (await this.capture());
+    for (let attempt = 0; attempt < 3; attempt++) {
+      this.assertActive();
+      attempts.push(current);
+      if (current.payload.stable === true) return current;
+      if (attempt < 2) {
+        await this.page.waitForTimeout(200);
+        current = await this.capture();
+      }
+    }
+    const reason =
+      'The page did not settle across three observations. No input was repeated; the journey remains incomplete.';
+    this.store.append(
+      this.runId,
+      'limit',
+      'browser',
+      { reason },
+      attempts.map((item) => item.id),
+    );
+    throw new ObservationUnsettled(reason);
+  }
   private async captureOnce(): Promise<RecordEntry> {
     this.assertActive();
     const before = await this.observedState();
@@ -393,21 +431,38 @@ export class BrowserWalk {
     )
       throw Error('The action needs an original capture from this run.');
     if (source.payload.url !== this.page.url())
-      throw Error('Page changed; capture a fresh observation first.');
+      throw new ActionStateChanged('Page changed; capture a fresh observation first.');
     if (source.payload.limits?.controlIdentityChanged)
-      throw Error(
+      throw new ActionStateChanged(
         'A control changed or disappeared while this screen was captured; capture a fresh observation before acting.',
       );
     if (
       !source.payload.stable ||
       source.payload.stateStamp !== digest(JSON.stringify(await this.observedState()))
     )
-      throw Error('Page state changed; capture a fresh observation before acting.');
+      throw new ActionStateChanged(
+        'Page state changed; capture a fresh observation before acting.',
+      );
     const before = await this.focus();
     const urlBefore = this.page.url();
     const requestedAction = action;
-    if (this.engine === 'webkit' && ['Tab', 'Shift+Tab'].includes(action.key ?? ''))
-      action = { ...action, key: action.key === 'Tab' ? 'Alt+Tab' : 'Alt+Shift+Tab' };
+    if (
+      action.kind === 'press' &&
+      ['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.key ?? '')
+    ) {
+      const backwards = action.key!.includes('Shift');
+      action = {
+        ...action,
+        key:
+          this.engine === 'webkit'
+            ? backwards
+              ? 'Alt+Shift+Tab'
+              : 'Alt+Tab'
+            : backwards
+              ? 'Shift+Tab'
+              : 'Tab',
+      };
+    }
     let outcome = 'performed';
     if (action.kind === 'press') {
       if (!action.key) throw Error('A keyboard action needs a permitted key.');
