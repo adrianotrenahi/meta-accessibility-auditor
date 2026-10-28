@@ -273,7 +273,8 @@ test('An explicit denied entry becomes an untested limit, never a finding or a f
 test('An explicit Google traffic challenge needs its actual host, path and text; ordinary pages stay available', () => {
   const text = 'Our systems have detected unusual traffic from your computer network.';
   const url = 'https://www.google.com/sorry/index?continue=search';
-  assert.match(publicEntryLimit('Google', { url, text })!, /automated-traffic challenge/);
+  for (const title of ['Google', 'Access Denied', '403 Forbidden', 'Request blocked'])
+    assert.match(publicEntryLimit(title, { url, text })!, /automated-traffic challenge/);
   assert.match(
     publicEntryLimit('Google', {
       url: 'https://google.es/sorry/index',

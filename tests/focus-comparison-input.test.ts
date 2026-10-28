@@ -6,11 +6,24 @@ import { join } from 'node:path';
 import { Store, digest } from '../src/store.js';
 import { requestEvidence } from '../src/request-evidence.js';
 import { suppliedImageIds } from '../src/image-receipt.js';
-import { JOURNEY_EVIDENCE_VERSION, compareJourneyTotals } from '../src/journey-evidence.js';
+import {
+  JOURNEY_EVIDENCE_VERSION,
+  JOURNEY_CONTEXT_LIMIT,
+  UNRECOGNISED_BUNDLE_LIMIT,
+  compareJourneyTotals,
+} from '../src/journey-evidence.js';
 import type { RecordEntry } from '../src/types.js';
 
 function fixture(
-  options: { key?: string; price?: number; changedUrl?: boolean; losePrice?: boolean } = {},
+  options: {
+    key?: string;
+    price?: number;
+    changedUrl?: boolean;
+    losePrice?: boolean;
+    choices?: boolean;
+    choicesComplete?: boolean;
+    limits?: string[];
+  } = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), 'meta-focus-input-'));
   const store = new Store(directory);
@@ -40,6 +53,7 @@ function fixture(
         sourceCaptureId: screen.id,
         sourceCaptureHash: screen.hash,
         sourceImageHash: screen.payload.imageHash,
+        limit: JOURNEY_CONTEXT_LIMIT,
         data: {
           commerce:
             options.price === undefined || (options.losePrice && n > 1)
@@ -51,9 +65,21 @@ function fixture(
                   items: [{ id: 'bag', quantity: 1 }],
                   disclosure: null,
                 },
-          choices: [],
-          choicesComplete: true,
-          limits: [],
+          choices: options.choices
+            ? [
+                {
+                  id: 'gift',
+                  selector: '#gift',
+                  type: 'checkbox',
+                  checked: n > 1,
+                  selectedIndexes: [],
+                  quantity: null,
+                  extra: { id: 'gift', price: 5, currency: 'EUR' },
+                },
+              ]
+            : [],
+          choicesComplete: options.choicesComplete ?? true,
+          limits: options.limits ?? [],
         },
       },
       [screen.id],
@@ -211,6 +237,55 @@ test('A mandatory older comparison cannot be filtered to make an oversized origi
       () => requestEvidence(x.store, x.run.id, 'analyst', current),
       /Required original screens exceed/,
     );
+  } finally {
+    x.close();
+  }
+});
+
+for (const options of [
+  { choices: true },
+  { choicesComplete: false },
+  { limits: ['Choice scope was incomplete'] },
+]) {
+  test(`Original selection context survives empty price summary: ${JSON.stringify(options)}`, () => {
+    const x = fixture(options);
+    try {
+      assert.equal(x.older.payload.selectionSame, null);
+      assert.equal(x.older.payload.beforeTotal, null);
+      const read = x.read();
+      assert(read.records.some((record) => record.id === x.older.id));
+      assert.deepEqual(suppliedImageIds(read.read, read.records), [
+        x.first.id,
+        x.second.id,
+        x.current.id,
+      ]);
+    } finally {
+      x.close();
+    }
+  });
+}
+
+test('The latest comparison stays supplied when the current original is an observation-only recapture', () => {
+  const x = fixture();
+  try {
+    const current = x.store.append(x.run.id, 'capture', 'browser', x.current.payload);
+    const read = requestEvidence(x.store, x.run.id, 'analyst', current);
+    assert(read.records.some((record) => record.id === x.latest.id));
+    assert.deepEqual(suppliedImageIds(read.read, read.records), [
+      x.second.id,
+      x.current.id,
+      current.id,
+    ]);
+  } finally {
+    x.close();
+  }
+});
+
+test('The known unavailable-bundle limit does not discard complete empty choice context', () => {
+  const x = fixture({ limits: [UNRECOGNISED_BUNDLE_LIMIT] });
+  try {
+    const read = x.read();
+    assert.deepEqual(suppliedImageIds(read.read, read.records), [x.second.id, x.current.id]);
   } finally {
     x.close();
   }

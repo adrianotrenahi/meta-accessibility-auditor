@@ -1,7 +1,13 @@
 import { recordIsIntact, type Store } from './store.js';
 import type { RecordEntry, Role } from './types.js';
 import { reviewFeedbackIds } from './review-feedback.js';
-import { JOURNEY_EVIDENCE_VERSION, INCOMPARABLE_TOTALS_LIMIT } from './journey-evidence.js';
+import {
+  JOURNEY_EVIDENCE_VERSION,
+  INCOMPARABLE_TOTALS_LIMIT,
+  JOURNEY_CONTEXT_LIMIT,
+  UNRECOGNISED_BUNDLE_LIMIT,
+  journeyDataSchema,
+} from './journey-evidence.js';
 import {
   baselineHasIndependentUse,
   makeImageReceipt,
@@ -111,11 +117,59 @@ function emptyEarlierTraversal(record: RecordEntry, current: RecordEntry, record
     !(before.seq < action.seq && action.seq < after.seq && after.seq < record.seq) ||
     action.payload.action?.kind !== 'press' ||
     !['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.payload.action.key) ||
+    record.sources.length !== 5 ||
     ![before.id, after.id, action.id].every((id) => record.sources.includes(id))
   )
     return false;
   try {
-    originalClosure(records, [record.id]);
+    const chain = originalClosure(records, [record.id]);
+    const contexts = chain.filter(
+      (item) =>
+        record.sources.includes(item.id) &&
+        item.kind === 'observation' &&
+        item.payload.method === 'journey_context',
+    );
+    if (contexts.length !== 2) return false;
+    for (const capture of [before, after]) {
+      const matching = contexts.filter((item) => item.payload.sourceCaptureId === capture.id);
+      if (matching.length !== 1) return false;
+      const context = matching[0]!;
+      const value = context.payload;
+      if (
+        context.author !== 'browser' ||
+        value.version !== JOURNEY_EVIDENCE_VERSION ||
+        value.stable !== true ||
+        value.limit !== JOURNEY_CONTEXT_LIMIT ||
+        value.sourceCaptureHash !== capture.hash ||
+        value.sourceImageHash !== capture.payload.imageHash ||
+        context.sources.length !== 1 ||
+        context.sources[0] !== capture.id ||
+        Object.keys(value).some(
+          (key) =>
+            ![
+              'method',
+              'version',
+              'stable',
+              'sourceCaptureId',
+              'sourceCaptureHash',
+              'sourceImageHash',
+              'data',
+              'limit',
+              '_sourcesHash',
+            ].includes(key),
+        )
+      )
+        return false;
+      const parsed = journeyDataSchema.safeParse(value.data);
+      if (
+        !parsed.success ||
+        parsed.data.commerce !== null ||
+        parsed.data.choices.length !== 0 ||
+        parsed.data.choicesComplete !== true ||
+        parsed.data.limits.some((limit) => limit !== UNRECOGNISED_BUNDLE_LIMIT)
+      )
+        return false;
+    }
     return true;
   } catch {
     // A missing/changed dependency must still refuse the request, not disappear from it.
@@ -149,6 +203,9 @@ export function requestEvidence(
       originals.filter((record) => record.kind === 'capture').map((record) => record.id),
     );
     const requiredIds = new Set(originals.map((record) => record.id));
+    const latestComparison = records.findLast(
+      (record) => record.kind === 'observation' && record.payload.method === 'comparable_totals',
+    );
     // Read attached measurements and reader results with their entire original source
     // graph. A return comparison, for example, also needs the earlier typed-entry baseline.
     // Select attachments from this request's original pictures only: a historical source
@@ -160,6 +217,7 @@ export function requestEvidence(
         !(
           role === 'analyst' &&
           candidates.length === 0 &&
+          record.id !== latestComparison?.id &&
           !requiredIds.has(record.id) &&
           emptyEarlierTraversal(record, current, records)
         ),

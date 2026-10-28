@@ -6,6 +6,8 @@ import type { RecordEntry } from './types.js';
 export const JOURNEY_EVIDENCE_VERSION = 'journey-evidence/1';
 export const INCOMPARABLE_TOTALS_LIMIT =
   'Comparable selection, currency and original scope were not established. No unexplained increase or pass was inferred.';
+export const UNRECOGNISED_BUNDLE_LIMIT =
+  'A unique complete bundle offer with explicit item identities, quantities, price and currency was not established. Ordinary product prices were not treated as a journey total.';
 const key = z.string().min(1).max(200);
 const amount = z.number().finite().nonnegative().max(1_000_000_000);
 const currency = z.string().regex(/^[A-Z]{3}$/);
@@ -21,7 +23,7 @@ const choiceSchema = z
     extra: extraSchema.nullable(),
   })
   .strict();
-const dataSchema = z
+export const journeyDataSchema = z
   .object({
     commerce: z
       .object({
@@ -43,9 +45,9 @@ const dataSchema = z
     limits: z.array(z.string().max(500)).max(20),
   })
   .strict();
-type JourneyData = z.infer<typeof dataSchema>;
+type JourneyData = z.infer<typeof journeyDataSchema>;
 
-const observationLimit =
+export const JOURNEY_CONTEXT_LIMIT =
   'Only explicitly declared bundle-offer items, quantities, price/currency and permitted choice states were read. This is not a verdict about the total, disclosure quality or every visible price. Unrecognised commerce stays unknown.';
 
 function original(store: Store, runId: string, record: RecordEntry, kind: RecordEntry['kind']) {
@@ -106,7 +108,7 @@ export async function readJourneyContext(walk: BrowserWalk, source: RecordEntry)
   const stamp = await walk.observationStamp();
   const sameSource = source.payload.url === page.url() && source.payload.stateStamp === stamp;
   const data = sameSource
-    ? await page.evaluate(() => {
+    ? await page.evaluate((unrecognisedBundleLimit) => {
         const limits: string[] = [];
         const dom = {
           visible(e: Element) {
@@ -216,10 +218,7 @@ export async function readJourneyContext(walk: BrowserWalk, source: RecordEntry)
               disclosure,
             };
         }
-        if (!commerce)
-          limits.push(
-            'A unique complete bundle offer with explicit item identities, quantities, price and currency was not established. Ordinary product prices were not treated as a journey total.',
-          );
+        if (!commerce) limits.push(unrecognisedBundleLimit);
         const choices: {
           id: string;
           selector: string;
@@ -321,7 +320,7 @@ export async function readJourneyContext(walk: BrowserWalk, source: RecordEntry)
             'Some choice identities, meanings or states were not safely established; identical page addresses or totals do not prove an unchanged selection.',
           );
         return { commerce, choices, choicesComplete, limits };
-      })
+      }, UNRECOGNISED_BUNDLE_LIMIT)
     : null;
   const stable = sameSource && source.payload.stateStamp === (await walk.observationStamp());
   return store.append(
@@ -335,9 +334,9 @@ export async function readJourneyContext(walk: BrowserWalk, source: RecordEntry)
       sourceCaptureId: source.id,
       sourceCaptureHash: source.hash,
       sourceImageHash: source.payload.imageHash,
-      data: stable && data ? dataSchema.parse(data) : null,
+      data: stable && data ? journeyDataSchema.parse(data) : null,
       limit: stable
-        ? observationLimit
+        ? JOURNEY_CONTEXT_LIMIT
         : 'The original state changed before or during the read. No commerce or choice fact was inferred.',
     },
     [source.id],
@@ -360,7 +359,7 @@ function context(store: Store, runId: string, record: RecordEntry) {
   )
     throw Error('Journey comparison needs a stable original context bound to its exact screen.');
   capture(store, runId, source);
-  return { record: saved, capture: source, data: dataSchema.parse(saved.payload.data) };
+  return { record: saved, capture: source, data: journeyDataSchema.parse(saved.payload.data) };
 }
 
 export function compareJourneyTotals(

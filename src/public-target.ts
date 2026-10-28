@@ -39,11 +39,6 @@ export const PUBLIC_TRAFFIC_CHALLENGE =
   'The website presented an automated-traffic challenge. The requested journey was not reached; no model request was made.';
 
 export function publicEntryLimit(title: unknown, page?: { url?: unknown; text?: unknown }) {
-  if (
-    typeof title === 'string' &&
-    /^(access denied|403 forbidden|request blocked)$/i.test(title.trim())
-  )
-    return 'The website presented an access-denied entry page. The requested journey was not reached; no model request was made.';
   try {
     const url = new URL(typeof page?.url === 'string' ? page.url : '');
     if (
@@ -58,5 +53,10 @@ export function publicEntryLimit(title: unknown, page?: { url?: unknown; text?: 
   } catch {
     /* No explicit page evidence: do not infer a challenge. */
   }
+  if (
+    typeof title === 'string' &&
+    /^(access denied|403 forbidden|request blocked)$/i.test(title.trim())
+  )
+    return 'The website presented an access-denied entry page. The requested journey was not reached; no model request was made.';
   return null;
 }
