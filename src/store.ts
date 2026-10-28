@@ -8,6 +8,7 @@ import { groupPublished } from './finding-key.js';
 import { presentRecordPayload } from './presentation.js';
 import { readHashMatches, suppliedImageIds, type ImageReceipt } from './image-receipt.js';
 import { candidateOriginalEvidence } from './candidate-target.js';
+import { navigationInput } from './navigation-input.js';
 export const digest = (value: string | Uint8Array) =>
   createHash('sha256').update(value).digest('hex');
 export const recordIsIntact = (record: RecordEntry) =>
@@ -249,11 +250,16 @@ export class Store {
     const selected = records.filter((r) => wanted.has(r.id));
     const missing = [...wanted].filter((id) => !selected.some((r) => r.id === id));
     if (missing.length) throw Error('Required original evidence is missing.');
+    const navigation =
+      role === 'driver' && imageReceipt
+        ? navigationInput(selected, imageReceipt.currentCaptureId).manifest
+        : undefined;
     const read = this.append(runId, 'read_snapshot', role, {
       throughSeq: records.at(-1)?.seq ?? 0,
       records: selected.map((r) => ({ id: r.id, hash: r.hash, sources: r.sources })),
       missing,
       ...(imageReceipt ? { imageReceipt } : {}),
+      ...(navigation ? { navigationView: navigation } : {}),
     });
     return { read, records: selected };
   }

@@ -19,6 +19,7 @@ import {
 } from './visual-inspection.js';
 import { missingEvidenceSchema } from './evidence-checks.js';
 import { EvidenceRequestLimit } from './request-evidence.js';
+import { navigationInput } from './navigation-input.js';
 export const actionSchema = z.object({
   kind: z.enum(['press', 'type', 'scroll', 'back', 'wait', 'voiceover', 'finish']),
   key: z
@@ -220,6 +221,19 @@ export class MetaModels {
           throw Error('The supplied original image bytes do not match their receipt.');
       }
     }
+    let inputText = JSON.stringify(records);
+    if (role === 'driver' && read && Object.hasOwn(read.payload, 'navigationView')) {
+      if (
+        JSON.stringify(
+          records.map((record) => ({ id: record.id, hash: record.hash, sources: record.sources })),
+        ) !== JSON.stringify(read.payload.records)
+      )
+        throw Error('The navigation view needs every unchanged original in its pinned read.');
+      const navigation = navigationInput(records, read.payload.imageReceipt.currentCaptureId);
+      if (JSON.stringify(navigation.manifest) !== JSON.stringify(read.payload.navigationView))
+        throw Error('The navigation view does not match its original recorded manifest.');
+      inputText = navigation.text;
+    }
     const body: any = {
       model: 'muse-spark-1.3',
       store: false,
@@ -231,7 +245,7 @@ export class MetaModels {
         {
           role: 'user',
           content: [
-            { type: 'input_text', text: JSON.stringify(records) },
+            { type: 'input_text', text: inputText },
             ...(read
               ? [
                   {

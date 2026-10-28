@@ -23,7 +23,9 @@ export class EvidenceRequestLimit extends Error {
   ) {
     super(
       kind === 'input'
-        ? 'Required original evidence exceeds the input allowance; this check remains incomplete.'
+        ? role === 'driver'
+          ? 'The page information was too large for the next navigation decision. No navigation model request was sent.'
+          : 'Required original evidence exceeds the input allowance; this check remains incomplete.'
         : 'Required original screens exceed this request allowance; review remains incomplete.',
     );
   }
