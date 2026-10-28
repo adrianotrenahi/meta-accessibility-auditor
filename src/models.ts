@@ -159,7 +159,7 @@ const jobInstructions = {
     instructions.analyst +
     criterionInstructions +
     VISUAL_INSPECTION_GUIDANCE +
-    ' Return six coverage rows per supplied original viewport, using the exact captureId, topic, state, reason and sources. Missing rows stay unassessed. ' +
+    ' Return at most eighteen visual coverage rows for supplied original viewports, prioritising the current viewport and using the exact captureId, topic, state, reason and sources. Additional supplied original pictures provide source context; missing topics remain unassessed. ' +
     "Visual observations separate visiblePremise, interpretation, taskConcern, recommendation and limits. A visual finding names its visualTopic and zero-based visualObservationIndex; reuse that observation's exact visiblePremise and cite its original image. " +
     'Use null visual references for a purely measured claim. Ask at most two specific missingEvidence checks on the currently supplied original capture when needed; allowed methods are measurement, keyboard_focus or voiceover. They are requests, not completed evidence. ' +
     'Prioritise up to five well-supported criterion assessments per checkpoint, one per captureId and criterionId pair, using the latest original capture and related supplied states as evidence. Other declared checks remain owed; do not fill a quota or write long speculative proposals. Claims with missing facts remain unaccepted or uncertain.',

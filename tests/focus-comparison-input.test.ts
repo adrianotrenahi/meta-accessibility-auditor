@@ -226,17 +226,20 @@ for (const changes of [
   });
 }
 
-test('A mandatory older comparison cannot be filtered to make an oversized original chain fit', () => {
+test('A mandatory older comparison remains supplied with every original picture above the former ceiling', () => {
   const x = fixture();
   try {
     const current = x.store.append(x.run.id, 'capture', 'browser', x.current.payload, [
       x.older.id,
       x.latest.id,
     ]);
-    assert.throws(
-      () => requestEvidence(x.store, x.run.id, 'analyst', current),
-      /Required original screens exceed/,
-    );
+    const packet = requestEvidence(x.store, x.run.id, 'analyst', current);
+    assert.equal(suppliedImageIds(packet.read, packet.records).length, 4);
+    for (const required of [x.older, x.latest, x.first, x.second, x.current, current])
+      assert(
+        packet.records.some((record) => record.id === required.id && record.hash === required.hash),
+      );
+    assert.deepEqual(packet.read.payload.imageReceipt.recordsOnly, []);
   } finally {
     x.close();
   }

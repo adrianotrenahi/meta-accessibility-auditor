@@ -224,11 +224,35 @@ test('Cropped, unstable, annotated or provenance-unknown images cannot support a
   }
 });
 
-test('Visual coverage cannot expand beyond the existing three-image analysis allowance', () => {
-  assert.throws(
-    () => normalizeVisualCoverage([], ['one', 'two', 'three', 'four'], [], []),
-    /three-original-viewport request allowance/,
-  );
+test('Four supplied originals keep missing topics unassessed instead of borrowing the former image ceiling', () => {
+  const x = setup();
+  try {
+    const extra = Array.from({ length: 3 }, () =>
+      x.store.append(x.run.id, 'capture', 'browser', x.capture.payload),
+    );
+    const ids = [x.capture, ...extra].map((r) => r.id);
+    const result = normalizeVisualCoverage(x.rows, ids, x.store.records(x.run.id), ids);
+    assert.equal(result.coverage.length, 24);
+    assert.equal(result.coverage.filter((row) => row.state === 'examined').length, 6);
+    for (const capture of extra)
+      assert(
+        result.coverage
+          .filter((row) => row.captureId === capture.id)
+          .every((row) => row.state === 'not_assessed'),
+      );
+    assert.throws(
+      () =>
+        normalizeVisualCoverage(
+          [],
+          Array.from({ length: 51 }, (_, i) => String(i)),
+          [],
+          [],
+        ),
+      /documented original-image request allowance/,
+    );
+  } finally {
+    x.close();
+  }
 });
 
 test('Changed records and source links cannot quietly preserve visual examinations', () => {

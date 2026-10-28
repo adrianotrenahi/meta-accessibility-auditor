@@ -17,7 +17,7 @@ import {
 } from '../src/assessment.js';
 import { CRITERIA_VERSION, evaluateCriteria } from '../src/criteria.js';
 import { requestEvidence } from '../src/request-evidence.js';
-import { imageRecordsForRead, suppliedImageIds } from '../src/image-receipt.js';
+import { imageRecordsForRead, suppliedImageIds, makeImageReceipt } from '../src/image-receipt.js';
 import type { RecordEntry } from '../src/types.js';
 import { BrowserWalk } from '../src/browser.js';
 import { ReturnEvidence } from '../src/journey-evidence.js';
@@ -167,6 +167,72 @@ function fixture(preserved = true) {
       .prepare('UPDATE records SET body=?,hash=? WHERE id=?')
       .run(body, digest(body), record.id);
   };
+  // Reconstruct the historical v1 record-only contract explicitly. New requests
+  // use v2 and supply all four originals; these fixtures exercise old-reader guards.
+  const legacyPacket = () => {
+    const records = store
+      .records(run.id)
+      .filter(
+        (record) =>
+          !['read_snapshot', 'model_response', 'visual_coverage'].includes(record.kind) &&
+          !(record.kind === 'criterion_scope' && record.payload.captureId === beforeType.id),
+      );
+    const omitted = {
+      captureId: beforeType.id,
+      captureHash: beforeType.hash,
+      imageHash: beforeType.payload.imageHash,
+      reason: 'approved_return_entry_baseline' as const,
+      comparisonId: comparison.id,
+      baselineId: baseline.id,
+      typedActionId: typed.id,
+    };
+    const receipt = makeImageReceipt(records, current.id, omitted);
+    const payload = {
+      records: records.map((record) => ({
+        id: record.id,
+        hash: record.hash,
+        sources: record.sources,
+      })),
+      imageReceipt: receipt,
+    };
+    const proposed: RecordEntry = {
+      id: 'legacy-fixture-read',
+      runId: run.id,
+      seq: records.at(-1)!.seq + 1,
+      kind: 'read_snapshot',
+      author: 'analyst',
+      payload,
+      hash: digest(JSON.stringify(payload)),
+      sources: [],
+      createdAt: new Date().toISOString(),
+    };
+    suppliedImageIds(proposed, records);
+    for (const capture of records.filter((record) => record.kind === 'capture'))
+      store.image(run.id, capture.payload.imageFile);
+    let notice = store
+      .records(run.id)
+      .find((record) => record.payload.method === 'records_only_return_baseline');
+    if (!notice)
+      notice = store.append(
+        run.id,
+        'limit',
+        'browser',
+        {
+          method: 'records_only_return_baseline',
+          state: 'NOT_TESTED',
+          recordsOnlyCaptureId: beforeType.id,
+          comparisonId: comparison.id,
+          reason: 'Historical return-check read this baseline without supplying its picture.',
+        },
+        [beforeType.id],
+      );
+    return store.snapshot(
+      run.id,
+      'analyst',
+      [...records.map((record) => record.id), notice.id],
+      receipt,
+    );
+  };
   return {
     dir,
     store,
@@ -183,6 +249,7 @@ function fixture(preserved = true) {
     back,
     current,
     comparison,
+    legacyPacket,
     close() {
       store.close();
       rmSync(dir, { recursive: true, force: true });
@@ -191,7 +258,7 @@ function fixture(preserved = true) {
 }
 
 for (const preserved of [true, false])
-  test(`Ordinary C15 ${preserved ? 'preserved' : 'lost'} uses three actual analyst images, four raw captures and independent review`, async () => {
+  test(`Ordinary C15 ${preserved ? 'preserved' : 'lost'} supplies all four original images to analysis and independent review`, async () => {
     const x = fixture(preserved);
     try {
       const originals = x.store.records(x.run.id).filter((r) => r.kind !== 'criterion_scope');
@@ -277,7 +344,7 @@ for (const preserved of [true, false])
         'One count and one generation per existing analyst/reviewer role',
       );
       for (const [role, imageCount] of [
-        ['analyst_result', 3],
+        ['analyst_result', 4],
         ['reviewer_result', 4],
       ] as const) {
         const body = calls.find((call) => call.role === role)!.body;
@@ -294,8 +361,9 @@ for (const preserved of [true, false])
       }
       const reads = x.store.records(x.run.id).filter((r) => r.kind === 'read_snapshot');
       const analyst = reads.find((r) => r.author === 'analyst')!;
-      assert.equal(analyst.payload.imageReceipt.recordsOnly[0].captureId, x.beforeType.id);
+      assert.deepEqual(analyst.payload.imageReceipt.recordsOnly, []);
       assert.deepEqual(suppliedImageIds(analyst, x.store.records(x.run.id)), [
+        x.beforeType.id,
         x.entry.id,
         x.beforeBack.id,
         x.current.id,
@@ -346,7 +414,7 @@ for (const preserved of [true, false])
     }
   });
 
-test('A records-only baseline retains all required checks and one explicit untested notice', () => {
+test('A historical records-only baseline retains all required checks and one explicit untested notice', () => {
   const x = fixture();
   try {
     const scope = x.store
@@ -357,7 +425,7 @@ test('A records-only baseline retains all required checks and one explicit untes
       );
     assert(scope, 'The baseline still owes all declared checks.');
     for (let n = 0; n < 2; n++) {
-      const packet = requestEvidence(x.store, x.run.id, 'analyst', x.current);
+      const packet = x.legacyPacket();
       assert.equal(packet.records.filter((record) => record.kind === 'capture').length, 4);
       assert.equal(suppliedImageIds(packet.read, packet.records).length, 3);
       assert(!packet.records.some((record) => record.id === scope.id));
@@ -440,7 +508,7 @@ test('Only a complete exact approved nonvisual baseline earns the single records
         );
       }
       assert.throws(
-        () => requestEvidence(x.store, x.run.id, 'analyst', x.current),
+        () => x.legacyPacket(),
         (error) => error instanceof Error,
         damage,
       );
@@ -459,7 +527,7 @@ test('Only a complete exact approved nonvisual baseline earns the single records
 test('Legacy reads still require all selected pictures and malformed new receipts cannot imply omission', async () => {
   const x = fixture();
   try {
-    const packet = requestEvidence(x.store, x.run.id, 'analyst', x.current);
+    const packet = x.legacyPacket();
     const legacy = x.store.snapshot(
       x.run.id,
       'analyst',
@@ -528,7 +596,7 @@ test('Legacy reads still require all selected pictures and malformed new receipt
 test('Unsupplied baseline images cannot receive a visual finding, observation or criterion assessment', () => {
   const x = fixture();
   try {
-    const packet = requestEvidence(x.store, x.run.id, 'analyst', x.current);
+    const packet = x.legacyPacket();
     const imageIds = suppliedImageIds(packet.read, packet.records);
     const beforeScope = x.store
       .records(x.run.id)
@@ -630,8 +698,8 @@ test('Review feedback can be read as context but can never become a factual find
     assert(feedbackPacket.records.some((record) => record.id === review.id));
     assert.equal(
       imageRecordsForRead(feedbackPacket).length,
-      3,
-      'Review feedback does not add images or expand an old read graph',
+      4,
+      'Review feedback does not add images beyond the four required originals',
     );
   } finally {
     x.close();
@@ -641,7 +709,7 @@ test('Review feedback can be read as context but can never become a factual find
 test('Final criterion, visual coverage and publication gates cannot revive an unsupplied baseline image', () => {
   const x = fixture();
   try {
-    const packet = requestEvidence(x.store, x.run.id, 'analyst', x.current);
+    const packet = x.legacyPacket();
     const scope = x.store
       .records(x.run.id)
       .find(
@@ -836,7 +904,7 @@ test('Self-consistent read rewriting or receipt removal cannot change which imag
 });
 
 test(
-  'Real controlled kept/lost return observations fit three images without deleting their four originals',
+  'Real controlled kept/lost return observations supply all four originals without omission',
   { timeout: 90000 },
   async () => {
     const server = createServer((request, response) => {
@@ -898,6 +966,7 @@ test(
           const packet = requestEvidence(store, run.id, 'analyst', returned);
           assert.equal(packet.records.filter((record) => record.kind === 'capture').length, 4);
           assert.deepEqual(suppliedImageIds(packet.read, packet.records), [
+            beforeType.id,
             entry.id,
             beforeBack.id,
             returned.id,
