@@ -14,6 +14,71 @@ const box = z
     height: z.number().positive(),
   })
   .strict();
+export const hostActivitySchema = z
+  .object({
+    version: z.literal('recorded-activity/1'),
+    runId: id,
+    entries: z
+      .array(
+        z
+          .object({
+            id,
+            sequence: z.number().int().positive(),
+            recordHash: hash,
+            createdAt: z.iso.datetime(),
+            kind: z.enum(['progress', 'action', 'preparing', 'limit']),
+            action: z.enum([
+              'Recorded progress',
+              'Input result',
+              'Preparing next action',
+              'Run limit',
+            ]),
+            reason: z.string().max(500),
+            target: z
+              .enum([
+                'Tab',
+                'Shift+Tab',
+                'Alt+Tab',
+                'Alt+Shift+Tab',
+                'Enter',
+                'Space',
+                'Escape',
+                'ArrowDown',
+                'ArrowUp',
+                'ArrowLeft',
+                'ArrowRight',
+              ])
+              .optional(),
+          })
+          .strict(),
+      )
+      .max(40),
+  })
+  .strict()
+  .superRefine((activity, ctx) => {
+    const ids = new Set<string>();
+    let previous = 0;
+    const labels = {
+      progress: 'Recorded progress',
+      action: 'Input result',
+      preparing: 'Preparing next action',
+      limit: 'Run limit',
+    };
+    for (const entry of activity.entries) {
+      if (
+        ids.has(entry.id) ||
+        entry.sequence <= previous ||
+        entry.action !== labels[entry.kind] ||
+        (entry.target !== undefined && entry.kind !== 'action')
+      )
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Recorded activity identity, order or kind is invalid',
+        });
+      ids.add(entry.id);
+      previous = entry.sequence;
+    }
+  });
 export const hostSnapshotSchema = z
   .object({
     protocol: z.literal('access-walk/host-v1'),
@@ -30,6 +95,7 @@ export const hostSnapshotSchema = z
       })
       .strict(),
     sequence: z.number().int().nonnegative(),
+    activity: hostActivitySchema.optional(),
     captures: z.array(
       z
         .object({
@@ -84,6 +150,8 @@ export const hostSnapshotSchema = z
   })
   .strict()
   .superRefine((snapshot, ctx) => {
+    if (snapshot.activity && snapshot.activity.runId !== snapshot.run.id)
+      ctx.addIssue({ code: 'custom', message: 'Recorded activity belongs to a different run' });
     const ids = new Set<string>();
     let previousSequence = 0;
     for (const capture of snapshot.captures) {
@@ -153,6 +221,11 @@ export function applyHostSnapshot(
     const { imageAvailable: _isAvailable, ...retained } = now ?? {};
     if (!now || JSON.stringify(retained) !== JSON.stringify(original))
       throw Error('A retained original capture cannot be changed or removed.');
+  }
+  for (const previous of current.activity?.entries ?? []) {
+    const retained = next.activity?.entries.find((entry) => entry.id === previous.id);
+    if (retained && JSON.stringify(retained) !== JSON.stringify(previous))
+      throw Error('A retained recorded activity entry cannot be rewritten.');
   }
   return next;
 }
