@@ -10,6 +10,7 @@ export type MetaTransportDiagnostic = {
   attempts: number;
   code: string;
   status?: number;
+  causeCodes?: string[];
 };
 const beforeConnection = new Set(['ENOTFOUND', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT']);
 const knownCodes = new Set([
@@ -181,12 +182,15 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
           ? 'MIXED_CAUSES'
           : (codes.find((code) => code !== 'OTHER') ??
             (error instanceof SyntaxError ? 'INVALID_JSON' : 'CONNECTION_UNKNOWN')),
+        ...(mixedCauses ? { causeCodes: [...new Set(codes)].slice(0, 16) } : {}),
       };
       const repeatableCountFailure =
         phase === 'input_count' &&
         !(error instanceof SyntaxError) &&
         (genericFetchFailure(error) || codes.some((code) => knownCodes.has(code)));
-      if (!cancelled && (provedBeforeConnection || repeatableCountFailure))
+      // Internal count timeouts cannot start generation. The parent signal/Stop
+      // checks above and below still forbid another attempt after cancellation.
+      if (repeatableCountFailure || (!cancelled && provedBeforeConnection))
         delay = shortDelay(attempt);
     }
     if (!diagnostic) throw Error('Meta request ended without a result.');
