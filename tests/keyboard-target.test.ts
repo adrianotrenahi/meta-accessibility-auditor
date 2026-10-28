@@ -124,10 +124,19 @@ for (const engine of ['chromium', 'webkit'] as const) {
         assert(x.app.store.record(x.run.id, r.payload.sourceCaptureId));
       assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'capture').length, 5);
       assert.equal(x.app.store.usage().requests.length, 0);
-      await x.walk.act(
-        { kind: 'press', key: 'Enter', note: 'Explicit separate activation' },
-        result.current,
-      );
+      const activation: Action = {
+        kind: 'press',
+        key: 'Enter',
+        note: 'Explicit separate activation',
+      };
+      // A separate decision takes a fresh original; a refused input is never replayed.
+      const first = await x.step(await x.walk.captureSettled(), activation);
+      if (!first.performed) {
+        assert.equal(await x.walk.page.locator('#target').textContent(), 'Target');
+        assert.equal((await x.walk.focus()).name, 'Target');
+        const refreshed = await x.step(first.current, activation);
+        assert(refreshed.performed, 'Fresh separate activation must actually send its input.');
+      }
       assert.equal(await x.walk.page.locator('#target').textContent(), 'Activated');
     } finally {
       await x.close();

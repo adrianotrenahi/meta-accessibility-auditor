@@ -481,7 +481,11 @@ export class Runner {
           run.id,
           'navigator_note',
           'driver',
-          { kind: 'progress', text: action.note },
+          {
+            kind: 'progress',
+            text: action.note,
+            ...(action.kind === 'focus_target' ? { progressMode: 'keyboard_target' } : {}),
+          },
           [current.id],
         );
         if (action.kind === 'finish') {
