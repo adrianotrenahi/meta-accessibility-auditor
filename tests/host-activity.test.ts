@@ -27,7 +27,9 @@ function fixture() {
 test('Original preparation and a stopped-before-generation limit are public without invented decisions', () => {
   const x = fixture();
   try {
-    const initial = x.note('Initial page captured.');
+    const initial = x.note(
+      'Initial page captured. Automatic scan results do not establish keyboard or screen-reader operation.',
+    );
     const preparation = x.store.snapshot(x.run.id, 'driver').read;
     const limit = x.store.append(x.run.id, 'limit', 'runner', {
       reason: 'Page information exceeded the navigation allowance.',
@@ -52,11 +54,14 @@ test('Original preparation and a stopped-before-generation limit are public with
 test('Activity-only revisions retain stable source rows and use a bounded original sequence', () => {
   const x = fixture();
   try {
-    x.note('Recorded before typing.');
+    x.note(
+      'Initial page captured. Automatic scan results do not establish keyboard or screen-reader operation.',
+    );
     const first = exportHostSnapshot(x.store, x.run.id).snapshot;
     const repeat = exportHostSnapshot(x.store, x.run.id).snapshot;
     assert.equal(repeat.sequence, first.sequence);
-    for (let i = 0; i < 45; i++) x.note('Progress ' + i);
+    for (let i = 0; i < 45; i++)
+      x.store.append(x.run.id, 'limit', 'runner', { reason: 'Progress ' + i });
     const next = exportHostSnapshot(x.store, x.run.id).snapshot;
     assert(next.sequence > first.sequence);
     assert.equal(next.activity!.entries.length, 40);
@@ -113,6 +118,7 @@ test('Generated notes wait for actual input and never export typed values, keys 
       },
       [source.id],
     );
+    x.store.snapshot(x.run.id, 'driver');
     const snapshot = exportHostSnapshot(x.store, x.run.id).snapshot;
     const visible = JSON.stringify(snapshot.activity);
     assert(snapshot.activity!.entries.some((e) => e.id === note.id));
@@ -152,8 +158,8 @@ test('Generated notes wait for actual input and never export typed values, keys 
 test('Old snapshots remain valid; foreign, duplicate, reordered and rewritten activity stays refused', () => {
   const x = fixture();
   try {
-    x.note('One');
-    x.note('Two');
+    x.store.append(x.run.id, 'limit', 'runner', { reason: 'One' });
+    x.store.append(x.run.id, 'limit', 'runner', { reason: 'Two' });
     const snapshot = exportHostSnapshot(x.store, x.run.id).snapshot;
     const { activity, ...legacy } = snapshot;
     assert(hostSnapshotSchema.safeParse(legacy).success);
@@ -179,6 +185,200 @@ test('Old snapshots remain valid; foreign, duplicate, reordered and rewritten ac
         }),
       /different run/,
     );
+  } finally {
+    x.close();
+  }
+});
+
+test('A note delayed for input scrubbing cannot appear behind a previously published cursor', () => {
+  for (const outcome of ['input', 'next-read', 'stopped'] as const) {
+    const x = fixture();
+    try {
+      const asset = x.store.asset(x.run.id, 'source.png', Buffer.from('controlled source'));
+      const source = x.store.append(x.run.id, 'capture', 'browser', {
+        stable: true,
+        imageFile: asset.file,
+        imageHash: asset.hash,
+        width: 1440,
+        height: 900,
+        url: x.run.url,
+        title: 'Controlled input',
+        elements: [],
+      });
+      x.note(
+        'Initial page captured. Automatic scan results do not establish keyboard or screen-reader operation.',
+      );
+      x.store.append(x.run.id, 'model_response', 'driver', { output: 'PRIVATE_PROVIDER_OUTPUT' });
+      const pending = x.store.append(
+        x.run.id,
+        'navigator_note',
+        'driver',
+        { kind: 'progress', text: 'Type PRIVATE_QUERY.' },
+        [source.id],
+      );
+      const limit = x.store.append(x.run.id, 'limit', 'runner', {
+        reason: 'The original journey context could not be collected.',
+      });
+      const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+      const cursor = first.activity!.entries.at(-1)!.sequence;
+      if (outcome === 'input') {
+        x.store.append(
+          x.run.id,
+          'action',
+          'browser',
+          {
+            method: 'actual_keyboard_or_browser',
+            sourceCaptureId: source.id,
+            action: { kind: 'type', text: 'PRIVATE_QUERY' },
+            outcome: 'performed',
+          },
+          [source.id],
+        );
+        x.store.snapshot(x.run.id, 'driver');
+      } else if (outcome === 'next-read') x.store.snapshot(x.run.id, 'driver');
+      else x.store.finish(x.run.id, 'partial', 'Stopped before an input was recorded.');
+      const next = exportHostSnapshot(x.store, x.run.id).snapshot;
+      const delta = next.activity!.entries.filter((e) => e.sequence > cursor);
+      if (outcome === 'input') {
+        assert(
+          delta.some((e) => e.id === pending.id),
+          'The now-safe original note must be delivered after the prior cursor',
+        );
+        assert(!JSON.stringify(delta).includes('PRIVATE_QUERY'));
+      } else assert(!next.activity!.entries.some((e) => e.id === pending.id));
+      assert(
+        delta.some((e) => e.id === limit.id),
+        'The intervening real limit must become visible',
+      );
+      assert.equal(x.store.usage(x.run.id).requests.length, 0);
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('A pending note older than the forty-row window still holds the suffix while run state stays readable', () => {
+  const x = fixture();
+  try {
+    const initial = x.note(
+      'Initial page captured. Automatic scan results do not establish keyboard or screen-reader operation.',
+    );
+    x.store.append(x.run.id, 'model_response', 'driver', { output: 'PRIVATE_RESPONSE' });
+    x.note('A generated note without recorded input.');
+    for (let i = 0; i < 45; i++)
+      x.store.append(x.run.id, 'limit', 'runner', { reason: 'Known limit ' + i });
+    const waiting = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.deepEqual(
+      waiting.activity!.entries.map((e) => e.id),
+      [initial.id],
+    );
+    assert.equal(waiting.run.state, 'running');
+    x.store.finish(x.run.id, 'partial', 'No input was recorded.');
+    const ended = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.equal(ended.run.state, 'partial');
+    assert.equal(ended.run.stopReason, 'No input was recorded.');
+    assert.equal(ended.activity!.entries.length, 40);
+    assert.equal(ended.activity!.entries.at(-1)!.reason, 'Known limit 44');
+    assert(ended.sequence > waiting.sequence);
+  } finally {
+    x.close();
+  }
+});
+
+test('A freeform note without a model response waits for the whole input interval and scrubs every typed value', () => {
+  const x = fixture();
+  try {
+    const asset = x.store.asset(x.run.id, 'source.png', Buffer.from('controlled source'));
+    const source = x.store.append(x.run.id, 'capture', 'browser', {
+      stable: true,
+      imageFile: asset.file,
+      imageHash: asset.hash,
+      width: 1440,
+      height: 900,
+      url: x.run.url,
+      title: 'Controlled input',
+      elements: [],
+    });
+    const initial = x.note(
+      'Initial page captured. Automatic scan results do not establish keyboard or screen-reader operation.',
+    );
+    const note = x.store.append(
+      x.run.id,
+      'navigator_note',
+      'driver',
+      { kind: 'progress', text: 'Type PRIVATE_FIRST then PRIVATE_SECOND.' },
+      [source.id],
+    );
+    assert.deepEqual(
+      exportHostSnapshot(x.store, x.run.id).snapshot.activity!.entries.map((e) => e.id),
+      [initial.id],
+      'Unpaired freeform text must not be made public without a prior model response',
+    );
+    for (const value of ['PRIVATE_FIRST', 'PRIVATE_SECOND']) {
+      x.store.append(x.run.id, 'action', 'browser', {
+        method: 'actual_keyboard_or_browser',
+        sourceCaptureId: source.id,
+        action: { kind: 'type', text: value },
+        outcome: 'performed',
+      });
+      assert.deepEqual(
+        exportHostSnapshot(x.store, x.run.id).snapshot.activity!.entries.map((e) => e.id),
+        [initial.id],
+        'The first input must not prematurely close an interval containing another input',
+      );
+    }
+    x.store.snapshot(x.run.id, 'driver');
+    const settled = exportHostSnapshot(x.store, x.run.id).snapshot;
+    const visible = settled.activity!.entries.find((e) => e.id === note.id)!;
+    assert.equal(visible.reason, 'Type [redacted input] then [redacted input].');
+    assert(!JSON.stringify(settled.activity).includes('PRIVATE_FIRST'));
+    assert(!JSON.stringify(settled.activity).includes('PRIVATE_SECOND'));
+    x.store.append(x.run.id, 'action', 'browser', {
+      method: 'actual_keyboard_or_browser',
+      action: { kind: 'type', text: 'Initial' },
+      outcome: 'performed',
+    });
+    const later = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.deepEqual(
+      later.activity!.entries.find((e) => e.id === initial.id),
+      settled.activity!.entries.find((e) => e.id === initial.id),
+      'The exact safe initial sentence cannot change after unrelated later typing',
+    );
+    assert.deepEqual(
+      later.activity!.entries.find((e) => e.id === note.id),
+      visible,
+    );
+    assert.doesNotThrow(() => applyHostSnapshot(settled, later));
+  } finally {
+    x.close();
+  }
+});
+
+test('Unsupported note sources never establish a verified input relationship', () => {
+  const x = fixture();
+  try {
+    const read = x.store.snapshot(x.run.id, 'driver').read;
+    const response = x.store.append(x.run.id, 'model_response', 'driver', { output: 'PRIVATE' });
+    const note = x.store.append(
+      x.run.id,
+      'navigator_note',
+      'driver',
+      { kind: 'progress', text: 'A note sourced to an unsupported record.' },
+      [read.id, response.id],
+    );
+    const action = x.store.append(x.run.id, 'action', 'browser', {
+      method: 'actual_keyboard_or_browser',
+      action: { kind: 'press', key: 'Tab' },
+      outcome: 'performed',
+    });
+    const limit = x.store.append(x.run.id, 'limit', 'runner', { reason: 'Known recorded limit.' });
+    x.store.snapshot(x.run.id, 'driver');
+    x.store.finish(x.run.id, 'partial', 'No verified note-to-input link.');
+    const snapshot = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert(!snapshot.activity!.entries.some((e) => e.id === note.id));
+    assert(snapshot.activity!.entries.some((e) => e.id === action.id));
+    assert(snapshot.activity!.entries.some((e) => e.id === limit.id));
+    assert.equal(snapshot.run.stopReason, 'No verified note-to-input link.');
   } finally {
     x.close();
   }

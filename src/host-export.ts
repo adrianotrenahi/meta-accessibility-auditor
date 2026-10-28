@@ -115,7 +115,7 @@ export function exportHostSnapshot(store: Store, runId: string) {
     provenance: 'saved-engine-records',
     run: { ...run, stopReason: run.stopReason ?? null },
     sequence: 0,
-    activity: exportHostActivity(records, runId),
+    activity: exportHostActivity(records, runId, run.state === 'running'),
     captures,
     findings,
     coverage: {

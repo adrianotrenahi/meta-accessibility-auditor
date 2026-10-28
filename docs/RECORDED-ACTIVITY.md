@@ -10,11 +10,19 @@ Activity-only changes advance the normal saved delivery revision without a new
 screenshot, website action or model request.
 
 Public rows never contain provider responses, prompts or private model reasoning.
-Input-result rows contain no typed value or action-note text. Generated progress
-notes wait for a matching recorded input; known typed values and the same key and
-Bearer-token scrub as logs are applied before publication. An unrelated later
-input cannot rewrite an already exported row. A preparation is explicitly named
+Input-result rows contain no typed value or action-note text. Only the known fixed
+initial-capture sentence is published immediately. Freeform progress notes wait
+until the next navigation read or ended run closes their input interval, and need
+a matching capture-linked input. All known typed values through that boundary and
+the same key and Bearer-token scrub as logs are applied before publication. This
+can delay a note until the next read, especially during an analysis checkpoint.
+An unrelated later input cannot rewrite an already exported row. A preparation is explicitly named
 Preparing next action and does not claim a model decision or sent request.
+Later activity waits behind a note that may still become safe to publish, so the
+delta cursor cannot pass it. A later navigation read or ended run permanently
+closes a note with no matching input and releases the genuine limits behind it.
+This barrier is applied before selecting the forty-row window; run/stop state
+itself is always delivered independently of the activity suffix.
 
 ## Impact on the UX
 
