@@ -10,6 +10,27 @@ const png = () => {
   bytes.writeUInt32BE(900, 20);
   return bytes;
 };
+function originalCapture(bytes: Buffer, stateStamp: string, id = 'original', runId = 'run') {
+  const payload = {
+    stable: true,
+    stateStamp,
+    imageHash: digest(bytes),
+    width: 1440,
+    height: 900,
+    _sourcesHash: digest('[]'),
+  };
+  return {
+    id,
+    runId,
+    seq: 1,
+    kind: 'capture',
+    author: 'browser',
+    payload,
+    sources: [],
+    hash: digest(JSON.stringify(payload)),
+    createdAt: new Date(0).toISOString(),
+  } satisfies RecordEntry;
+}
 test('Live reads share in-flight work, limit picture requests and bind only exact original pixels', async () => {
   const bytes = png();
   let time = 1000,
@@ -18,17 +39,7 @@ test('Live reads share in-flight work, limit picture requests and bind only exac
   const pending = new Promise<Buffer>((resolve) => {
     release = resolve;
   });
-  const original = {
-    kind: 'capture',
-    id: 'original',
-    payload: {
-      stable: true,
-      stateStamp: 'same',
-      imageHash: digest(bytes),
-      width: 1440,
-      height: 900,
-    },
-  } as RecordEntry;
+  const original = originalCapture(bytes, 'same');
   const frames = new LiveFrames(
     'run',
     () => {
@@ -108,17 +119,7 @@ test('Unsupported pictures fail closed; unmatched live pixels do not inherit an 
 test('Identical pictures cannot inherit an old capture after invisible browser state changes', async () => {
   const bytes = png();
   let stamp = 'before';
-  const original = {
-    kind: 'capture',
-    id: 'original',
-    payload: {
-      stable: true,
-      stateStamp: 'before',
-      imageHash: digest(bytes),
-      width: 1440,
-      height: 900,
-    },
-  } as RecordEntry;
+  const original = originalCapture(bytes, 'before');
   const frames = new LiveFrames(
     'run',
     async () => {
@@ -134,4 +135,93 @@ test('Identical pictures cannot inherit an old capture after invisible browser s
   assert.equal(frame.captureId, null);
   assert(!JSON.stringify(frame).includes('stateStamp'));
   frames.close();
+});
+
+test('An exact reviewed original wins over a later identical observation without changing either record', async () => {
+  const bytes = png(),
+    older = originalCapture(bytes, 'same', 'reviewed'),
+    newer = originalCapture(bytes, 'same', 'newer');
+  let time = 1000;
+  const reviewed = new Set([older.id]);
+  const originals = JSON.stringify([older, newer]);
+  const frames = new LiveFrames(
+    'run',
+    async () => bytes,
+    () => {},
+    () => [older, newer],
+    async () => 'same',
+    () => time,
+    () => reviewed,
+  );
+  assert.equal((await frames.read()).captureId, older.id);
+  assert.equal(JSON.stringify([older, newer]), originals);
+  reviewed.clear();
+  time += 251;
+  assert.equal(
+    (await frames.read()).captureId,
+    newer.id,
+    'Withdrawal restores the ordinary latest match.',
+  );
+  frames.close();
+});
+
+test('Review preference cannot bypass original integrity, run, author, pixels, full state or geometry', async () => {
+  for (const damage of [
+    'integrity',
+    'run',
+    'author',
+    'image',
+    'state',
+    'geometry',
+    'unstable',
+  ] as const) {
+    const bytes = png(),
+      older: RecordEntry = originalCapture(bytes, 'same', 'reviewed'),
+      newer = originalCapture(bytes, 'same', 'newer');
+    if (damage === 'integrity') older.hash = '0'.repeat(64);
+    if (damage === 'run') older.runId = 'foreign-run';
+    if (damage === 'author') older.author = 'analyst';
+    if (damage === 'image') older.payload.imageHash = '0'.repeat(64);
+    if (damage === 'state') older.payload.stateStamp = 'invisibly-changed';
+    if (damage === 'geometry') older.payload.width = 900;
+    if (damage === 'unstable') older.payload.stable = false;
+    if (damage !== 'integrity') older.hash = digest(JSON.stringify(older.payload));
+    const frames = new LiveFrames(
+      'run',
+      async () => bytes,
+      () => {},
+      () => [older, newer],
+      async () => 'same',
+      Date.now,
+      () => new Set([older.id]),
+    );
+    assert.equal((await frames.read()).captureId, newer.id, damage);
+    frames.close();
+  }
+});
+
+test('Optional review lookup is skipped without an ambiguous match and cannot break live pixels', async () => {
+  const bytes = png(),
+    older = originalCapture(bytes, 'same', 'older'),
+    newer = originalCapture(bytes, 'same', 'newer');
+  for (const captures of [[], [newer], [older, newer]]) {
+    let calls = 0;
+    const frames = new LiveFrames(
+      'run',
+      async () => bytes,
+      () => {},
+      () => captures,
+      async () => 'same',
+      Date.now,
+      () => {
+        calls++;
+        throw Error('The optional review lookup is unavailable.');
+      },
+    );
+    const frame = await frames.read();
+    assert.equal(frame.captureId, captures.length ? newer.id : null);
+    assert.equal(frame.imageHash, digest(bytes));
+    assert.equal(calls, captures.length > 1 ? 1 : 0);
+    frames.close();
+  }
 });

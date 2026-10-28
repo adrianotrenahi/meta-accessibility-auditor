@@ -2,6 +2,8 @@
 
 Updated 28 October 2026. Working code, controlled evidence and remaining proof are kept separate.
 
+Overnight follow-up: the reviewed Day 4 proposals are awaiting Adriano's merge decision. A separate stacked live-picture change now passes 233 tests/build and the actual Cavioo desktop/320px saved-response flow. It preserves a reviewed original's identity when a later observation has identical pixels and full page state; invisible state changes still withhold pins. Optional review lookup failures keep the ordinary live picture, and zero/one-match pictures skip that lookup. No new model response or paid active-bubble proof is claimed. Details are in LIVE-BUBBLE-BINDING-VALIDATION.md; duplicate grouping remains next.
+
 ## Impact on the system
 
 The fresh public engine, controlled Cavioo host connection and reviewed Day 2 and Day 3 corrections are merged. Day 3 adds fifteen versioned criteria, six visual-review topics, two shared missing-fact/native-reader slots and conservative typed journey comparisons. The original walk and navigator notes remain shared originals; review reads those originals and the exact analyst claim independently. Day 3 began on 27 October, ahead of its original 28 October slot; recording on 2 November and the 3 November freeze stay unchanged.

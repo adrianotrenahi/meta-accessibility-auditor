@@ -221,6 +221,33 @@ function fixture() {
   };
 }
 
+test('Malformed review read references withhold only their finding and keep valid report originals', () => {
+  for (const readSnapshotId of [undefined, null, 0, '', {}, [], 'missing-read']) {
+    const x = fixture();
+    try {
+      const damaged = x.candidate();
+      x.keepStored(damaged, { readSnapshotId });
+      const valid = x.candidate({ issueKey: 'separate_controlled_instrumentation' });
+      x.keepStored(valid);
+      assert.deepEqual(
+        x.store.published(x.run.id).map((finding) => finding.id),
+        [valid.id],
+      );
+      const exported = exportHostSnapshot(x.store, x.run.id);
+      assert.deepEqual(
+        exported.snapshot.findings.map((finding) => finding.id),
+        [valid.id],
+      );
+      assert.equal(exported.snapshot.captures.length, 2);
+      assert(exported.snapshot.captures.every((capture) => capture.imageAvailable));
+      assert(exported.snapshot.limits.some((limit) => /unverified and withheld/.test(limit)));
+      assert.equal(x.store.usage().requests.length, 0);
+    } finally {
+      x.close();
+    }
+  }
+});
+
 test('A corrected finding is a distinct reviewed version before unchanged host-v1 delivery', async () => {
   const x = fixture();
   try {

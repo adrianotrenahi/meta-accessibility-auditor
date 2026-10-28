@@ -1,4 +1,4 @@
-import { digest } from './store.js';
+import { digest, recordIsIntact } from './store.js';
 import type { RecordEntry } from './types.js';
 
 export type LiveFrame = {
@@ -27,6 +27,7 @@ export class LiveFrames {
     private captures: () => RecordEntry[],
     private stateStamp: () => Promise<string>,
     private now = Date.now,
+    private reviewedCaptureIds: () => ReadonlySet<string> = () => new Set(),
   ) {}
   read(): Promise<LiveFrame> {
     if (this.closed) return Promise.reject(Error('The live browser has closed.'));
@@ -57,9 +58,12 @@ export class LiveFrames {
     if (!width || !height || width > 4096 || height > 4096)
       throw Error('Unsupported live picture dimensions.');
     const imageHash = digest(bytes);
-    const capture = this.captures().findLast(
+    const matching = this.captures().filter(
       (r) =>
         r.kind === 'capture' &&
+        r.runId === this.runId &&
+        r.author === 'browser' &&
+        recordIsIntact(r) &&
         r.payload.stable === true &&
         before === after &&
         r.payload.stateStamp === after &&
@@ -67,6 +71,17 @@ export class LiveFrames {
         r.payload.width === width &&
         r.payload.height === height,
     );
+    // Repeated observations can share exact pixels and full page state. Keep the
+    // reviewed original's identity rather than moving its claim onto a new capture.
+    let capture = matching.at(-1);
+    if (matching.length > 1)
+      try {
+        const reviewed = this.reviewedCaptureIds();
+        capture = matching.findLast((record) => reviewed.has(record.id)) ?? capture;
+      } catch {
+        // Review data is optional for display. Keep the ordinary exact-picture
+        // match when that lookup fails; this never grants a finding approval.
+      }
     this.sampledAt = this.now();
     this.cached = {
       protocol: 'access-walk/frame-v1',

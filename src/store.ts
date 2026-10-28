@@ -217,6 +217,7 @@ export class Store {
     }));
   }
   record(runId: string, id: string): RecordEntry | undefined {
+    if (typeof id !== 'string' || !id) return undefined;
     const r = this.db
       .prepare('SELECT * FROM records WHERE run_id=? AND id=?')
       .get(runId, id) as any;
