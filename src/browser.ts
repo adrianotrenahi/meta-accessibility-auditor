@@ -51,6 +51,14 @@ export class BrowserWalk {
       () => this.assertActive(),
       () => this.store.records(this.runId),
       async () => digest(JSON.stringify(await this.observedState())),
+      Date.now,
+      () =>
+        new Set(
+          this.store
+            .published(this.runId)
+            .map((finding) => finding.targetCaptureId)
+            .filter((id): id is string => typeof id === 'string'),
+        ),
     );
   }
   assertActive() {
