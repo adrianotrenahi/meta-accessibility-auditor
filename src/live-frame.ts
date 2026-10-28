@@ -73,8 +73,15 @@ export class LiveFrames {
     );
     // Repeated observations can share exact pixels and full page state. Keep the
     // reviewed original's identity rather than moving its claim onto a new capture.
-    const reviewed = this.reviewedCaptureIds();
-    const capture = matching.findLast((record) => reviewed.has(record.id)) ?? matching.at(-1);
+    let capture = matching.at(-1);
+    if (matching.length > 1)
+      try {
+        const reviewed = this.reviewedCaptureIds();
+        capture = matching.findLast((record) => reviewed.has(record.id)) ?? capture;
+      } catch {
+        // Review data is optional for display. Keep the ordinary exact-picture
+        // match when that lookup fails; this never grants a finding approval.
+      }
     this.sampledAt = this.now();
     this.cached = {
       protocol: 'access-walk/frame-v1',

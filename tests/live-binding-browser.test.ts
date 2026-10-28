@@ -109,6 +109,23 @@ test('Actual browser frames retain the reviewed original after an identical late
     await new Promise((resolve) => setTimeout(resolve, 260));
     assert.equal(app.store.published(run.id).length, 0);
     assert.equal((await walk.frames.read()).captureId, repeated.id);
+    app.store.append(run.id, 'review', 'saved_reviewer_response', {
+      candidateId: candidate.id,
+      candidateHash: candidate.hash,
+      verdict: 'keep',
+      premise: 'supported',
+      title,
+      reason: 'Malformed saved-reply instrumentation intentionally omits its read reference.',
+    });
+    assert.equal(
+      app.store.published(run.id).length,
+      0,
+      'A missing read reference withholds the finding.',
+    );
+    const beforeFallback = JSON.stringify(app.store.records(run.id));
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    assert.equal((await walk.frames.read()).captureId, repeated.id);
+    assert.equal(JSON.stringify(app.store.records(run.id)), beforeFallback);
     assert.equal(app.store.usage().requests.length, 0);
   } finally {
     await walk.close();

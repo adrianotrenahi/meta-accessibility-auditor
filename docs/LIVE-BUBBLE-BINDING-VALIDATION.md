@@ -12,13 +12,14 @@ The finding stays attached to its original. Neither original record, screenshot 
 
 Validation:
 
-- `npm run check`: **231 tests passed**, including the TypeScript check. `npm run build` passed.
+- `npm run check`: **233 tests passed**, including the TypeScript check after the review correction. `npm run build` passed.
 - The real Chromium regression creates an original, a source-bound saved example and a later identical capture. The live picture selects the reviewed original while both records and image files remain distinct and unchanged.
 - The same real-browser test changes only the button's accessible name. Pixels stay identical, but the evidence reference disappears. Restoring the original state restores the valid match; withdrawing the example restores ordinary latest-match behavior. The test makes zero model or native-reader requests.
 - Unit cases reject changed record integrity, foreign runs, non-browser authors, different pixels/state/dimensions and unstable originals despite a preference. Existing concurrent-read, close and invisible-state guards still pass.
+- The optional review lookup runs only when multiple exact originals match. If it fails, the live picture keeps its ordinary latest match without granting any finding approval. A missing or wrongly typed saved read reference now withholds only its finding instead of raising a database-binding error. The real-browser test retains that malformed keep reply and still receives fresh pixels; a separate report regression preserves an unrelated valid finding and both originals, with an explicit withheld-review warning. A forced callback failure also keeps live pixels. Zero/one-match cases prove the expensive optional lookup is not called.
 - The complete private Cavioo offline proof passes at 1440px and 320px using its existing setup, live canvas, pins, report and original viewer. Reload/reconnect, hidden tabs, access refusal, malformed/slow optional details, discard, accessibility scans and overflow checks pass with **zero model calls**. These are explicitly saved-response examples.
 - Selecting accepted findings on the retained 158-record controlled run took a median **5.2ms**, maximum **13.3ms** across twenty read-only measurements, versus the existing 250ms sample spacing. This measures that selection work only; it is not large-site or end-to-end performance proof.
-- Isolated removal of the reviewed-original preference, or removal of the full-state comparison, makes the real-browser regression fail. Working files remain unchanged. Evidence: `/private/tmp/meta-frame-binding-break-proof.json`.
+- Isolated removal of the reviewed-original preference, or removal of the full-state comparison, makes the real-browser regression fail. Working files remain unchanged. Evidence: `/private/tmp/meta-frame-binding-break-proof.json`. Further isolated breaks of callback isolation, zero/one-match skipping and missing-reference handling fail their regressions; evidence is in `/private/tmp/meta-optional-review-break-proof.json`.
 
 Local evidence: `/private/tmp/meta-live-binding-full-check.log`, `/private/tmp/meta-live-binding-build.log`, `/private/tmp/meta-live-binding-cavioo-proof/`, and `/private/tmp/meta-live-binding-source-timing.json`.
 

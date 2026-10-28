@@ -199,3 +199,29 @@ test('Review preference cannot bypass original integrity, run, author, pixels, f
     frames.close();
   }
 });
+
+test('Optional review lookup is skipped without an ambiguous match and cannot break live pixels', async () => {
+  const bytes = png(),
+    older = originalCapture(bytes, 'same', 'older'),
+    newer = originalCapture(bytes, 'same', 'newer');
+  for (const captures of [[], [newer], [older, newer]]) {
+    let calls = 0;
+    const frames = new LiveFrames(
+      'run',
+      async () => bytes,
+      () => {},
+      () => captures,
+      async () => 'same',
+      Date.now,
+      () => {
+        calls++;
+        throw Error('The optional review lookup is unavailable.');
+      },
+    );
+    const frame = await frames.read();
+    assert.equal(frame.captureId, captures.length ? newer.id : null);
+    assert.equal(frame.imageHash, digest(bytes));
+    assert.equal(calls, captures.length > 1 ? 1 : 0);
+    frames.close();
+  }
+});

@@ -2,7 +2,7 @@
 
 Updated 28 October 2026. Working code, controlled evidence and remaining proof are kept separate.
 
-Overnight follow-up: the reviewed Day 4 proposals are awaiting Adriano's merge decision. A separate stacked live-picture change now passes 231 tests/build and the actual Cavioo desktop/320px saved-response flow. It preserves a reviewed original's identity when a later observation has identical pixels and full page state; invisible state changes still withhold pins. No new model response or paid active-bubble proof is claimed. Details are in LIVE-BUBBLE-BINDING-VALIDATION.md; duplicate grouping remains next.
+Overnight follow-up: the reviewed Day 4 proposals are awaiting Adriano's merge decision. A separate stacked live-picture change now passes 233 tests/build and the actual Cavioo desktop/320px saved-response flow. It preserves a reviewed original's identity when a later observation has identical pixels and full page state; invisible state changes still withhold pins. Optional review lookup failures keep the ordinary live picture, and zero/one-match pictures skip that lookup. No new model response or paid active-bubble proof is claimed. Details are in LIVE-BUBBLE-BINDING-VALIDATION.md; duplicate grouping remains next.
 
 ## Impact on the system
 
