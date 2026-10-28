@@ -319,10 +319,19 @@ test('Stop and abort before another attempt forbid reconnecting or generation', 
   );
   await assert.rejects(z.call);
   assert.equal(calls, 0);
-  const timed = transport('input_count', (async () => {
-    throw new DOMException('deadline', 'TimeoutError');
-  }) as typeof fetch);
+  const deadline = new AbortController();
+  let timedCalls = 0;
+  const timed = transport(
+    'input_count',
+    (async () => {
+      timedCalls++;
+      deadline.abort(new DOMException('deadline', 'TimeoutError'));
+      throw deadline.signal.reason;
+    }) as typeof fetch,
+    { signal: deadline.signal },
+  );
   await assert.rejects(timed.call);
+  assert.equal(timedCalls, 1);
   assert.deepEqual(timed.events, []);
 });
 
