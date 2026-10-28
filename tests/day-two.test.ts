@@ -463,6 +463,57 @@ test('A stale navigation decision is discarded before input and the next decisio
   }
 });
 
+test('Repeated stale decisions consume the twenty-decision allowance and stop without input', async () => {
+  const x = setup();
+  try {
+    let decisions = 0,
+      attempts = 0,
+      refreshes = 0;
+    const original = x.capture(0);
+    mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+      if (role === 'driver') {
+        decisions++;
+        return { kind: 'press', key: 'Tab', note: 'Controlled stale decision' };
+      }
+      if (role === 'analyst') return { findings: [], coverage: [] };
+      throw Error('No finding needs review');
+    });
+    const walk = {
+      assertActive() {},
+      images: x.images,
+      async act() {
+        attempts++;
+        throw new ActionStateChanged('Changed before input');
+      },
+      async captureSettled() {
+        return x.capture(++refreshes);
+      },
+    };
+    await (new Runner(x.store, 'http://127.0.0.1:4317') as any).live(
+      x.run,
+      walk,
+      {},
+      original,
+      new AbortController(),
+    );
+    assert.equal(decisions, 20);
+    assert.equal(attempts, 20);
+    assert.equal(refreshes, 20);
+    const records = x.store.records(x.run.id);
+    assert.equal(records.filter((record) => record.kind === 'action').length, 0);
+    assert(
+      records.some(
+        (record) =>
+          record.kind === 'limit' && record.payload.reason.includes('twenty navigation decisions'),
+      ),
+    );
+    assert.equal(x.store.usage().requests.length, 0);
+  } finally {
+    mock.restoreAll();
+    x.close();
+  }
+});
+
 test('Exhausted observation recovery stops before further model work, including final review', async () => {
   const x = setup();
   try {

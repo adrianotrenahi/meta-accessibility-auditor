@@ -235,7 +235,10 @@ export class BrowserWalk {
   async capture(): Promise<RecordEntry> {
     return readPage(this.page, () => this.captureOnce());
   }
-  /** Observe again, never repeat input or weaken the original stability check. */
+  /**
+   * Stable during capture, not a promise that the page stays unchanged afterwards.
+   * Actions and measurements must still check freshness. Never repeat input.
+   */
   async captureSettled(first?: RecordEntry): Promise<RecordEntry> {
     if (
       first &&
