@@ -6,6 +6,8 @@ import type { RecordEntry, RecordKind, Role, Run, RunState, Approval } from './t
 import { LIMITS, PHASE, CAPS } from './types.js';
 import { groupPublished } from './finding-key.js';
 import { presentRecordPayload } from './presentation.js';
+import { readHashMatches, suppliedImageIds, type ImageReceipt } from './image-receipt.js';
+import { candidateOriginalEvidence } from './candidate-target.js';
 export const digest = (value: string | Uint8Array) =>
   createHash('sha256').update(value).digest('hex');
 export const recordIsIntact = (record: RecordEntry) =>
@@ -231,7 +233,7 @@ export class Store {
       createdAt: r.created,
     };
   }
-  snapshot(runId: string, role: Role, ids?: string[]) {
+  snapshot(runId: string, role: Role, ids?: string[], imageReceipt?: ImageReceipt) {
     const records = this.records(runId).filter(
       (r) =>
         !['read_snapshot', 'model_response'].includes(r.kind) &&
@@ -250,12 +252,28 @@ export class Store {
       throughSeq: records.at(-1)?.seq ?? 0,
       records: selected.map((r) => ({ id: r.id, hash: r.hash, sources: r.sources })),
       missing,
+      ...(imageReceipt ? { imageReceipt } : {}),
     });
     return { read, records: selected };
   }
   published(runId: string) {
     const records = this.records(runId),
       out: any[] = [];
+    const originalsWereRead = (read: RecordEntry, originals: RecordEntry[]) =>
+      Array.isArray(read.payload.records) &&
+      originals
+        .filter((original) => original.kind !== 'visual_observation')
+        .every(
+          (original) =>
+            original.seq < read.seq &&
+            read.payload.records.some(
+              (pin: any) =>
+                pin.id === original.id &&
+                pin.hash === original.hash &&
+                Array.isArray(pin.sources) &&
+                JSON.stringify(pin.sources) === JSON.stringify(original.sources),
+            ),
+        );
     for (const candidate of records.filter((r) => r.kind === 'candidate')) {
       const review = records
         .filter((r) => r.kind === 'review' && r.payload.candidateId === candidate.id)
@@ -266,11 +284,16 @@ export class Store {
         review.payload.candidateHash !== candidate.hash
       )
         continue;
-      if (candidate.payload.issueKey && review.payload.premise !== 'supported') continue;
+      if (
+        candidate.payload.issueKey &&
+        (review.payload.premise !== 'supported' || review.payload.title !== candidate.payload.title)
+      )
+        continue;
       const read = this.record(runId, review.payload.readSnapshotId);
       if (
         !read ||
         read.kind !== 'read_snapshot' ||
+        read.author !== 'reviewer' ||
         !Array.isArray(read.payload?.records) ||
         !read.payload.records.some((r: any) => r.id === candidate.id && r.hash === candidate.hash)
       )
@@ -328,6 +351,77 @@ export class Store {
           )
           .at(-1)?.seq ?? 0;
       if (read.payload.throughSeq < latestEvidence) continue;
+      try {
+        if (!readHashMatches(read, review.payload.readSnapshotHash)) continue;
+        const reviewerImages = suppliedImageIds(read, records);
+        const visual = records.find((r) => r.id === candidate.payload.visualObservationId);
+        const analystReadId =
+          candidate.payload.analystReadSnapshotId ?? visual?.payload.readSnapshotId;
+        const analystRead = analystReadId && records.find((r) => r.id === analystReadId);
+        if (analystReadId && (!analystRead || analystRead.author !== 'analyst')) continue;
+        if (
+          analystRead &&
+          !readHashMatches(
+            analystRead,
+            candidate.payload.analystReadSnapshotHash ?? visual?.payload.readSnapshotHash,
+          )
+        )
+          continue;
+        const analystImages = analystRead ? suppliedImageIds(analystRead, records) : undefined;
+        const evidence = candidateOriginalEvidence(
+          { ...candidate.payload, sources: candidate.sources },
+          records,
+          analystImages ?? reviewerImages,
+        );
+        if (
+          candidate.payload.analystReadSnapshotId &&
+          (!analystRead || !originalsWereRead(analystRead, evidence))
+        )
+          continue;
+        if (
+          candidate.payload.visualObservationId &&
+          (!visual || !evidence.some((record) => record.id === visual.id))
+        )
+          continue;
+        const visualSourcesRead = evidence
+          .filter((record) => record.kind === 'visual_observation')
+          .every((observation) => {
+            const visualRead = records.find(
+              (record) => record.id === observation.payload.readSnapshotId,
+            );
+            if (
+              !visualRead ||
+              visualRead.author !== 'analyst' ||
+              !readHashMatches(visualRead, observation.payload.readSnapshotHash)
+            )
+              return false;
+            const visualImages = suppliedImageIds(visualRead, records);
+            const dependencies = candidateOriginalEvidence(
+              { ...candidate.payload, sources: observation.sources },
+              records,
+              visualImages,
+            );
+            return (
+              visualImages.includes(observation.payload.captureId) &&
+              originalsWereRead(visualRead, dependencies) &&
+              dependencies
+                .filter((record) => record.kind === 'capture')
+                .every((capture) => visualImages.includes(capture.id))
+            );
+          });
+        if (!visualSourcesRead) continue;
+        const targets = [candidate.payload.targetCaptureId, visual?.payload.captureId].filter(
+          Boolean,
+        );
+        if (
+          targets.some(
+            (id) => !reviewerImages.includes(id) || (analystImages && !analystImages.includes(id)),
+          )
+        )
+          continue;
+      } catch {
+        continue;
+      }
       out.push({
         ...presentRecordPayload(candidate.payload),
         id: candidate.id,

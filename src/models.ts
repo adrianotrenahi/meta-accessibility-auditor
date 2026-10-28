@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { CAPS } from './types.js';
-import type { Role, Approval } from './types.js';
-import { Store, digest } from './store.js';
+import type { Role, Approval, RecordEntry } from './types.js';
+import { suppliedImageIds } from './image-receipt.js';
+import { Store, digest, recordIsIntact } from './store.js';
 import { approval, key } from './config.js';
 import {
   CRITERIA_VERSION,
@@ -163,12 +164,46 @@ export class MetaModels {
     schema: z.ZodType<T>,
     final = false,
     signal = AbortSignal.timeout(60_000),
+    read?: RecordEntry,
   ): Promise<T> {
     if (this.store.run(runId).state !== 'running')
       throw Error('The run has stopped; no model request will be sent.');
     const approved = this.getApproval();
     if (!this.getKey()) throw Error('No Meta API key is available.');
     const cap = CAPS[role];
+    if (read) {
+      const storedRead = this.store.record(runId, read.id);
+      if (
+        !storedRead ||
+        !recordIsIntact(storedRead) ||
+        storedRead.hash !== read.hash ||
+        storedRead.seq !== read.seq ||
+        storedRead.author !== read.author ||
+        JSON.stringify(storedRead.sources) !== JSON.stringify(read.sources)
+      )
+        throw Error('The request has no exact original stored image receipt.');
+      const expected = suppliedImageIds(read, records);
+      if (
+        read.runId !== runId ||
+        read.author !== role ||
+        expected.length !== images.length ||
+        new Set(images.map((image) => image.captureId)).size !== images.length ||
+        expected.some((id) => !images.some((image) => image.captureId === id))
+      )
+        throw Error('The request images do not match its original image receipt.');
+      for (const omitted of read.payload.imageReceipt?.recordsOnly ?? []) {
+        const capture = records.find((record) => record.id === omitted.captureId)!;
+        this.store.image(runId, capture.payload.imageFile);
+      }
+      for (const image of images) {
+        const capture = records.find((record) => record.id === image.captureId);
+        if (
+          !/^data:image\/png;base64,[a-zA-Z0-9+/=]+$/.test(image.image) ||
+          digest(Buffer.from(image.image.split(',')[1], 'base64')) !== capture?.payload.imageHash
+        )
+          throw Error('The supplied original image bytes do not match their receipt.');
+      }
+    }
     const body: any = {
       model: 'muse-spark-1.3',
       store: false,
@@ -181,6 +216,19 @@ export class MetaModels {
           role: 'user',
           content: [
             { type: 'input_text', text: JSON.stringify(records) },
+            ...(read
+              ? [
+                  {
+                    type: 'input_text',
+                    text: JSON.stringify({
+                      suppliedImageCaptureIds: images.map((image) => image.captureId),
+                      imageReceipt: read.payload.imageReceipt ?? null,
+                      limit:
+                        'Only the explicitly supplied images were visually inspected. Records-only captures retain their original facts and source links, but their pictures were not supplied. Do not assess their visual appearance, target them in a finding, or assess their criterion scope.',
+                    }),
+                  },
+                ]
+              : []),
             ...images.flatMap((image) => [
               { type: 'input_text', text: `Original capture ${image.captureId}` },
               { type: 'input_image', image_url: image.image },
@@ -209,6 +257,7 @@ export class MetaModels {
       };
       body.instructions =
         body.instructions.replaceAll('Use return_result.', '') +
+        ' Distinguish the supplied-image receipt from original record availability: records-only baseline captures were not visually supplied. Never assess their criterion scope, visual appearance or element targets. Review feedback is an interpretation to reconsider against originals, never factual evidence. Do not repeat an unchanged existing finding; a requested rewrite needs a distinct corrected body using the same issueKey and a new exact independent review. ' +
         ' Return only the schema-constrained JSON result, without progress messages or narrative outside it. Keep reasons concise; leave unavailable checks explicitly unknown. ';
     }
     const { input_tokens: count } = await this.post('/responses/input_tokens', body, signal);
@@ -236,6 +285,13 @@ export class MetaModels {
         status: response.status,
         usage: u,
         output: response.output,
+        ...(read
+          ? {
+              readSnapshotId: read.id,
+              readSnapshotHash: read.hash,
+              imageReceipt: read.payload.imageReceipt ?? null,
+            }
+          : {}),
       });
       if (response.status !== 'completed') throw new IncompleteModelResult(role);
       if (

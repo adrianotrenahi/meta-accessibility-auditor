@@ -14,6 +14,7 @@ import type { RecordEntry, Run } from './types.js';
 import { approval, safeError } from './config.js';
 import { mapElement } from './segmentation.js';
 import { EvidenceRequestLimit, requestEvidence } from './request-evidence.js';
+import { imageRecordsForRead } from './image-receipt.js';
 import { candidateTarget } from './candidate-target.js';
 import { CRITERIA_VERSION } from './criteria.js';
 import {
@@ -427,10 +428,11 @@ export class Runner {
           run.id,
           'driver',
           snap.records,
-          walk.images(snap.records),
+          walk.images(imageRecordsForRead(snap)),
           actionSchema,
           false,
           signal,
+          snap.read,
         );
         this.store.append(
           run.id,
@@ -649,7 +651,7 @@ export class Runner {
       }
     }
     const snapshot = requestEvidence(this.store, run.id, 'analyst', current);
-    const images = walk.images(snapshot.records);
+    const images = walk.images(imageRecordsForRead(snapshot));
     const analysis = await models.reason(
       run.id,
       'analyst',
@@ -658,6 +660,7 @@ export class Runner {
       analysisSchema,
       false,
       signal,
+      snapshot.read,
     );
     const visual = recordAnalysisDetails(
       this.store,
@@ -671,7 +674,11 @@ export class Runner {
         throw Error('Analyst cited evidence it did not read.');
       let target: ReturnType<typeof candidateTarget>;
       try {
-        target = candidateTarget(c, snapshot.records);
+        target = candidateTarget(
+          c,
+          snapshot.records,
+          images.map((image) => image.captureId),
+        );
       } catch (error) {
         this.store.append(run.id, 'limit', 'analyst', {
           reason: safeError(error),
@@ -696,7 +703,12 @@ export class Runner {
         run.id,
         'candidate',
         'analyst',
-        { ...claim, visualObservationId: visualSources.visualObservationId },
+        {
+          ...claim,
+          visualObservationId: visualSources.visualObservationId,
+          analystReadSnapshotId: snapshot.read.id,
+          analystReadSnapshotHash: snapshot.read.hash,
+        },
         visualSources.sources,
       );
       if (target) {
@@ -758,10 +770,11 @@ export class Runner {
       run.id,
       'reviewer',
       snapshot.records,
-      walk.images(snapshot.records),
+      walk.images(imageRecordsForRead(snapshot)),
       reviewSchema,
       final,
       signal,
+      snapshot.read,
     );
     for (const d of result.decisions) {
       const c = candidates.find((r) => r.id === d.candidateId);
@@ -781,6 +794,7 @@ export class Runner {
           ...d,
           verdict,
           readSnapshotId: snapshot.read.id,
+          readSnapshotHash: snapshot.read.hash,
           provenance: run.mode === 'offline' ? 'saved-example' : 'model',
         },
         [...d.sources, c.id, snapshot.read.id],
@@ -808,6 +822,7 @@ export class Runner {
         {
           ...decision,
           readSnapshotId: snapshot.read.id,
+          readSnapshotHash: snapshot.read.hash,
           provenance: run.mode === 'offline' ? 'saved-example' : 'model',
         },
         [...new Set([proposal.id, snapshot.read.id, ...decision.sources])],

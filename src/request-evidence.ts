@@ -1,5 +1,13 @@
 import { recordIsIntact, type Store } from './store.js';
 import type { RecordEntry, Role } from './types.js';
+import { reviewFeedbackIds } from './review-feedback.js';
+import {
+  baselineHasIndependentUse,
+  makeImageReceipt,
+  returnBaselineImage,
+  suppliedImageIds,
+  type BaselineImagePin,
+} from './image-receipt.js';
 
 export class EvidenceRequestLimit extends Error {
   constructor(
@@ -106,7 +114,35 @@ export function requestEvidence(
     originals = originalClosure(records, [...roots, ...available.map((record) => record.id)]);
   }
   const captureIds = new Set(originals.filter((r) => r.kind === 'capture').map((r) => r.id));
-  if (captureIds.size > (role === 'reviewer' ? 8 : role === 'analyst' ? 3 : 1))
+  let recordsOnly: BaselineImagePin | undefined;
+  if (role === 'analyst' && captureIds.size === 4) {
+    const directCaptures = new Set(
+      originalClosure(records, roots)
+        .filter((r) => r.kind === 'capture')
+        .map((r) => r.id),
+    );
+    const choices = originals
+      .filter((r) => r.payload.method === 'return_preservation')
+      .map((r) => returnBaselineImage(originals, r.id, current.id))
+      .filter(
+        (item) =>
+          item !== null &&
+          !directCaptures.has(item.captureId) &&
+          !baselineHasIndependentUse(
+            [
+              ...originals,
+              ...candidates,
+              ...records.filter((record) => record.kind === 'at_check'),
+            ],
+            item,
+          ),
+      );
+    if (choices.length === 1 && choices[0]) recordsOnly = choices[0];
+  }
+  if (
+    captureIds.size - (recordsOnly ? 1 : 0) >
+    (role === 'reviewer' ? 8 : role === 'analyst' ? 3 : 1)
+  )
     throw new EvidenceRequestLimit(role);
   if (role === 'reviewer') {
     // Optional criteria reuse the mandatory original pictures; they cannot enlarge the finding packet.
@@ -137,9 +173,16 @@ export function requestEvidence(
   }
   roots = originals.map((r) => r.id);
   // Prior claims prevent repeat proposals; they are not a substitute for original evidence.
-  if (role === 'analyst') roots.push(...candidates.map((r) => r.id));
-  const snapshot = store.snapshot(runId, role, roots);
+  if (role === 'analyst')
+    roots.push(...candidates.map((r) => r.id), ...reviewFeedbackIds(records, runId));
+  // The omitted picture stays on disk and is verified just like the three sent originals.
+  if (recordsOnly)
+    for (const capture of originals.filter((r) => r.kind === 'capture'))
+      store.image(runId, capture.payload.imageFile);
+  const receipt = makeImageReceipt(originals, current.id, recordsOnly);
+  const snapshot = store.snapshot(runId, role, roots, receipt);
   for (const r of snapshot.records)
     if (!recordIsIntact(r)) throw Error('A selected original record changed; no request is sent.');
+  suppliedImageIds(snapshot.read, snapshot.records);
   return snapshot;
 }

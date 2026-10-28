@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { Runner } from '../src/runner.js';
 import type { RecordEntry } from '../src/types.js';
+import { VISUAL_TOPICS } from '../src/visual-inspection.js';
 
 test('A review beyond eight original screens stays incomplete while later checkpoints continue', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'access-walk-review-allowance-'));
@@ -18,10 +19,13 @@ test('A review beyond eight original screens stays incomplete while later checkp
     );
     const captures: RecordEntry[] = [];
     for (let n = 0; n < 9; n++) {
+      const image = store.asset(run.id, `capture_${n}.png`, Buffer.from('Controlled image ' + n));
       const capture = store.append(run.id, 'capture', 'browser', {
         url: run.url,
         stable: true,
         elements: [],
+        imageFile: image.file,
+        imageHash: image.hash,
       });
       captures.push(capture);
       store.append(
@@ -40,18 +44,44 @@ test('A review beyond eight original screens stays incomplete while later checkp
     const originalIds = store.records(run.id).map((record) => record.id);
     const called: string[] = [];
     const models = {
-      reason: async (_runId: string, role: string) => {
+      reason: async (
+        _runId: string,
+        role: string,
+        _records: RecordEntry[],
+        images: { captureId: string }[],
+      ) => {
         called.push(role);
         assert.equal(
           role,
           'analyst',
           'An over-limit reviewer request must not reach the provider.',
         );
-        return { findings: [], coverage: [] };
+        return {
+          findings: [],
+          coverage: images.flatMap(({ captureId }) =>
+            VISUAL_TOPICS.map((topic) => ({
+              captureId,
+              topic,
+              state: 'not_assessed',
+              reason: 'This allowance fixture performs no visual assessment.',
+              sources: [],
+            })),
+          ),
+        };
       },
     };
     const runner = new Runner(store, 'http://127.0.0.1:4317');
-    const walk = { images: () => [] };
+    const walk = {
+      images: (records: RecordEntry[]) =>
+        records
+          .filter((record) => record.kind === 'capture')
+          .map((record) => ({
+            captureId: record.id,
+            image:
+              'data:image/png;base64,' +
+              store.image(run.id, record.payload.imageFile).toString('base64'),
+          })),
+    };
     const signal = new AbortController().signal;
     for (const current of [captures[7], captures[8]])
       await (runner as any).analyseCheckpoint(models, run, current, walk, signal);

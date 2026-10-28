@@ -168,6 +168,7 @@ for (const preserved of [true, false])
           reason: 'Independently read all original return and typed-entry records.',
           sources: [x.comparison.id],
           readSnapshotId: reviewer.read.id,
+          readSnapshotHash: reviewer.read.hash,
         },
         [proposal.id, reviewer.read.id, x.comparison.id],
       );
@@ -191,7 +192,7 @@ for (const preserved of [true, false])
     }
   });
 
-test('The real four-picture return graph exceeds the unchanged three-picture analyst allowance', () => {
+test('A historical four-picture return without verified field identity cannot earn a records-only exemption', () => {
   const x = returnHistory();
   try {
     const before = x.store.records(x.run.id).length;

@@ -16,10 +16,12 @@ export async function hostRequest(
     token: string;
     store: Store;
     runner: Runner;
+    mode?: 'offline' | 'live';
     json: (res: ServerResponse, status: number, value: unknown) => void;
   },
 ) {
   const { store, runner, json } = kit;
+  const mode = kit.mode ?? 'offline';
   if (req.headers['x-session-token'] !== kit.token) {
     json(res, 403, { error: 'A local host connection is required.' });
     return;
@@ -27,7 +29,7 @@ export async function hostRequest(
   if (url.pathname === '/api/host' && req.method === 'GET') {
     json(res, 200, {
       protocol: 'access-walk/host-v1',
-      mode: 'offline',
+      mode,
       url: kit.origin + '/shop/?case=broken',
       goal: HOST_GOAL,
       devices: ['desktop_1440_900'],
@@ -35,9 +37,9 @@ export async function hostRequest(
         liveBrowser: true,
         deleteScreens: false,
         discard: true,
-        manualCheckpoints: true,
+        manualCheckpoints: mode === 'offline',
       },
-      modelCalls: 0,
+      modelCalls: store.usage().requests.filter((request) => request.role !== 'sam').length,
     });
     return;
   }
@@ -52,7 +54,7 @@ export async function hostRequest(
     }
     const body = raw ? JSON.parse(raw) : {};
     if (url.pathname === '/api/host/runs') {
-      z.object({ mode: z.literal('offline'), requestId: z.uuid() })
+      z.object({ mode: z.literal(mode), requestId: z.uuid() })
         .strict()
         .parse(body);
       if (store.hostStartDiscarded(body.requestId)) {
@@ -74,12 +76,12 @@ export async function hostRequest(
         return;
       }
       const run = await runner.start({
-        mode: 'offline',
+        mode,
         headless: true,
         engine: 'chromium',
         voiceOver: false,
         goal: HOST_GOAL,
-        manualCheckpoints: true,
+        manualCheckpoints: mode === 'offline',
         requestId: body.requestId,
       });
       json(res, 201, { id: run.id });

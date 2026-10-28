@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { hostRequest } from './host.js';
 import { sessionLock } from '../src/lock.js';
 import { assessmentForRun } from '../src/assessment.js';
+import { controlledHostMode } from './controlled-live.js';
 export const visibleKinds = new Set([
   'plan',
   'action',
@@ -21,7 +22,15 @@ export const visibleKinds = new Set([
   'coverage',
   'limit',
 ]);
-export async function startServer(port = 4317, dir = dataDir, frontend = true) {
+export async function startServer(
+  port = 4317,
+  dir = dataDir,
+  frontend = true,
+  options: { controlledLiveProof?: boolean } = {},
+) {
+  if (options.controlledLiveProof && frontend)
+    throw Error('Controlled model testing uses the separate local host.');
+  const hostMode = controlledHostMode(options.controlledLiveProof);
   const store = new Store(dir);
   let release: () => void;
   try {
@@ -56,7 +65,14 @@ export async function startServer(port = 4317, dir = dataDir, frontend = true) {
       if (req.headers['sec-fetch-site'] === 'cross-site')
         return json(res, 403, { error: 'Open this page directly on this Mac.' });
       if (url.pathname === '/api/host' || url.pathname.startsWith('/api/host/'))
-        return await hostRequest(req, res, url, { origin, token, store, runner, json });
+        return await hostRequest(req, res, url, {
+          origin,
+          token,
+          store,
+          runner,
+          json,
+          mode: hostMode,
+        });
       if (url.pathname.startsWith('/shop')) {
         res.writeHead(200, {
           'Content-Type': 'text/html;charset=utf-8',
@@ -70,7 +86,10 @@ export async function startServer(port = 4317, dir = dataDir, frontend = true) {
           keyPresent: !!key(),
           liveEnabled: false,
           voiceOver: voiceOverPreflight(),
-          spending: 'No paid testing authorised. Offline mode is available.',
+          spending:
+            hostMode === 'live'
+              ? 'A bounded controlled model test is configured for the separate local host.'
+              : 'No paid testing authorised. Offline mode is available.',
         });
       if (req.method === 'POST') {
         if (req.headers['x-session-token'] !== token)

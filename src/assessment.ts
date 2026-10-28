@@ -14,12 +14,14 @@ import type { RecordEntry, RunState } from './types.js';
 import type { CriteriaReport } from './criteria.js';
 import { safeError } from './config.js';
 import { originalClosure } from './request-evidence.js';
+import { readHashMatches, suppliedImageIds } from './image-receipt.js';
 
 /** Bind only an exact declared scope already present in this verified analyst read. */
 function criterionBinding(
   store: Store,
   runId: string,
   snapshot: { read: RecordEntry; records: RecordEntry[] },
+  imageCaptureIds: string[],
 ) {
   const { read, records } = snapshot;
   const storedRead = store.record(runId, read.id);
@@ -99,6 +101,7 @@ function criterionBinding(
       capture.runId !== runId ||
       !recordIsIntact(capture) ||
       !pinned(capture) ||
+      !imageCaptureIds.includes(capture.id) ||
       capture.payload.stable !== true ||
       !scope ||
       scope.runId !== runId ||
@@ -178,6 +181,15 @@ export function recordAnalysisDetails(
   imageCaptureIds: string[],
   analysis: { coverage?: unknown; visualObservations?: unknown[]; criterionProposals?: unknown[] },
 ) {
+  if (Object.hasOwn(snapshot.read.payload, 'imageReceipt')) {
+    const expected = suppliedImageIds(snapshot.read, snapshot.records);
+    if (
+      expected.length !== imageCaptureIds.length ||
+      new Set(imageCaptureIds).size !== imageCaptureIds.length ||
+      expected.some((id) => !imageCaptureIds.includes(id))
+    )
+      throw Error('The assessment image list does not match its exact original receipt.');
+  }
   const normalized = normalizeVisualCoverage(
     analysis.coverage,
     imageCaptureIds,
@@ -192,6 +204,7 @@ export function recordAnalysisDetails(
       {
         ...row,
         readSnapshotId: snapshot.read.id,
+        readSnapshotHash: snapshot.read.hash,
         suppliedImageCaptureIds: imageCaptureIds,
       },
       [...new Set([row.captureId, ...row.sources])],
@@ -209,6 +222,7 @@ export function recordAnalysisDetails(
         {
           ...observation,
           readSnapshotId: snapshot.read.id,
+          readSnapshotHash: snapshot.read.hash,
         },
         observation.sources,
       );
@@ -225,7 +239,7 @@ export function recordAnalysisDetails(
   let bindingError: unknown;
   if (analysis.criterionProposals?.length)
     try {
-      bindCriterion = criterionBinding(store, runId, snapshot);
+      bindCriterion = criterionBinding(store, runId, snapshot, imageCaptureIds);
     } catch (error) {
       bindingError = error;
     }
@@ -240,6 +254,7 @@ export function recordAnalysisDetails(
         {
           ...proposal,
           readSnapshotId: snapshot.read.id,
+          readSnapshotHash: snapshot.read.hash,
         },
         [...new Set([proposal.scopeId, ...proposal.sources])],
       );
@@ -340,7 +355,10 @@ export function assessmentForRun(store: Store, runId: string) {
   const visualCoverage: unknown[] = [];
   // Call-local only: every later report reload validates its manifests and disk images again.
   const byId = new Map(records.map((record) => [record.id, record]));
-  const manifests = new Map<string, { read: RecordEntry; ids: Set<string> } | null>();
+  const manifests = new Map<
+    string,
+    { read: RecordEntry; ids: Set<string>; images: Set<string> } | null
+  >();
   const visualManifest = (id: string) => {
     if (manifests.has(id)) return manifests.get(id)!;
     const read = byId.get(id);
@@ -369,7 +387,14 @@ export function assessmentForRun(store: Store, runId: string) {
       }
       ids.add(pin.id);
     }
-    const verified = { read, ids };
+    let images: Set<string>;
+    try {
+      images = new Set(suppliedImageIds(read, records));
+    } catch {
+      manifests.set(id, null);
+      return null;
+    }
+    const verified = { read, ids, images };
     manifests.set(id, verified);
     return verified;
   };
@@ -380,6 +405,8 @@ export function assessmentForRun(store: Store, runId: string) {
         const manifest = visualManifest(row.payload.readSnapshotId);
         if (!manifest || manifest.read.seq <= capture.seq || row.seq <= manifest.read.seq)
           return false;
+        if (!readHashMatches(manifest.read, row.payload.readSnapshotHash)) return false;
+        if (!manifest.images.has(capture.id)) return false;
         try {
           return originalClosure(records, row.payload.sources).every(
             (original) =>
