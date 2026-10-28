@@ -1,11 +1,6 @@
 import { publicEntryLimit, PUBLIC_TRAFFIC_CHALLENGE } from './public-target.js';
 import { z } from 'zod';
-import {
-  BrowserWalk,
-  MeasurementStateChanged,
-  ActionStateChanged,
-  ObservationUnsettled,
-} from './browser.js';
+import { BrowserWalk, MeasurementStateChanged, ActionStateChanged } from './browser.js';
 import { VoiceOverProbe } from './voiceover.js';
 import { Store } from './store.js';
 import {
@@ -20,6 +15,11 @@ import type { RecordEntry, Run } from './types.js';
 import { approval, safeError } from './config.js';
 import { mapElement } from './segmentation.js';
 import { EvidenceRequestLimit, requestEvidence } from './request-evidence.js';
+import {
+  AnalysisNetworkUnavailable,
+  analysisNetworkDeferred,
+  optionalAnalysisRequest,
+} from './analysis-network.js';
 import { imageRecordsForRead } from './image-receipt.js';
 import { candidateTarget } from './candidate-target.js';
 import { CRITERIA_VERSION } from './criteria.js';
@@ -603,7 +603,9 @@ export class Runner {
         );
       current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
     } catch (error) {
-      if (error instanceof ObservationUnsettled) finalReviewSafe = false;
+      // A hard navigation, money, source or observation failure cannot start
+      // another optional model request from finally.
+      finalReviewSafe = false;
       throw error;
     } finally {
       returnEvidence.clear();
@@ -616,6 +618,13 @@ export class Runner {
         try {
           await this.review(models, run, current, walk, signal, true);
         } catch (e) {
+          if (e instanceof AnalysisNetworkUnavailable)
+            this.incompleteCheckpoint(e, run, current, signal);
+          else if (!(
+            (e instanceof IncompleteModelResult || e instanceof EvidenceRequestLimit) &&
+            e.role === 'reviewer'
+          ))
+            throw e;
           this.store.append(run.id, 'limit', 'reviewer', {
             reason: safeError(e),
             finalReview: 'incomplete',
@@ -671,8 +680,26 @@ export class Runner {
     try {
       return (await this.analyse(models, run, current, walk, signal, probe)) ?? current;
     } catch (error) {
-      return this.incompleteCheckpoint(error, run, current, signal);
+      return this.recoverIncomplete(error, run, current, walk, signal);
     }
+  }
+  private async recoverIncomplete(
+    error: unknown,
+    run: Run,
+    current: RecordEntry,
+    walk: BrowserWalk,
+    signal: AbortSignal,
+  ) {
+    const retained = this.incompleteCheckpoint(error, run, current, signal);
+    if (!(error instanceof AnalysisNetworkUnavailable)) return retained;
+    signal.throwIfAborted();
+    walk.assertActive();
+    const refreshed = await walk.captureSettled();
+    signal.throwIfAborted();
+    walk.assertActive();
+    if (this.store.run(run.id).state !== 'running') throw Error('The run has stopped.');
+    declareCriterionScopes(this.store, run.id);
+    return refreshed;
   }
   private incompleteCheckpoint(
     error: unknown,
@@ -681,8 +708,14 @@ export class Runner {
     signal: AbortSignal,
   ) {
     if (
-      !(error instanceof IncompleteModelResult || error instanceof EvidenceRequestLimit) ||
-      signal.aborted
+      !(
+        error instanceof IncompleteModelResult ||
+        error instanceof EvidenceRequestLimit ||
+        error instanceof AnalysisNetworkUnavailable
+      ) ||
+      !['analyst', 'reviewer'].includes(error.role) ||
+      signal.aborted ||
+      this.store.run(run.id).state !== 'running'
     )
       throw error;
     this.store.append(
@@ -690,10 +723,15 @@ export class Runner {
       'limit',
       error.role,
       {
+        ...(error instanceof AnalysisNetworkUnavailable
+          ? { method: 'analysis_network_unavailable', checkpointState: 'unknown' }
+          : {}),
         reason:
-          error instanceof EvidenceRequestLimit
-            ? `${error.message} Navigation continues; no over-limit request was sent.`
-            : 'An analysis or review response ended before returning a result. Navigation continues; this checkpoint remains incomplete.',
+          error instanceof AnalysisNetworkUnavailable
+            ? error.message
+            : error instanceof EvidenceRequestLimit
+              ? `${error.message} Navigation continues; no over-limit request was sent.`
+              : 'An analysis or review response ended before returning a result. Navigation continues; this checkpoint remains incomplete.',
         checkpointCaptureId: current.id,
       },
       [current.id],
@@ -724,15 +762,18 @@ export class Runner {
     }
     const snapshot = requestEvidence(this.store, run.id, 'analyst', current);
     const images = walk.images(imageRecordsForRead(snapshot));
-    const analysis = await models.reason(
-      run.id,
-      'analyst',
-      snapshot.records,
-      images,
-      analysisSchema,
-      false,
-      signal,
-      snapshot.read,
+    if (analysisNetworkDeferred(this.store.records(run.id), 'analyst')) return current;
+    const analysis = await optionalAnalysisRequest('analyst', () =>
+      models.reason(
+        run.id,
+        'analyst',
+        snapshot.records,
+        images,
+        analysisSchema,
+        false,
+        signal,
+        snapshot.read,
+      ),
     );
     const visual = recordAnalysisDetails(
       this.store,
@@ -823,7 +864,7 @@ export class Runner {
       try {
         await this.review(models, run, next, walk, signal, false);
       } catch (error) {
-        return this.incompleteCheckpoint(error, run, next, signal);
+        return this.recoverIncomplete(error, run, next, walk, signal);
       }
     return next;
   }
@@ -839,15 +880,19 @@ export class Runner {
     const proposals = this.store.records(run.id).filter((r) => r.kind === 'criterion_proposal');
     if (!candidates.length && !proposals.length) return;
     const snapshot = requestEvidence(this.store, run.id, 'reviewer', current);
-    const result = await models.reason(
-      run.id,
-      'reviewer',
-      snapshot.records,
-      walk.images(imageRecordsForRead(snapshot)),
-      reviewSchema,
-      final,
-      signal,
-      snapshot.read,
+    const images = walk.images(imageRecordsForRead(snapshot));
+    if (analysisNetworkDeferred(this.store.records(run.id), 'reviewer')) return;
+    const result = await optionalAnalysisRequest('reviewer', () =>
+      models.reason(
+        run.id,
+        'reviewer',
+        snapshot.records,
+        images,
+        reviewSchema,
+        final,
+        signal,
+        snapshot.read,
+      ),
     );
     for (const d of result.decisions) {
       const c = candidates.find((r) => r.id === d.candidateId);
