@@ -170,8 +170,8 @@ test('Fitting optional criteria are selected newest first and never exceed five 
   }
 });
 
-test('Mandatory finding originals still raise the existing limit before any reviewer read is recorded', () => {
-  const x = fixture(9);
+test('Mandatory finding originals above the documented provider limit still refuse before a reviewer read', () => {
+  const x = fixture(51);
   try {
     x.candidate(x.captures.slice(1).map((capture) => capture.id));
     const before = x.store.records(x.run.id).length;

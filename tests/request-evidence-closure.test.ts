@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { CRITERIA_VERSION, evaluateCriteria, makeCriterionScope } from '../src/criteria.js';
-import { EvidenceRequestLimit, originalClosure, requestEvidence } from '../src/request-evidence.js';
+import { originalClosure, requestEvidence } from '../src/request-evidence.js';
 import type { RecordEntry } from '../src/types.js';
 
 /** Exact return evidence graph emitted by ReturnEvidence, without a browser or model call. */
@@ -124,8 +124,7 @@ for (const preserved of [true, false])
     try {
       const closure = originalClosure(x.store.records(x.run.id), [x.comparison.id]);
       assert.equal(closure.filter((record) => record.kind === 'capture').length, 4);
-      // A complete historical analyst read is a test precondition, not a claim that the
-      // current three-picture analyst allowance can submit this four-picture history.
+      // A complete original analyst read remains the prerequisite for independent review.
       const analyst = x.store.snapshot(x.run.id, 'analyst');
       const proposal = x.store.append(
         x.run.id,
@@ -192,21 +191,24 @@ for (const preserved of [true, false])
     }
   });
 
-test('A historical four-picture return without verified field identity cannot earn a records-only exemption', () => {
+test('A historical four-picture return supplies its baseline rather than borrowing a records-only exemption', () => {
   const x = returnHistory();
   try {
-    const before = x.store.records(x.run.id).length;
-    assert.throws(
-      () => requestEvidence(x.store, x.run.id, 'analyst', x.current),
-      (error) => error instanceof EvidenceRequestLimit && error.role === 'analyst',
+    const packet = requestEvidence(x.store, x.run.id, 'analyst', x.current);
+    assert.equal(packet.records.filter((r) => r.kind === 'capture').length, 4);
+    assert.equal(packet.read.payload.imageReceipt.version, 'original-images/2');
+    assert.deepEqual(packet.read.payload.imageReceipt.recordsOnly, []);
+    assert(
+      packet.read.payload.imageReceipt.supplied.some(
+        (pin: any) => pin.captureId === x.beforeTyping.id,
+      ),
     );
-    assert.equal(x.store.records(x.run.id).length, before, 'No incomplete read is recorded');
   } finally {
     x.close();
   }
 });
 
-test('Observation closure cannot silently push mandatory reviewer pictures past eight', () => {
+test('Observation closure supplies all nine mandatory reviewer pictures instead of the former eight-picture refusal', () => {
   const x = returnHistory();
   try {
     const extra = Array.from({ length: 5 }, (_, i) => x.capture(x.run.url + '/other/' + i));
@@ -217,12 +219,19 @@ test('Observation closure cannot silently push mandatory reviewer pictures past 
       { title: 'Existing finding' },
       extra.map((r) => r.id),
     );
-    const before = x.store.records(x.run.id).length;
-    assert.throws(
-      () => requestEvidence(x.store, x.run.id, 'reviewer', x.current),
-      (error) => error instanceof EvidenceRequestLimit && error.role === 'reviewer',
-    );
-    assert.equal(x.store.records(x.run.id).length, before);
+    const packet = requestEvidence(x.store, x.run.id, 'reviewer', x.current);
+    const required = [
+      ...originalClosure(x.store.records(x.run.id), [x.comparison.id]),
+      ...extra,
+    ].filter((r) => r.kind === 'capture');
+    assert.equal(packet.read.payload.imageReceipt.supplied.length, 9);
+    for (const capture of required)
+      assert(
+        packet.read.payload.imageReceipt.supplied.some(
+          (pin: any) => pin.captureId === capture.id && pin.captureHash === capture.hash,
+        ),
+      );
+    assert.deepEqual(packet.read.payload.imageReceipt.recordsOnly, []);
   } finally {
     x.close();
   }
