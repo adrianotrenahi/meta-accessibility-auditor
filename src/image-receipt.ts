@@ -2,7 +2,11 @@ import { z } from 'zod';
 import { recordIsIntact } from './store.js';
 import type { RecordEntry } from './types.js';
 
-export const IMAGE_RECEIPT_VERSION = 'original-images/1' as const;
+export const LEGACY_IMAGE_RECEIPT_VERSION = 'original-images/1' as const;
+export const IMAGE_RECEIPT_VERSION = 'original-images/2' as const;
+// Configured Muse Spark limit, verified 28 October 2026.
+// https://dev.meta.ai/docs/image-understanding#multiple-images
+export const PROVIDER_IMAGE_LIMIT = 50;
 const pinSchema = z
   .object({
     captureId: z.string().min(1),
@@ -18,14 +22,27 @@ const baselinePinSchema = pinSchema
     typedActionId: z.string().min(1),
   })
   .strict();
-const receiptSchema = z
-  .object({
-    version: z.literal(IMAGE_RECEIPT_VERSION),
-    currentCaptureId: z.string().min(1),
-    supplied: z.array(pinSchema).min(1).max(8),
-    recordsOnly: z.array(baselinePinSchema).max(1),
-  })
-  .strict();
+const receiptFields = {
+  currentCaptureId: z.string().min(1),
+};
+const receiptSchema = z.discriminatedUnion('version', [
+  z
+    .object({
+      ...receiptFields,
+      version: z.literal(LEGACY_IMAGE_RECEIPT_VERSION),
+      supplied: z.array(pinSchema).min(1).max(8),
+      recordsOnly: z.array(baselinePinSchema).max(1),
+    })
+    .strict(),
+  z
+    .object({
+      ...receiptFields,
+      version: z.literal(IMAGE_RECEIPT_VERSION),
+      supplied: z.array(pinSchema).min(1).max(PROVIDER_IMAGE_LIMIT),
+      recordsOnly: z.array(baselinePinSchema).max(0),
+    })
+    .strict(),
+]);
 export type ImageReceipt = z.infer<typeof receiptSchema>;
 export type BaselineImagePin = z.infer<typeof baselinePinSchema>;
 export const readHashMatches = (read: RecordEntry, expected: unknown) =>
@@ -192,7 +209,9 @@ export function makeImageReceipt(
   omitted?: BaselineImagePin,
 ): ImageReceipt {
   return {
-    version: IMAGE_RECEIPT_VERSION,
+    // Explicit omissions exist only for reading/reconstructing the old format.
+    // Fresh requestEvidence calls supply every required original picture.
+    version: omitted ? LEGACY_IMAGE_RECEIPT_VERSION : IMAGE_RECEIPT_VERSION,
     currentCaptureId,
     supplied: records
       .filter((record) => record.kind === 'capture' && record.id !== omitted?.captureId)
@@ -238,7 +257,14 @@ export function suppliedImageIds(read: RecordEntry, records: RecordEntry[]): str
       captures.map((record) => record.id),
     ) ||
     !receipt.supplied.some((item) => item.captureId === receipt.currentCaptureId) ||
-    receipt.supplied.length > (read.author === 'analyst' ? 3 : read.author === 'reviewer' ? 8 : 1)
+    receipt.supplied.length >
+      (read.author === 'analyst' || read.author === 'reviewer'
+        ? receipt.version === LEGACY_IMAGE_RECEIPT_VERSION
+          ? read.author === 'analyst'
+            ? 3
+            : 8
+          : PROVIDER_IMAGE_LIMIT
+        : 1)
   )
     throw Error('The original image receipt does not match this read and its allowance.');
   for (const item of allPins) {

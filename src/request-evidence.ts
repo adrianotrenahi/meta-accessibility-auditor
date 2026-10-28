@@ -8,13 +8,7 @@ import {
   UNRECOGNISED_BUNDLE_LIMIT,
   journeyDataSchema,
 } from './journey-evidence.js';
-import {
-  baselineHasIndependentUse,
-  makeImageReceipt,
-  returnBaselineImage,
-  suppliedImageIds,
-  type BaselineImagePin,
-} from './image-receipt.js';
+import { makeImageReceipt, suppliedImageIds, PROVIDER_IMAGE_LIMIT } from './image-receipt.js';
 
 export class EvidenceRequestLimit extends Error {
   constructor(
@@ -262,35 +256,9 @@ export function requestEvidence(
     originals = originalClosure(records, [...roots, ...available.map((record) => record.id)]);
   }
   const captureIds = new Set(originals.filter((r) => r.kind === 'capture').map((r) => r.id));
-  let recordsOnly: BaselineImagePin | undefined;
-  if (role === 'analyst' && captureIds.size === 4) {
-    const directCaptures = new Set(
-      originalClosure(records, roots)
-        .filter((r) => r.kind === 'capture')
-        .map((r) => r.id),
-    );
-    const choices = originals
-      .filter((r) => r.payload.method === 'return_preservation')
-      .map((r) => returnBaselineImage(originals, r.id, current.id))
-      .filter(
-        (item) =>
-          item !== null &&
-          !directCaptures.has(item.captureId) &&
-          !baselineHasIndependentUse(
-            [
-              ...originals,
-              ...candidates,
-              ...records.filter((record) => record.kind === 'at_check'),
-            ],
-            item,
-          ),
-      );
-    if (choices.length === 1 && choices[0]) recordsOnly = choices[0];
-  }
-  if (
-    captureIds.size - (recordsOnly ? 1 : 0) >
-    (role === 'reviewer' ? 8 : role === 'analyst' ? 3 : 1)
-  )
+  // Analysis/review supply all required originals. The provider's documented
+  // image bound is separate from the counted context and spending admission.
+  if (captureIds.size > (role === 'driver' ? 1 : PROVIDER_IMAGE_LIMIT))
     throw new EvidenceRequestLimit(role);
   if (role === 'reviewer') {
     // Optional criteria reuse the mandatory original pictures; they cannot enlarge the finding packet.
@@ -323,34 +291,7 @@ export function requestEvidence(
   // Prior claims prevent repeat proposals; they are not a substitute for original evidence.
   if (role === 'analyst')
     roots.push(...candidates.map((r) => r.id), ...reviewFeedbackIds(records, runId));
-  // The omitted picture stays on disk and is verified just like the three sent originals.
-  if (recordsOnly)
-    for (const capture of originals.filter((r) => r.kind === 'capture'))
-      store.image(runId, capture.payload.imageFile);
-  if (
-    recordsOnly &&
-    !records.some(
-      (record) =>
-        record.kind === 'limit' &&
-        record.payload.method === 'records_only_return_baseline' &&
-        record.payload.recordsOnlyCaptureId === recordsOnly.captureId,
-    )
-  )
-    store.append(
-      runId,
-      'limit',
-      'browser',
-      {
-        method: 'records_only_return_baseline',
-        state: 'NOT_TESTED',
-        recordsOnlyCaptureId: recordsOnly.captureId,
-        comparisonId: recordsOnly.comparisonId,
-        reason:
-          'A return-check request read this pre-typing baseline as an original record without supplying its picture. That request did not examine this screen visually or settle its criteria. Unsupported checks remain NOT_TESTED; any separately supported earlier assessment is unchanged.',
-      },
-      [recordsOnly.captureId],
-    );
-  const receipt = makeImageReceipt(originals, current.id, recordsOnly);
+  const receipt = makeImageReceipt(originals, current.id);
   const snapshot = store.snapshot(runId, role, roots, receipt);
   for (const r of snapshot.records)
     if (!recordIsIntact(r)) throw Error('A selected original record changed; no request is sent.');

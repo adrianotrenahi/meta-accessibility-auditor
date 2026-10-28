@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { recordIsIntact } from './store.js';
 import { originalClosure } from './request-evidence.js';
 import type { RecordEntry } from './types.js';
+import { PROVIDER_IMAGE_LIMIT } from './image-receipt.js';
 
 export const VISUAL_TOPICS = [
   'content',
@@ -167,8 +168,8 @@ export function normalizeVisualCoverage(
   suppliedImageCaptureIds: readonly string[],
 ): { coverage: VisualCoverage[]; limits: string[] } {
   const captures = [...new Set(analysedCaptureIds)];
-  if (captures.length > 3)
-    throw Error('Visual analysis exceeds the three-original-viewport request allowance.');
+  if (captures.length > PROVIDER_IMAGE_LIMIT)
+    throw Error('Visual analysis exceeds the documented original-image request allowance.');
   const limits = new Set<string>();
   const raw = Array.isArray(entries) && entries.length <= 18 ? entries : [];
   if (!Array.isArray(entries) || entries.length > 18)

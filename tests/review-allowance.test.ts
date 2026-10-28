@@ -8,7 +8,7 @@ import { Runner } from '../src/runner.js';
 import type { RecordEntry } from '../src/types.js';
 import { VISUAL_TOPICS } from '../src/visual-inspection.js';
 
-test('A review beyond eight original screens stays incomplete while later checkpoints continue', async () => {
+test('A review beyond the documented fifty original screens stays incomplete while later checkpoints continue', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'access-walk-review-allowance-'));
   const store = new Store(dir);
   try {
@@ -18,7 +18,7 @@ test('A review beyond eight original screens stays incomplete while later checkp
       'offline',
     );
     const captures: RecordEntry[] = [];
-    for (let n = 0; n < 9; n++) {
+    for (let n = 0; n < 51; n++) {
       const image = store.asset(run.id, `capture_${n}.png`, Buffer.from('Controlled image ' + n));
       const capture = store.append(run.id, 'capture', 'browser', {
         url: run.url,
@@ -83,7 +83,7 @@ test('A review beyond eight original screens stays incomplete while later checkp
           })),
     };
     const signal = new AbortController().signal;
-    for (const current of [captures[7], captures[8]])
+    for (const current of [captures[49], captures[50]])
       await (runner as any).analyseCheckpoint(models, run, current, walk, signal);
 
     const limits = store.records(run.id).filter((record) => record.kind === 'limit');
