@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { CAPS } from './types.js';
 import { TARGET_ROLES } from './keyboard-target.js';
+import { postMeta, MetaTransportError } from './meta-transport.js';
 import type { Role, Approval, RecordEntry } from './types.js';
 import { suppliedImageIds } from './image-receipt.js';
 import { Store, digest, recordIsIntact } from './store.js';
@@ -191,18 +192,46 @@ export class MetaModels {
     private getApproval: () => Approval = approval,
     private getKey: () => string | undefined = key,
   ) {}
-  private async post(path: string, body: any, signal: AbortSignal) {
+  private async post(
+    runId: string,
+    path: '/responses/input_tokens' | '/responses',
+    body: any,
+    signal: AbortSignal,
+  ) {
     const apiKey = this.getKey();
     if (!apiKey) throw Error('Add a Meta API key to the private .env before paid testing.');
-    const response = await this.fetcher('https://api.meta.ai/v1' + path, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal,
-    });
-    if (!response.ok)
-      throw Error(`Meta returned HTTP ${response.status}; the request was not retried.`);
-    return response.json() as Promise<any>;
+    try {
+      return await postMeta({
+        phase: path === '/responses/input_tokens' ? 'input_count' : 'generation',
+        body,
+        apiKey,
+        signal,
+        fetcher: this.fetcher,
+        assertActive: () => {
+          if (this.store.run(runId).state !== 'running')
+            throw Error('The run has stopped; no model request will be sent.');
+        },
+        onRetry: (diagnostic) => {
+          this.store.append(runId, 'limit', 'meta', {
+            method: 'meta_connection_retry',
+            reason:
+              diagnostic.phase === 'input_count'
+                ? 'Reconnecting to Meta to prepare this same request. No new model generation has been sent.'
+                : 'The model request could not establish a connection. Reconnecting before any request could reach Meta.',
+            diagnostic,
+          });
+        },
+      });
+    } catch (error) {
+      if (error instanceof MetaTransportError)
+        this.store.append(runId, 'limit', 'meta', {
+          method: 'meta_connection_failure',
+          reason: error.message,
+          diagnostic: error.diagnostic,
+          generationNotSent: error.generationNotSent,
+        });
+      throw error;
+    }
   }
   async reason<T>(
     runId: string,
@@ -308,14 +337,14 @@ export class MetaModels {
         ' Distinguish the supplied-image receipt from original record availability: records-only baseline captures were not visually supplied. Never assess their criterion scope, visual appearance or element targets. Review feedback is an interpretation to reconsider against originals, never factual evidence. Do not repeat an unchanged existing finding; a requested rewrite needs a distinct corrected body using the same issueKey and a new exact independent review. ' +
         ' Return only the schema-constrained JSON result, without progress messages or narrative outside it. Keep reasons concise; leave unavailable checks explicitly unknown. ';
     }
-    const { input_tokens: count } = await this.post('/responses/input_tokens', body, signal);
+    const { input_tokens: count } = await this.post(runId, '/responses/input_tokens', body, signal);
     if (!Number.isInteger(count) || count < 0)
       throw Error('The provider did not return a valid evidence input count.');
     if (count > cap.input) throw new EvidenceRequestLimit(role, 'input');
     const reserved = Math.ceil(count * 1.25 + cap.output * 4.25); // integer millionths of a dollar
     const id = this.store.reserve(runId, role, reserved, approved, final);
     try {
-      const response = await this.post('/responses', body, signal);
+      const response = await this.post(runId, '/responses', body, signal);
       const u = response.usage;
       if (
         !Number.isInteger(u?.input_tokens) ||
@@ -362,8 +391,11 @@ export class MetaModels {
       return result;
     } catch (e) {
       const request = this.store.usage(runId).requests.find((r) => r.id === id);
-      if (request?.actual === null) this.store.settle(id, null, 'unknown');
-      else if (request?.status === 'received')
+      if (request?.actual === null) {
+        if (e instanceof MetaTransportError && e.generationNotSent)
+          this.store.settle(id, 0, 'not_sent');
+        else this.store.settle(id, null, 'unknown');
+      } else if (request?.status === 'received')
         this.store.settle(id, request.actual, 'invalid_result');
       throw e;
     }
@@ -380,6 +412,7 @@ export class MetaModels {
     const id = this.store.reserve(runId, 'sam', 2500, approved);
     try {
       const response = await this.post(
+        runId,
         '/responses',
         {
           model: 'sam-3.1',
@@ -407,8 +440,11 @@ export class MetaModels {
       return { requestId: id, source: 'SAM 3.1', raw, objects };
     } catch (e) {
       const r = this.store.usage(runId).requests.find((r) => r.id === id);
-      if (r?.actual === null) this.store.settle(id, null, 'unknown');
-      else if (r?.status === 'received') this.store.settle(id, r.actual, 'invalid_result');
+      if (r?.actual === null) {
+        if (e instanceof MetaTransportError && e.generationNotSent)
+          this.store.settle(id, 0, 'not_sent');
+        else this.store.settle(id, null, 'unknown');
+      } else if (r?.status === 'received') this.store.settle(id, r.actual, 'invalid_result');
       throw e;
     }
   }
