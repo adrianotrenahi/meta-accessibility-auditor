@@ -15,6 +15,7 @@ import { Runner } from '../src/runner.js';
 import { VoiceOverProbe } from '../src/voiceover.js';
 import { RoleAllowanceLimit } from '../src/role-allowance.js';
 import { PHASE } from '../src/types.js';
+import { digest } from '../src/store.js';
 
 async function setup(engine: 'chromium' | 'webkit', html: string) {
   const dir = mkdtempSync(join(tmpdir(), 'keyboard-target-'));
@@ -27,6 +28,16 @@ async function setup(engine: 'chromium' | 'webkit', html: string) {
   const walk = new BrowserWalk(app.store, run.id, app.origin, true, engine);
   await walk.start(run.url);
   await walk.page.setContent(html);
+  const observedStates = new Map<string, any>();
+  const observedState = (walk as any).observedState.bind(walk);
+  let latestState: any;
+  (walk as any).observedState = async () => {
+    const value = await observedState();
+    observedStates.set(digest(JSON.stringify(value)), value);
+    latestState = value;
+    return value;
+  };
+  const staleRefusals: any[] = [];
   const current = await walk.captureSettled();
   const signal = new AbortController();
   const verifyOriginal = walk.verifyOriginalCapture.bind(walk);
@@ -34,8 +45,14 @@ async function setup(engine: 'chromium' | 'webkit', html: string) {
     try {
       await verifyOriginal(source);
     } catch (error) {
-      if (error instanceof ActionStateChanged)
-        error.message += ` Original focus: ${JSON.stringify(source.payload.focus)}. Current focus: ${JSON.stringify(await walk.focus())}.`;
+      if (error instanceof ActionStateChanged) {
+        const previous = observedStates.get(source.payload.stateStamp);
+        const differences = Object.keys(latestState ?? {})
+          .filter((key) => JSON.stringify(previous?.[key]) !== JSON.stringify(latestState[key]))
+          .map((key) => ({ key, original: previous?.[key], current: latestState[key] }));
+        staleRefusals.push({ sourceId: source.id, stable: source.payload.stable, differences });
+        error.message += ` Exact recorded state differences: ${JSON.stringify(differences)}.`;
+      }
       throw error;
     }
   };
@@ -55,6 +72,7 @@ async function setup(engine: 'chromium' | 'webkit', html: string) {
     current,
     signal,
     step,
+    staleRefusals,
     async close() {
       await walk.close();
       await app.close();
@@ -108,7 +126,7 @@ for (const engine of ['chromium', 'webkit'] as const) {
         x.signal.signal,
         x.step,
       );
-      assert.equal(result.outcome, 'reached');
+      assert.equal(result.outcome, 'reached', JSON.stringify(x.staleRefusals));
       assert.equal(result.actions.length, 3);
       assert.equal((await x.walk.focus()).name, 'Target');
       assert.equal(await x.walk.page.locator('#target').textContent(), 'Target');
@@ -157,7 +175,11 @@ for (const engine of ['chromium', 'webkit'] as const) {
     try {
       await (runner as any).live(x.run, x.walk, new VoiceOverProbe(x.walk), x.current, x.signal);
       assert.equal(decisions, 2, 'One target decision plus finish, not one decision per Tab.');
-      assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length, 3);
+      assert.equal(
+        x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length,
+        3,
+        JSON.stringify(x.staleRefusals),
+      );
       assert(
         x.app.store
           .records(x.run.id)
@@ -384,7 +406,18 @@ for (const engine of ['chromium', 'webkit'] as const) {
         x.signal.signal,
         x.step,
       );
-      assert.equal(result.outcome, 'activation_sent');
+      assert.equal(
+        result.outcome,
+        'activation_sent',
+        JSON.stringify({
+          staleRefusals: x.staleRefusals,
+          actions: result.actions.map((row) => row.payload.action.key),
+          limits: x.app.store
+            .records(x.run.id)
+            .filter((row) => row.kind === 'limit')
+            .map((row) => row.payload),
+        }),
+      );
       assert.deepEqual(
         result.actions.map((r) => r.payload.action.key),
         ['ArrowRight', 'ArrowRight', 'ArrowRight', 'Enter'],
@@ -421,7 +454,7 @@ test('Exact accessible names retain literal quotes and backslashes for target ma
       x.signal.signal,
       x.step,
     );
-    assert.equal(result.outcome, 'reached');
+    assert.equal(result.outcome, 'reached', JSON.stringify(x.staleRefusals));
     assert.equal(result.actions.length, 2);
     assert.equal((await x.walk.focus()).name, target.name);
   } finally {
@@ -593,7 +626,7 @@ test('A named ARIA gridcell uses the same bounded original native-arrow path', a
       x.signal.signal,
       x.step,
     );
-    assert.equal(result.outcome, 'reached');
+    assert.equal(result.outcome, 'reached', JSON.stringify(x.staleRefusals));
     assert.equal(result.actions.length, 1);
   } finally {
     await x.close();
@@ -715,7 +748,7 @@ test('Focus-appearance changes refresh one unsent key without another model deci
         return (runner as any).targetKeyboardStep(x.run, x.walk, before, action, guard);
       },
     );
-    assert.equal(result.outcome, 'reached');
+    assert.equal(result.outcome, 'reached', JSON.stringify(x.staleRefusals));
     assert.equal(result.actions.length, 2);
     assert.equal(attempts, 3);
     assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length, 2);
@@ -728,3 +761,43 @@ test('Focus-appearance changes refresh one unsent key without another model deci
     await x.close();
   }
 });
+
+for (const engine of ['chromium', 'webkit'] as const) {
+  test(`Actual ${engine} keeps a first Tab on the page body separate from a visited-control cycle`, async () => {
+    const x = await setup(engine, '<button>A</button><button>Target</button>');
+    try {
+      await x.walk.page.evaluate(() => {
+        let first = true;
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Tab' && first) {
+            first = false;
+            event.preventDefault();
+          }
+        });
+      });
+      const result = await walkToKeyboardTarget(
+        x.walk,
+        x.app.store,
+        x.run.id,
+        x.current,
+        seek,
+        x.signal.signal,
+        x.step,
+      );
+      assert.equal(result.outcome, 'reached', JSON.stringify(x.staleRefusals));
+      assert.equal(result.actions.length, 3);
+      assert.equal(result.actions[0]!.payload.before.tag, 'body');
+      assert.equal(result.actions[0]!.payload.after.tag, 'body');
+      assert.equal(result.actions[1]!.payload.after.name, 'A');
+      assert.equal(result.actions[2]!.payload.after.name, 'Target');
+      assert(
+        result.actions.every(
+          (row) => row.payload.outcome === 'performed' && row.payload.requestedAction.key === 'Tab',
+        ),
+      );
+      assert.equal(x.app.store.usage().requests.length, 0);
+    } finally {
+      await x.close();
+    }
+  });
+}

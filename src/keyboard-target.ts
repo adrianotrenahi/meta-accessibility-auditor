@@ -271,11 +271,19 @@ export async function walkToKeyboardTarget(
       const activeHandle = await walk.page.evaluateHandle(() => document.activeElement);
       const focus = activeHandle.asElement();
       if (focus) {
-        const seen = await Promise.all(
-          focusHandles.map((old) =>
-            old.evaluate((element, other) => element === other, focus).catch(() => false),
-          ),
+        // The document's placeholder is not a visited control. A first Tab after
+        // a popup closes can leave body focused before the next real Tab enters
+        // the page. All keys/content changes and the ordinary bound still apply.
+        const pagePlaceholder = await focus.evaluate(
+          (element) => element === document.body || element === document.documentElement,
         );
+        const seen = pagePlaceholder
+          ? []
+          : await Promise.all(
+              focusHandles.map((old) =>
+                old.evaluate((element, other) => element === other, focus).catch(() => false),
+              ),
+            );
         if (seen.some(Boolean)) {
           await focus.dispose();
           return stop(
