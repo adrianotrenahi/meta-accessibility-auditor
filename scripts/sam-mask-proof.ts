@@ -8,18 +8,56 @@ import type { RecordEntry } from '../src/types.js';
 
 export function proveSavedSamMasks(dataDirectory: string, runId: string, outputDirectory: string) {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(runId)) throw Error('Pass one valid saved run reference.');
-  const data = realpathSync(dataDirectory);
+  let data: string;
+  try {
+    data = realpathSync(dataDirectory);
+    if (!statSync(data).isDirectory()) throw Error('Not a folder.');
+  } catch (cause) {
+    throw Error(
+      'Choose an existing saved-data folder containing runs.sqlite and its matching companion files.',
+      { cause },
+    );
+  }
   const desired = resolve(outputDirectory);
-  const output = join(realpathSync(dirname(desired)), basename(desired));
+  let parent: string;
+  try {
+    parent = realpathSync(dirname(desired));
+    if (!statSync(parent).isDirectory()) throw Error('Not a folder.');
+  } catch (cause) {
+    throw Error('Create the output folder’s parent first, then choose a new proof folder.', {
+      cause,
+    });
+  }
+  const output = join(parent, basename(desired));
   const within = relative(data, output);
   if (!within || (!within.startsWith('..' + sep) && within !== '..'))
     throw Error('Decoded proof files must be outside the original data directory.');
-  const db = new DatabaseSync(join(data, 'runs.sqlite'), { readOnly: true });
+  let db: DatabaseSync;
   try {
+    db = new DatabaseSync(join(data, 'runs.sqlite'), { readOnly: true });
+  } catch (cause) {
+    throw Error(
+      'The saved database could not be opened read-only. Keep runs.sqlite and any matching -wal/-shm files together in the saved data folder; do not remove or rewrite them.',
+      { cause },
+    );
+  }
+  try {
+    const readSaved = <T>(read: () => T) => {
+      try {
+        return read();
+      } catch (cause) {
+        throw Error(
+          'The saved run records could not be read. Choose the complete engine data folder and keep its matching database companion files together.',
+          { cause },
+        );
+      }
+    };
     const rows = () =>
-      db.prepare('SELECT * FROM records WHERE run_id=? ORDER BY seq').all(runId) as any[];
+      readSaved(() =>
+        db.prepare('SELECT * FROM records WHERE run_id=? ORDER BY seq').all(runId),
+      ) as any[];
     const requests = () =>
-      db.prepare('SELECT * FROM requests WHERE run_id=? ORDER BY id').all(runId);
+      readSaved(() => db.prepare('SELECT * FROM requests WHERE run_id=? ORDER BY id').all(runId));
     const originals = rows();
     if (!originals.length) throw Error('No original records were found for that saved run.');
     const before = digest(JSON.stringify({ records: originals, requests: requests() }));
@@ -68,7 +106,18 @@ export function proveSavedSamMasks(dataDirectory: string, runId: string, outputD
     const after = digest(JSON.stringify({ records: rows(), requests: requests() }));
     if (before !== after) throw Error('The saved run changed during this read-only proof.');
     // A new output folder only; never overwrite an earlier proof or original file.
-    mkdirSync(output, { mode: 0o700 });
+    try {
+      mkdirSync(output, { mode: 0o700 });
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'EEXIST')
+        throw Error('Choose a new proof folder; the existing path will not be overwritten.', {
+          cause,
+        });
+      throw Error(
+        'The new proof folder could not be created. Choose a writable existing parent folder.',
+        { cause },
+      );
+    }
     const outlines = decoded.map((result) => {
       if (result.state !== 'decoded') return result;
       const file = `mask_${digest(result.mappingId).slice(0, 24)}.svg`;

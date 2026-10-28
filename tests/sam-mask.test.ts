@@ -9,6 +9,9 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   mkdtempSync,
   mkdirSync,
+  chmodSync,
+  copyFileSync,
+  existsSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -398,6 +401,30 @@ test('The reusable proof reads only saved originals, refuses overwrites/escaped 
   db.close();
   const originalDatabase = digest(readFileSync(dbFile));
   try {
+    assert.throws(
+      () =>
+        proveSavedSamMasks(
+          join(temporary, 'missing-data'),
+          x.capture.runId,
+          join(temporary, 'missing-source-proof'),
+        ),
+      /Choose an existing saved-data folder/,
+    );
+    assert.throws(
+      () => proveSavedSamMasks(data, x.capture.runId, join(temporary, 'missing-parent', 'proof')),
+      /Create the output folder’s parent first/,
+    );
+    const emptyData = join(temporary, 'empty-data');
+    mkdirSync(emptyData);
+    assert.throws(
+      () =>
+        proveSavedSamMasks(emptyData, x.capture.runId, join(temporary, 'missing-database-proof')),
+      /Keep runs.sqlite and any matching -wal\/-shm files together/,
+    );
+    assert(
+      !existsSync(join(emptyData, 'runs.sqlite')),
+      'A failed read-only open must never create a blank source database.',
+    );
     const out = join(temporary, 'proof');
     const proof = proveSavedSamMasks(data, x.capture.runId, out);
     assert.equal(proof.decodedOutlines, 1);
@@ -414,7 +441,10 @@ test('The reusable proof reads only saved originals, refuses overwrites/escaped 
     assert(svg.includes('transform="translate(0.5 0.5)"'));
     assert(!svg.includes('<script'));
     const firstReceipt = readFileSync(join(out, 'result.json'), 'utf8');
-    assert.throws(() => proveSavedSamMasks(data, x.capture.runId, out));
+    assert.throws(
+      () => proveSavedSamMasks(data, x.capture.runId, out),
+      /Choose a new proof folder/,
+    );
     assert.equal(readFileSync(join(out, 'result.json'), 'utf8'), firstReceipt);
     assert.throws(
       () => proveSavedSamMasks(data, x.capture.runId, join(data, 'do-not-write')),
@@ -437,4 +467,76 @@ test('The reusable proof reads only saved originals, refuses overwrites/escaped 
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+});
+
+test('A complete copied WAL set remains readable without source writes, while the main database alone omits recent originals', () => {
+  const temporary = mkdtempSync(join(tmpdir(), 'meta-mask-wal-'));
+  const source = join(temporary, 'source'),
+    saved = join(temporary, 'saved');
+  mkdirSync(source);
+  mkdirSync(saved);
+  const x = fixture();
+  x.capture.payload.imageFile = 'original.png';
+  pin(x.capture);
+  const db = new DatabaseSync(join(source, 'runs.sqlite'));
+  try {
+    db.exec(
+      'PRAGMA journal_mode=WAL;CREATE TABLE records(seq INTEGER,id TEXT,run_id TEXT,kind TEXT,author TEXT,body TEXT,sources TEXT,hash TEXT,created TEXT);CREATE TABLE requests(id TEXT,run_id TEXT);PRAGMA wal_checkpoint(TRUNCATE);',
+    );
+    const insert = db.prepare('INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?)');
+    for (const r of [x.capture, x.mapping])
+      insert.run(
+        r.seq,
+        r.id,
+        r.runId,
+        r.kind,
+        r.author,
+        JSON.stringify(r.payload),
+        JSON.stringify(r.sources),
+        r.hash,
+        r.createdAt,
+      );
+    const bare = join(temporary, 'main-only.sqlite');
+    copyFileSync(join(source, 'runs.sqlite'), bare);
+    const mainOnly = new DatabaseSync(bare, { readOnly: true });
+    try {
+      assert.equal(
+        (mainOnly.prepare('SELECT COUNT(*) AS n FROM records').get() as any).n,
+        0,
+        'The required original records are still in WAL, not the main file.',
+      );
+    } finally {
+      mainOnly.close();
+    }
+    const sourceFiles = ['runs.sqlite', 'runs.sqlite-wal', 'runs.sqlite-shm'];
+    for (const file of sourceFiles) copyFileSync(join(source, file), join(saved, file));
+    mkdirSync(join(saved, x.capture.runId));
+    writeFileSync(join(saved, x.capture.runId, 'original.png'), x.image);
+    const before = sourceFiles.map((file) => digest(readFileSync(join(saved, file))));
+    for (const file of sourceFiles) chmodSync(join(saved, file), 0o444);
+    chmodSync(saved, 0o555);
+    const proof = proveSavedSamMasks(saved, x.capture.runId, join(temporary, 'proof'));
+    assert.equal(proof.decodedOutlines, 1);
+    assert.deepEqual(proof.errors, []);
+    assert.equal(proof.providerCalls, 0);
+    assert.equal(digest(readFileSync(join(saved, 'runs.sqlite'))), before[0]);
+    assert.equal(digest(readFileSync(join(saved, 'runs.sqlite-wal'))), before[1]);
+  } finally {
+    db.close();
+    chmodSync(saved, 0o755);
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('The pinned decoder emits only its documented uppercase polygon commands', () => {
+  const x = fixture(),
+    result = decodeSavedSamMask(x.mapping, x.capture, x.image);
+  assert.equal(result.state, 'decoded');
+  assert.deepEqual([...new Set(result.svgPath.match(/[A-Za-z]/g))].sort(), ['L', 'M', 'Z']);
+  const declared = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const installed = JSON.parse(
+    readFileSync(new URL('../node_modules/@meta-sam/parser/package.json', import.meta.url), 'utf8'),
+  );
+  assert.equal(declared.dependencies['@meta-sam/parser'], '0.1.0');
+  assert.equal(installed.version, '0.1.0');
 });
