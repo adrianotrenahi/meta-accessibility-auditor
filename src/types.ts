@@ -44,6 +44,8 @@ export interface ElementInfo {
   id: string;
   selector?: string;
   contextFingerprint?: string;
+  controlInstance?: string;
+  controlFingerprint?: string;
   tag: string;
   role: string;
   name: string;
@@ -66,6 +68,7 @@ export interface Capture {
   aria: string;
   focus: { tag: string; text: string; name: string };
   limits: {
+    controlIdentityChanged?: boolean;
     totalControls: number;
     maximumListedControls: number;
     visibleTextTruncated: boolean;

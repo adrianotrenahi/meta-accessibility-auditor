@@ -2,7 +2,7 @@
 
 Updated 28 October 2026. Working code, controlled evidence and remaining proof are kept separate.
 
-Overnight follow-up: the reviewed Day 4 proposals are awaiting Adriano's merge decision. A separate stacked live-picture change now passes 233 tests/build and the actual Cavioo desktop/320px saved-response flow. It preserves a reviewed original's identity when a later observation has identical pixels and full page state; invisible state changes still withhold pins. Optional review lookup failures keep the ordinary live picture, and zero/one-match pictures skip that lookup. No new model response or paid active-bubble proof is claimed. Details are in LIVE-BUBBLE-BINDING-VALIDATION.md; duplicate grouping remains next.
+Overnight follow-up: the Day 4 engine, private Cavioo connection and live-picture proposals are reviewed and awaiting Adriano's merge decision. The live-picture change passes 233 tests/build and the actual Cavioo desktop/320px saved-response flow; optional review failures preserve the ordinary live picture. A separate new offline grouping proposal tracks actual unchanged unnamed buttons, preserves both original histories, and uses the latest whole accepted claim for its matching bubble. Chromium and WebKit prove replacement/reload separation and refuse a node replaced during capture. Existing records keep their previous meaning, including the earlier paid run's two cards. No new paid response or actual model-driven active-bubble proof is claimed. Details are in LIVE-BUBBLE-BINDING-VALIDATION.md and CONTROL-INSTANCE-GROUPING.md.
 
 ## Impact on the system
 
@@ -45,7 +45,7 @@ The public engineering viewer explains when older reviews cannot verify their or
 ## Still pending
 
 - Codex and Adriano: independently validate the chosen task with a human screen-reader user before filming; broader reader coverage and a real prior-on restoration trial remain outside these scoped proofs.
-- Codex: complete Day 4 self-review, external review and validated corrections. The Day 3 review and owner-authorised merge are complete. Adriano decides when the new Day 4 changes merge.
+- Codex: complete the new grouping proposal's external review and any confirmed corrections. The Day 3 merge and Day 4 engine/private-host/live-picture review verification are complete. Adriano decides when the new changes merge.
 - Adriano: review the twelve-case expected labels, the real demo task and participant recording arrangements, and the remaining name/track/team/contribution choices in the build plan.
 - Codex and Adriano: measure false claims, genuine issues retained or missed, uncertainty and coverage against reviewed labels. No percentage improvement over Cavioo has been established.
 - Codex: complete actual active-frame bubbles and broader model-backed Cavioo flow in [ADR-901 (the full controlled-to-customer flow proof)](https://linear.app/adrianotrenahi/issue/ADR-901). Day 4 proves fresh controlled model-backed report delivery; the older Day 3 final packet was not rerun and report-only proof does not establish live bubbles.

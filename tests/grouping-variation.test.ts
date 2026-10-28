@@ -266,3 +266,138 @@ test('Malformed context fingerprints cannot establish cross-capture identity', (
     );
   }
 });
+
+const instance = 'control-v1:af657a8e-276f-4c26-baa6-311c68202f09:1';
+function identifiedCapture(id: string) {
+  const c = capture(id);
+  Object.assign(c.payload.elements[0], {
+    controlInstance: instance,
+    controlFingerprint: 'c'.repeat(64),
+  });
+  return c;
+}
+
+test('Hex-escaped own numeric IDs can group, but descendant selectors cannot', () => {
+  for (const selector of ['#\\31 add', '#\\31 23', '#product\\:add']) {
+    const first = identifiedCapture('first'),
+      later = identifiedCapture('later');
+    first.payload.elements[0].selector = later.payload.elements[0].selector = selector;
+    later.payload.elements[0].contextFingerprint = 'b'.repeat(64);
+    const before = candidate('before', first.id),
+      after = candidate('after', later.id);
+    assert.equal(
+      groupPublished([finding(before), finding(after)], [first, later, before, after]).length,
+      1,
+      selector,
+    );
+  }
+  for (const selector of [
+    '#\\31 add > button',
+    '#\\31 add button',
+    '#products > button:nth-of-type(1)',
+  ]) {
+    const first = identifiedCapture('first'),
+      later = identifiedCapture('later');
+    first.payload.elements[0].selector = later.payload.elements[0].selector = selector;
+    const before = candidate('before', first.id),
+      after = candidate('after', later.id);
+    assert.equal(
+      groupPublished([finding(before), finding(after)], [first, later, before, after]).length,
+      2,
+      selector,
+    );
+  }
+});
+
+test('One unchanged unnamed button groups across an outside update using its latest whole accepted claim', () => {
+  const first = identifiedCapture('first'),
+    later = identifiedCapture('later');
+  later.payload.elements[0].contextFingerprint = 'b'.repeat(64);
+  const before = candidate('before', first.id);
+  const after = candidate('after', later.id, {
+    detail: 'Later independently reviewed wording.',
+    recommendation: 'Later independently reviewed recommendation.',
+    basis: 'mixed',
+  });
+  before.seq = 2;
+  after.seq = 7;
+  const records = [first, before, later, after];
+  const findings = [finding(before), finding(after)];
+  const originals = structuredClone({ records, findings });
+  const expected = {
+    ...findings[1],
+    evidence: [first.id, later.id],
+    occurrenceIds: [before.id, after.id],
+  };
+  assert.deepEqual(groupPublished(findings, records), [expected]);
+  const reversed = groupPublished([...findings].reverse(), records)[0];
+  assert.equal(
+    reversed.id,
+    after.id,
+    'Representative follows original sequence, not caller order.',
+  );
+  assert.deepEqual(reversed.review, findings[1].review);
+  assert.deepEqual({ records, findings }, originals);
+});
+
+test('Changed, replaced, malformed and differently reviewed controls cannot use the new empty-name shortcut', () => {
+  const changes = [
+    { controlInstance: instance.replace(':1', ':2') },
+    { controlInstance: instance.replace('af657a8e', 'bf657a8e') },
+    { controlInstance: 'forged' },
+    { controlInstance: undefined },
+    { controlFingerprint: undefined },
+    { controlFingerprint: 'changed' },
+    { controlFingerprint: 'd'.repeat(64) },
+    { name: 'Add' },
+    { text: 'Remove' },
+    { selector: '#other' },
+    { tag: 'input' },
+    { role: 'link' },
+    { type: 'submit' },
+  ];
+  for (const change of changes) {
+    const first = identifiedCapture('first'),
+      later = identifiedCapture('later');
+    Object.assign(later.payload.elements[0], change);
+    const before = candidate('before', first.id),
+      after = candidate('after', later.id);
+    assert.equal(
+      groupPublished([finding(before), finding(after)], [first, later, before, after]).length,
+      2,
+      JSON.stringify(change),
+    );
+  }
+  for (const change of [
+    { severity: 'blocker' },
+    { issueKey: 'another_problem' },
+    { criterion: 'C03' },
+  ]) {
+    const first = identifiedCapture('first'),
+      later = identifiedCapture('later');
+    const before = candidate('before', first.id),
+      after = candidate('after', later.id, change);
+    assert.equal(
+      groupPublished([finding(before), finding(after)], [first, later, before, after]).length,
+      2,
+      JSON.stringify(change),
+    );
+  }
+});
+
+test('Other criteria and nonempty names still require matching surrounding context with new node identity', () => {
+  for (const changes of [{ criterion: 'C03' }, { criterion: 'C02', named: true }]) {
+    const first = identifiedCapture('first'),
+      later = identifiedCapture('later');
+    if (changes.named) {
+      first.payload.elements[0].name = 'Add';
+      later.payload.elements[0].name = 'Add';
+    }
+    const before = candidate('before', first.id, { criterion: changes.criterion });
+    const after = candidate('after', later.id, { criterion: changes.criterion });
+    const records = [first, later, before, after];
+    assert.equal(groupPublished([finding(before), finding(after)], records).length, 1);
+    later.payload.elements[0].contextFingerprint = 'b'.repeat(64);
+    assert.equal(groupPublished([finding(before), finding(after)], records).length, 2);
+  }
+});

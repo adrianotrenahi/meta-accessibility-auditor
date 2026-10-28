@@ -1,4 +1,36 @@
 import type { RecordEntry } from './types.js';
+import { validControlInstance } from './control-identity.js';
+
+const fingerprint = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const ownControlId = (value: unknown) =>
+  typeof value === 'string' &&
+  /^#(?:\\[0-9a-fA-F]{1,6}[ \t\r\n\f]?|\\[^\r\n\f]|[A-Za-z0-9_-]|[^\u0000-\u007f])+$/u.test(value);
+
+function originalTarget(candidate: RecordEntry, records: RecordEntry[]) {
+  const capture = records.find(
+    (r) =>
+      r.id === candidate.payload.targetCaptureId &&
+      r.kind === 'capture' &&
+      r.runId === candidate.runId,
+  );
+  return {
+    capture,
+    target: capture?.payload.elements.find((e: any) => e.id === candidate.payload.targetId),
+  };
+}
+
+function namingInstance(candidate: RecordEntry, target: any) {
+  return (
+    candidate.payload.scope === 'element' &&
+    candidate.payload.criterion === 'C02' &&
+    target?.tag === 'button' &&
+    ownControlId(target.selector) &&
+    target.role === 'button' &&
+    target.name === '' &&
+    validControlInstance(target.controlInstance) &&
+    fingerprint(target.controlFingerprint)
+  );
+}
 
 /** Only group reviewed claims sharing a declared problem and an original target identity. */
 export function findingKey(candidate: RecordEntry, records: RecordEntry[]) {
@@ -11,23 +43,35 @@ export function findingKey(candidate: RecordEntry, records: RecordEntry[]) {
       c.criterion,
       [...new Set(candidate.sources)].sort(),
     ]);
-  const capture = records.find((r) => r.id === c.targetCaptureId && r.kind === 'capture');
-  const target = capture?.payload.elements.find((e: any) => e.id === c.targetId);
+  const { capture, target } = originalTarget(candidate, records);
   if (c.scope === 'element' && capture && target?.selector) {
     // A list position or an ancestor's ID does not identify a persistent control.
-    // Even an own ID can be reused: require the captured surrounding HTML to match too.
-    const ownId = /^#(?:\\.|[A-Za-z0-9_-]|[^\u0000-\u007f])+$/u.test(target.selector);
-    const context =
-      typeof target.contextFingerprint === 'string' &&
-      /^[a-f0-9]{64}$/.test(target.contextFingerprint)
-        ? target.contextFingerprint
-        : null;
-    const acrossCaptures = ownId && context;
+    // Legacy captures still require the surrounding HTML. New captures additionally distinguish
+    // actual DOM nodes. Only a repeated empty-name button can survive an outside context change.
+    const ownId = ownControlId(target.selector);
+    const context = fingerprint(target.contextFingerprint) ? target.contextFingerprint : null;
+    const hasIdentity = 'controlInstance' in target || 'controlFingerprint' in target;
+    const validIdentity =
+      validControlInstance(target.controlInstance) && fingerprint(target.controlFingerprint);
+    const repeatedName = ownId && namingInstance(candidate, target);
+    const identity = hasIdentity
+      ? ownId && validIdentity && (repeatedName || context)
+        ? [
+            'control-instance-v1',
+            candidate.runId,
+            target.controlInstance,
+            target.controlFingerprint,
+            repeatedName ? ['empty-name-button', c.severity] : ['context', context],
+          ]
+        : ['exact-capture', capture.id, target.id]
+      : ownId && context
+        ? ['own-id-and-context', context]
+        : ['exact-capture', capture.id, target.id];
     return JSON.stringify([
       'element',
       c.issueKey,
       c.criterion,
-      acrossCaptures ? ['own-id-and-context', context] : ['exact-capture', capture.id, target.id],
+      identity,
       capture.payload.url,
       target.selector,
       target.tag,
@@ -48,8 +92,15 @@ export function groupPublished(findings: any[], records: RecordEntry[]) {
     const key = findingKey(candidate, records);
     const prior = groups.get(key);
     if (prior) {
-      prior.occurrenceIds.push(finding.id);
-      prior.evidence = [...new Set([...prior.evidence, ...finding.evidence])];
+      const occurrenceIds = [...prior.occurrenceIds, finding.id];
+      const evidence = [...new Set([...prior.evidence, ...finding.evidence])];
+      const { target } = originalTarget(candidate, records);
+      const priorCandidate = records.find((r) => r.id === prior.id)!;
+      // Keep one complete accepted claim/review. Legacy groups retain the first claim;
+      // a new empty-name group uses the latest accepted original to support live pins.
+      const representative =
+        namingInstance(candidate, target) && candidate.seq > priorCandidate.seq ? finding : prior;
+      groups.set(key, { ...representative, occurrenceIds, evidence });
     } else groups.set(key, { ...finding, occurrenceIds: [finding.id] });
   }
   return [...groups.values()];
