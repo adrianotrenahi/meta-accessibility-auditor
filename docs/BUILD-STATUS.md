@@ -1,10 +1,16 @@
-# Day 1–3 status
+# Day 1–4 status
 
-Updated 27 October 2026. Working code, controlled evidence and remaining proof are kept separate.
+Updated 28 October 2026. Working code, controlled evidence and remaining proof are kept separate.
 
 ## Impact on the system
 
-The fresh public engine, controlled Cavioo host connection and reviewed Day 2 evidence corrections are merged. The proposed Day 3 change adds fifteen versioned criteria, six visual-review topics, two shared missing-fact/native-reader slots and conservative typed journey comparisons. The original walk and navigator notes remain shared originals; review reads those originals and the exact analyst claim independently. Day 3 began on 27 October, ahead of its original 28 October slot; recording on 2 November and the 3 November freeze stay unchanged.
+The fresh public engine, controlled Cavioo host connection and reviewed Day 2 and Day 3 corrections are merged. Day 3 adds fifteen versioned criteria, six visual-review topics, two shared missing-fact/native-reader slots and conservative typed journey comparisons. The original walk and navigator notes remain shared originals; review reads those originals and the exact analyst claim independently. Day 3 began on 27 October, ahead of its original 28 October slot; recording on 2 November and the 3 November freeze stay unchanged.
+
+Day 4 now supports an explicitly enabled, locally controlled model run through Cavioo's existing setup. Ordinary host launches remain offline and the customer engine is unchanged. A strict original-image receipt distinguishes pictures actually sent from a nonvisual source record: an ordinary approved email-entry and Back comparison retains four intact originals, sends three pictures to analysis, and sends all four to independent review. Every new claim and review pins its exact read. Removing or rewriting that receipt withdraws acceptance. Larger mixed-commerce packets still remain incomplete when they exceed the unchanged allowances.
+
+The public Day 4 check passes 228 tests and its build; Cavioo passes its required 10,074-test check and website build. One fresh actual model run through the existing setup cost an estimated $0.391417 against a $2 run cap, bringing recorded Meta usage to $5.291118 of $150, with no held charges. Existing desktop/320px reports and exact original viewers pass on the same saved run with no second Start or additional provider requests. Actual live bubbles remain unproved, and the same supported naming issue currently appears as two cards across before/after states.
+
+The analyst now also reads the exact review feedback, including an earlier requested correction when a later review says keep. These comments remain interpretation, never measured website facts. For example, a reviewer saying that Enter succeeded must reach the analyst before it repeats a claim that the same button blocked keyboard access. A corrected claim requires fresh wording and a new exact independent review; this does not guarantee that model judgments are always right. Day 4 validation is recorded in DAY-FOUR-VALIDATION.md.
 
 Each captured state declares its required checks before analysis. Unsupported, changed, unreviewed or conflicting results remain unknown. Confirmed failures can coexist with incomplete coverage; neither examined visuals nor an absence of findings becomes PASS. The overall score remains blank until the whole required scope has supported reviewed results and the run is complete. For example, one Tab input does not establish that Add to basket is usable by keyboard.
 
@@ -37,10 +43,11 @@ The public engineering viewer explains when older reviews cannot verify their or
 ## Still pending
 
 - Codex and Adriano: independently validate the chosen task with a human screen-reader user before filming; broader reader coverage and a real prior-on restoration trial remain outside these scoped proofs.
-- Codex: complete Day 3 external review and address validated findings. The Day 2 review and owner-authorised merge are complete. Adriano decides when the proposed Day 3 change merges.
+- Codex: complete Day 4 self-review, external review and validated corrections. The Day 3 review and owner-authorised merge are complete. Adriano decides when the new Day 4 changes merge.
 - Adriano: review the twelve-case expected labels, the real demo task and participant recording arrangements, and the remaining name/track/team/contribution choices in the build plan.
 - Codex and Adriano: measure false claims, genuine issues retained or missed, uncertainty and coverage against reviewed labels. No percentage improvement over Cavioo has been established.
-- Codex: prove final model-backed finding delivery after the narrowed review-packet correction. The final full journey reaches the task boundary; the count-only packet-fit check is not a new finding response. Existing proof tickets retain this work.
-- Codex: prove the ordinary complete Back-and-entry assessment in [ADR-905 (complete return-entry evidence)](https://linear.app/adrianotrenahi/issue/ADR-905); its four originals exceed the current three-picture analyst allowance. The complete reviewer-only fixture is not the ordinary full-flow proof.
+- Codex: complete actual active-frame bubbles and broader model-backed Cavioo flow in [ADR-901 (the full controlled-to-customer flow proof)](https://linear.app/adrianotrenahi/issue/ADR-901). Day 4 proves fresh controlled model-backed report delivery; the older Day 3 final packet was not rerun and report-only proof does not establish live bubbles.
+- Codex: retain the ordinary Back-and-entry proof in [ADR-905 (complete return-entry evidence)](https://linear.app/adrianotrenahi/issue/ADR-905). Ordinary kept/lost browser paths now fit the unchanged three-picture analyst allowance while preserving all four records. Larger mixed-commerce histories still remain incomplete; controlled fixtures do not establish arbitrary real-site coverage.
+- Codex: prove safe grouping of the same naming issue across before/after screens in [ADR-906 (one issue with both original occurrence histories)](https://linear.app/adrianotrenahi/issue/ADR-906). Current context checks keep two cards; do not remove those checks blindly or rewrite the originals.
 - Later build days: decoded mask presentation, complete model-backed Cavioo flow through its existing components, full authenticated-layout/control coverage, report reconciliation, human comparison and the video. The Day 3 framework does not establish a measured accuracy improvement. The separate Baseten balance remains unused.
 - Costs remain usage-based estimates pending Billing reconciliation. Meta calls stay inside the current bounded approval; temporary approval files are removed after testing.

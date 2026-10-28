@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { recordIsIntact } from './store.js';
 import type { RecordEntry } from './types.js';
+import { readHashMatches, suppliedImageIds } from './image-receipt.js';
 
 export const CRITERIA_VERSION = 'access-walk/criteria-v1' as const;
 export const CRITERION_IDS = [
@@ -306,6 +307,7 @@ function validRead(
   role: string,
   required: RecordEntry[],
   checks: EvaluationChecks,
+  expectedReadHash?: unknown,
 ) {
   const read = records.find((r) => r.id === id);
   if (
@@ -314,6 +316,7 @@ function validRead(
     !kind(read, 'read_snapshot') ||
     read.author !== role ||
     !checks.intact(read) ||
+    !readHashMatches(read, expectedReadHash) ||
     !Array.isArray(read.payload.records)
   )
     return null;
@@ -339,6 +342,11 @@ function validRead(
   }
   const pins = checks.manifests.get(read);
   if (!pins) return null;
+  try {
+    suppliedImageIds(read, records);
+  } catch {
+    return null;
+  }
   for (const record of required) {
     const pin = pins.get(record.id);
     if (
@@ -982,11 +990,14 @@ function checkedResult(
     'analyst',
     [scope, ...original],
     checks,
+    proposal.payload.readSnapshotHash,
   );
   if (!analystRead || !(scope.seq < analystRead.seq && analystRead.seq < proposal.seq))
     return uncertain(
       'Required scope and originals were not verified in the analyst read before this proposal.',
     );
+  if (!suppliedImageIds(analystRead, records).includes(capture.id))
+    return uncertain('The analyst did not receive the assessed original image.');
   const review = records
     .filter(
       (r) =>
@@ -1027,11 +1038,19 @@ function checkedResult(
     'reviewer',
     [scope, proposal, ...original, ...reviewOriginals],
     checks,
+    review.payload.readSnapshotHash,
   );
   if (!read || !(proposal.seq < read.seq && read.seq < review.seq))
     return uncertain(
       'The reviewer did not read the exact criterion proposal and all required originals.',
     );
+  const reviewerImages = suppliedImageIds(read, records);
+  if (
+    [capture, ...original.filter((r) => kind(r, 'capture'))].some(
+      (r) => !reviewerImages.includes(r.id),
+    )
+  )
+    return uncertain('The reviewer did not independently receive every required original image.');
   if (p.screenReaderClaimed && ['PASS', 'FAIL', 'NOT_APPLICABLE'].includes(p.verdict)) {
     const reader = nativeEvidence(original, scope.payload.captureId);
     if (!reader.supported)

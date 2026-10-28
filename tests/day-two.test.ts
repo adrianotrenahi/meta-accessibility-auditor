@@ -82,6 +82,15 @@ function setup() {
     capture,
     claim,
     keep,
+    images: (records: RecordEntry[]) =>
+      records
+        .filter((record) => record.kind === 'capture')
+        .map((record) => ({
+          captureId: record.id,
+          image:
+            'data:image/png;base64,' +
+            store.image(run.id, record.payload.imageFile).toString('base64'),
+        })),
     close() {
       store.close();
       rmSync(dir, { recursive: true, force: true });
@@ -295,7 +304,7 @@ test('SAM uses the analyst target original, even after navigation has moved to a
       models,
       x.run,
       current,
-      { images: () => [] },
+      { images: x.images },
       new AbortController().signal,
     );
     assert.equal(samCalls, 1);
@@ -331,7 +340,7 @@ test('Changing only a finding title cannot approve the rest of an unsupported cl
       models,
       x.run,
       first,
-      { images: () => [] },
+      { images: x.images },
       new AbortController().signal,
       true,
     );
@@ -367,7 +376,7 @@ test('An incomplete analysis cannot abort an otherwise safe continuing walk or i
     });
     const walk = {
       assertActive() {},
-      images: () => [],
+      images: x.images,
       act: async (_action: any, source: RecordEntry) =>
         x.store.append(x.run.id, 'action', 'browser', { performed: true }, [source.id]),
       capture: async () => x.capture(captures++),
@@ -419,7 +428,7 @@ test('Repeated focus-navigation without progress stops early as a robot limit, n
     });
     const walk = {
       assertActive() {},
-      images: () => [],
+      images: x.images,
       act: async (_action: any, source: RecordEntry) =>
         x.store.append(x.run.id, 'action', 'browser', { performed: true }, [source.id]),
       capture: async () => screen(),
