@@ -1,3 +1,4 @@
+import { originalAriaName } from './aria-name.js';
 import { webkit, chromium, type Browser, type Page } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
 import { Store, digest, recordIsIntact } from './store.js';
@@ -219,7 +220,7 @@ export class BrowserWalk {
     });
     const active = this.page.locator(':focus').first();
     const aria = (await active.count()) ? await active.ariaSnapshot({ depth: 1 }) : '';
-    const name = aria.split('\n')[0]?.match(/"((?:\\.|[^"])*)"/)?.[1] ?? details.labelHint;
+    const name = originalAriaName(aria, details.labelHint);
     if (details.documentEpoch !== (await this.page.evaluate(() => performance.timeOrigin)))
       throw Error('Document changed during observation');
     const { documentEpoch: _epoch, ...focus } = details;
@@ -342,7 +343,7 @@ export class BrowserWalk {
       const aria = await locator.ariaSnapshot({ depth: 1 });
       const first = aria.split('\n')[0] ?? '';
       const role = first.match(/^- ([a-z]+)/)?.[1] ?? info.tag;
-      const name = first.match(/"((?:\\.|[^"])*)"/)?.[1] ?? '';
+      const name = originalAriaName(aria);
       elements.push({
         ...info,
         // Only unnamed native buttons with their own ID need this extra bookkeeping.
@@ -424,9 +425,12 @@ export class BrowserWalk {
     };
     return this.store.append(this.runId, 'capture', 'browser', payload);
   }
-  async act(action: Action, source: RecordEntry) {
+  async verifyOriginalCapture(source: RecordEntry) {
     this.assertActive();
     if (
+      !recordIsIntact(source) ||
+      !this.store.record(this.runId, source.id) ||
+      !recordIsIntact(this.store.record(this.runId, source.id)!) ||
       source.kind !== 'capture' ||
       source.runId !== this.runId ||
       this.store.record(this.runId, source.id)?.hash !== source.hash
@@ -445,6 +449,11 @@ export class BrowserWalk {
       throw new ActionStateChanged(
         'Page state changed; capture a fresh observation before acting.',
       );
+  }
+  async act(action: Action, source: RecordEntry, expectedTarget?: () => Promise<boolean>) {
+    await this.verifyOriginalCapture(source);
+    if (action.kind === 'focus_target')
+      throw Error('A target traversal must record its individual keyboard inputs.');
     const before = await this.focus();
     const urlBefore = this.page.url();
     const requestedAction = action;
@@ -491,6 +500,10 @@ export class BrowserWalk {
         !before.name
       )
         throw Error('The submit input has no verified name; it cannot be activated safely.');
+      if (expectedTarget && !(await expectedTarget()))
+        throw new ActionStateChanged(
+          'The original target changed before activation; no activation was sent.',
+        );
       this.count();
       await this.page.keyboard.press(action.key === 'Space' ? 'Space' : action.key);
     } else if (action.kind === 'type') {
@@ -516,8 +529,13 @@ export class BrowserWalk {
       this.count();
       await this.page.goBack({ waitUntil: 'domcontentloaded' });
     } else if (action.kind === 'wait') {
+      if (
+        action.waitMs !== undefined &&
+        (!Number.isSafeInteger(action.waitMs) || action.waitMs < 800 || action.waitMs > 10000)
+      )
+        throw Error('A loading wait must remain between 800 and 10000 milliseconds.');
       this.count();
-      await this.page.waitForTimeout(800);
+      await this.page.waitForTimeout(action.waitMs ?? 800);
     } else outcome = 'not a browser input';
     await this.page.waitForTimeout(180);
     let after: Awaited<ReturnType<BrowserWalk['focus']>> | null = null;

@@ -1,3 +1,5 @@
+import { RoleAllowanceLimit } from './role-allowance.js';
+import { walkToKeyboardTarget } from './keyboard-target.js';
 import { publicEntryLimit, PUBLIC_TRAFFIC_CHALLENGE } from './public-target.js';
 import { z } from 'zod';
 import {
@@ -486,7 +488,36 @@ export class Runner {
           decisionAllowanceSpent = false;
           break;
         }
-        if (action.kind === 'voiceover') {
+        if (action.kind === 'focus_target') {
+          try {
+            const traversed = await walkToKeyboardTarget(
+              walk,
+              this.store,
+              run.id,
+              current,
+              action,
+              signal,
+              (before, key, guard) => this.targetKeyboardStep(run, walk, before, key, guard),
+            );
+            current = traversed.current;
+          } catch (error) {
+            if (!(error instanceof ActionStateChanged)) throw error;
+            this.store.append(
+              run.id,
+              'limit',
+              'browser',
+              {
+                reason:
+                  'The page changed before target traversal. No stale target input was performed; navigation resumes from a fresh observation and decision.',
+              },
+              [current.id],
+            );
+            current = await walk.captureSettled();
+            unchangedTraversal = 0;
+            continue;
+          }
+          unchangedTraversal = 0;
+        } else if (action.kind === 'voiceover') {
           unchangedTraversal = 0;
           current = await performFocusedCheck(
             this.store,
@@ -624,6 +655,57 @@ export class Runner {
       }
     }
   }
+  private async targetKeyboardStep(
+    run: Run,
+    walk: BrowserWalk,
+    before: RecordEntry,
+    action: Action,
+    expectedTarget?: () => Promise<boolean>,
+  ) {
+    let beforeContext: RecordEntry | undefined;
+    try {
+      beforeContext = await readJourneyContext(walk, before);
+    } catch (error) {
+      this.store.append(
+        run.id,
+        'limit',
+        'runner',
+        {
+          reason: 'Journey context was unavailable; no price, choice or return result is inferred.',
+          detail: safeError(error),
+        },
+        [before.id],
+      );
+    }
+    let performed: RecordEntry;
+    try {
+      performed = await walk.act(action, before, expectedTarget);
+    } catch (error) {
+      if (!(error instanceof ActionStateChanged)) throw error;
+      return { current: await walk.captureSettled() };
+    }
+    const current = await walk.captureSettled();
+    try {
+      const afterContext = await readJourneyContext(walk, current);
+      if (beforeContext?.payload.stable === true && afterContext.payload.stable === true) {
+        compareJourneyTotals(this.store, run.id, beforeContext, performed, afterContext);
+        if (performed.payload.before?.type === 'checkbox')
+          recordOptOutContext(this.store, run.id, beforeContext, performed, afterContext);
+      }
+    } catch (error) {
+      this.store.append(
+        run.id,
+        'limit',
+        'runner',
+        {
+          reason: 'A journey comparison remains incomplete; this is not a website defect.',
+          detail: safeError(error),
+        },
+        [performed.id, current.id],
+      );
+    }
+    return { current, performed };
+  }
   private async automaticMeasurement(
     run: Run,
     walk: BrowserWalk,
@@ -681,7 +763,11 @@ export class Runner {
     signal: AbortSignal,
   ) {
     if (
-      !(error instanceof IncompleteModelResult || error instanceof EvidenceRequestLimit) ||
+      !(
+        error instanceof IncompleteModelResult ||
+        error instanceof EvidenceRequestLimit ||
+        (error instanceof RoleAllowanceLimit && ['analyst', 'reviewer'].includes(error.role))
+      ) ||
       signal.aborted
     )
       throw error;
@@ -691,7 +777,7 @@ export class Runner {
       error.role,
       {
         reason:
-          error instanceof EvidenceRequestLimit
+          error instanceof EvidenceRequestLimit || error instanceof RoleAllowanceLimit
             ? `${error.message} Navigation continues; no over-limit request was sent.`
             : 'An analysis or review response ended before returning a result. Navigation continues; this checkpoint remains incomplete.',
         checkpointCaptureId: current.id,
