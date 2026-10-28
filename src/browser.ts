@@ -252,19 +252,36 @@ export class BrowserWalk {
     const image = await this.page.screenshot({ type: 'png', animations: 'disabled' });
     const visibleText = await this.page.locator('body').innerText();
     let identitiesStable = true;
-    for (const element of elements.filter((element) => element.controlFingerprint)) {
-      const current = await locators.nth(Number(element.id.slice(1))).evaluate(
-        (e, identityKey) => ({
-          identity: (globalThis as any)[identityKey]?.(e),
-          markup: e.outerHTML,
-        }),
-        this.controlIdentityKey,
-      );
-      if (
-        current.identity !== element.controlInstance ||
-        digest(current.markup) !== element.controlFingerprint
-      )
-        identitiesStable = false;
+    const identified = elements.filter((element) => element.controlFingerprint);
+    // One immediate read: a removed control is a mismatch, never an awaited locator.
+    const currentIdentities = identified.length
+      ? await locators.evaluateAll(
+          (targets, { indices, identityKey }) =>
+            indices.map((index) => {
+              const e = targets[index];
+              if (!e) return null;
+              let identity: string | undefined;
+              try {
+                const identify = (globalThis as any)[identityKey];
+                if (typeof identify === 'function') identity = identify(e);
+              } catch {
+                // Optional metadata failures cannot abort an otherwise useful capture.
+              }
+              return { identity, markup: e.outerHTML };
+            }),
+          {
+            indices: identified.map((element) => Number(element.id.slice(1))),
+            identityKey: this.controlIdentityKey,
+          },
+        )
+      : [];
+    for (const [index, element] of identified.entries()) {
+      const current = currentIdentities[index];
+      if (!current || current.identity !== element.controlInstance) identitiesStable = false;
+      else if (digest(current.markup) !== element.controlFingerprint)
+        // Same actual control, but grouping cannot rely on the earlier markup.
+        // Keep the otherwise stable observation and withhold optional identity only.
+        element.controlInstance = undefined;
     }
     const state = await this.observedState();
     if (before.documentEpoch !== state.documentEpoch)
@@ -284,6 +301,7 @@ export class BrowserWalk {
       stateStamp: digest(JSON.stringify(state)),
       stable: identitiesStable && digest(JSON.stringify(before)) === digest(JSON.stringify(state)),
       limits: {
+        ...(!identitiesStable ? { controlIdentityChanged: true } : {}),
         totalControls: await locators.count(),
         maximumListedControls: 60,
         visibleTextTruncated: visibleText.length > 16000,
@@ -308,6 +326,10 @@ export class BrowserWalk {
       throw Error('The action needs an original capture from this run.');
     if (source.payload.url !== this.page.url())
       throw Error('Page changed; capture a fresh observation first.');
+    if (source.payload.limits?.controlIdentityChanged)
+      throw Error(
+        'A control changed or disappeared while this screen was captured; capture a fresh observation before acting.',
+      );
     if (
       !source.payload.stable ||
       source.payload.stateStamp !== digest(JSON.stringify(await this.observedState()))

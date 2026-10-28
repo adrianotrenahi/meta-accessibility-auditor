@@ -12,14 +12,15 @@ Grouping across changed surrounding content is deliberately narrow: same run, UR
 
 The new naming group displays the latest complete independently accepted claim and its own review. It never combines an old claim hash with new wording or a different review. Both raw claims, reviews, original images, evidence links and occurrence references remain intact. Withdrawing the later review removes that occurrence instead of borrowing earlier approval. The existing host format exports the exact representative's hashes and anchor plus both original evidence histories; no Cavioo component or layout changes are needed.
 
-Captures also recheck eligible nodes and their markup after taking the picture. An identical replacement during that interval makes the retained capture unstable even when its pixels and accessible state agree. It cannot establish a grouping identity or keep a finding accepted.
+Captures also recheck eligible nodes after taking the picture in one immediate read. An identical replacement or disappearance during that interval makes the retained capture unstable even when its pixels and accessible state agree; a missing control never waits for a locator timeout. Refused actions explain that a control changed or disappeared. A harmless markup-only change on the same node instead disables optional identity grouping while keeping the otherwise stable observation usable. Numeric HTML IDs with a valid escaped selector work; descendant selectors remain separate.
 
 Validation:
 
-- The full check passes 242 tests, including types; build and formatting pass. Six actual Chromium/WebKit tests cover Add, replacement, reload, protected map operations, unchanged HTML/pixels, withdrawal and replacement during capture. All make zero provider or native-reader requests.
+- The corrected full check passes 247 tests, including types; build and formatting pass. Ten actual Chromium/WebKit tests cover Add, replacement, reload, protected map operations, unchanged HTML/pixels, withdrawal, replacement/disappearance during capture and harmless attribute changes. All make zero provider or native-reader requests.
 - The legacy first-claim, reused-ID, positional-target, missing-context and source-set tests remain unchanged. New cases exercise latest whole-claim selection, reversed input order, severity conflicts, changed/missing identity, changed control data and other criteria's context guard. Raw records and findings remain byte-for-byte unchanged by grouping.
 - Isolated deliberate breaks remove the outside-update grouping, replacement distinction, latest representative, severity separation and moving-capture protection. Each regression must fail while working sources stay unchanged. The retained receipt is `/private/tmp/meta-control-grouping-break-proof.json`.
 - The actual existing Cavioo saved-response flow passes at 1440px and 320px: browser canvas, pins/bubbles, report/originals, reload, access refusal, optional-data recovery, Stop/Discard and cleanup. This proves compatibility of the unchanged components with the new engine, not new model judgment or customer production access.
+- Missing-image export stays conservative. A grouped card promises both original histories: if one image disappears it is withheld with an explicit unavailable-original notice, while raw accepted claims and records stay intact. Both browsers test that refusal and exact restoration. Showing the card after silently dropping a promised occurrence was deliberately rejected during review.
 
 ## Impact on the UX
 

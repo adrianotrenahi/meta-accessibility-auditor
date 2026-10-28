@@ -3,7 +3,8 @@ import { validControlInstance } from './control-identity.js';
 
 const fingerprint = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const ownControlId = (value: unknown) =>
-  typeof value === 'string' && /^#(?:\\.|[A-Za-z0-9_-]|[^\u0000-\u007f])+$/u.test(value);
+  typeof value === 'string' &&
+  /^#(?:\\[0-9a-fA-F]{1,6}[ \t\r\n\f]?|\\[^\r\n\f]|[A-Za-z0-9_-]|[^\u0000-\u007f])+$/u.test(value);
 
 function originalTarget(candidate: RecordEntry, records: RecordEntry[]) {
   const capture = records.find(

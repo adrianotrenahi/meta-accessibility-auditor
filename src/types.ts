@@ -68,6 +68,7 @@ export interface Capture {
   aria: string;
   focus: { tag: string; text: string; name: string };
   limits: {
+    controlIdentityChanged?: boolean;
     totalControls: number;
     maximumListedControls: number;
     visibleTextTruncated: boolean;

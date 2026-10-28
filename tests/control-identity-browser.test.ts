@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer } from '../server/index.js';
@@ -131,6 +131,31 @@ for (const engine of ['chromium', 'webkit'] as const) {
         app.store.image(run.id, later.payload.imageFile),
       );
       assert.equal(JSON.stringify(app.store.records(run.id)), retained);
+
+      const imagePath = join(directory, run.id, later.payload.imageFile);
+      const imageBytes = app.store.image(run.id, later.payload.imageFile);
+      unlinkSync(imagePath);
+      try {
+        const unavailable = exportHostSnapshot(app.store, run.id).snapshot;
+        assert.equal(
+          unavailable.findings.length,
+          0,
+          'A group cannot promise both original histories when one original is unavailable.',
+        );
+        assert(
+          unavailable.limits.some(
+            (limit) => limit.includes(later.id) && limit.includes('unavailable'),
+          ),
+        );
+        assert.equal(
+          app.store.published(run.id).length,
+          1,
+          'The raw accepted history stays intact; export reports the missing image explicitly.',
+        );
+        assert.equal(JSON.stringify(app.store.records(run.id)), retained);
+      } finally {
+        writeFileSync(imagePath, imageBytes, { flag: 'wx' });
+      }
 
       app.store.append(run.id, 'review', 'saved_reviewer_response', {
         candidateId: laterCandidate.id,
@@ -270,6 +295,99 @@ for (const engine of ['chromium', 'webkit'] as const) {
         moving.payload.stable,
         false,
         'The before/after node check must refuse grouping from this moving capture.',
+      );
+      await assert.rejects(
+        () =>
+          walk.act(
+            { kind: 'press', key: 'Tab', note: 'Offline refused moving-source input.' },
+            moving,
+          ),
+        /control changed or disappeared/,
+      );
+      assert.equal(app.store.usage().requests.length, 0);
+    } finally {
+      await walk.close();
+      await app.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test(`Actual ${engine} disappearing last controls retain an unstable original without waiting for a missing button`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'meta-control-removed-'));
+    const app = await startServer(0, directory, false);
+    const run = app.store.create(
+      'Offline disappearing control proof',
+      app.origin + '/shop/?case=broken',
+      'offline',
+    );
+    const walk = new BrowserWalk(app.store, run.id, app.origin, true, engine);
+    try {
+      await walk.start(run.url);
+      walk.page.setDefaultTimeout(200);
+      const screenshot = walk.page.screenshot.bind(walk.page);
+      walk.page.screenshot = async (options) => {
+        const image = await screenshot(options);
+        await walk.page.locator('#add').evaluate((element) => {
+          element.remove();
+          document.querySelector('main > a')?.remove();
+        });
+        return image;
+      };
+      const moving = await walk.capture();
+      assert.equal(moving.payload.stable, false);
+      assert.equal(
+        app.store.record(run.id, moving.id)?.hash,
+        moving.hash,
+        'The moving original is retained, rather than losing the capture to optional metadata.',
+      );
+      assert.equal(app.store.usage().requests.length, 0);
+    } finally {
+      await walk.close();
+      await app.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  test(`Actual ${engine} nonsemantic button attributes disable grouping without blocking the run`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'meta-control-attributes-'));
+    const app = await startServer(0, directory, false);
+    const run = app.store.create(
+      'Offline attribute-change proof',
+      app.origin + '/shop/?case=broken',
+      'offline',
+    );
+    const walk = new BrowserWalk(app.store, run.id, app.origin, true, engine);
+    try {
+      await walk.start(run.url);
+      const screenshot = walk.page.screenshot.bind(walk.page);
+      let sequence = 0;
+      walk.page.screenshot = async (options) => {
+        const image = await screenshot(options);
+        await walk.page
+          .locator('#add')
+          .evaluate((element, n) => element.setAttribute('data-state', String(n)), ++sequence);
+        return image;
+      };
+      const changing = await walk.capture();
+      assert.equal(
+        changing.payload.stable,
+        true,
+        'A bookkeeping attribute is not an unstable accessible observation.',
+      );
+      assert.equal(changing.payload.limits.controlIdentityChanged, undefined);
+      const target = changing.payload.elements.find((element: any) => element.selector === '#add');
+      assert.equal(target.controlInstance, undefined);
+      assert.equal(
+        typeof target.controlFingerprint,
+        'string',
+        'Partial metadata keeps the target capture-bound, without falling back to legacy grouping.',
+      );
+      await walk.act(
+        {
+          kind: 'press',
+          key: 'Tab',
+          note: 'Offline input proves ordinary navigation can continue.',
+        },
+        changing,
       );
       assert.equal(app.store.usage().requests.length, 0);
     } finally {

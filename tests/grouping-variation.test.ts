@@ -277,6 +277,38 @@ function identifiedCapture(id: string) {
   return c;
 }
 
+test('Hex-escaped own numeric IDs can group, but descendant selectors cannot', () => {
+  for (const selector of ['#\\31 add', '#\\31 23', '#product\\:add']) {
+    const first = identifiedCapture('first'),
+      later = identifiedCapture('later');
+    first.payload.elements[0].selector = later.payload.elements[0].selector = selector;
+    later.payload.elements[0].contextFingerprint = 'b'.repeat(64);
+    const before = candidate('before', first.id),
+      after = candidate('after', later.id);
+    assert.equal(
+      groupPublished([finding(before), finding(after)], [first, later, before, after]).length,
+      1,
+      selector,
+    );
+  }
+  for (const selector of [
+    '#\\31 add > button',
+    '#\\31 add button',
+    '#products > button:nth-of-type(1)',
+  ]) {
+    const first = identifiedCapture('first'),
+      later = identifiedCapture('later');
+    first.payload.elements[0].selector = later.payload.elements[0].selector = selector;
+    const before = candidate('before', first.id),
+      after = candidate('after', later.id);
+    assert.equal(
+      groupPublished([finding(before), finding(after)], [first, later, before, after]).length,
+      2,
+      selector,
+    );
+  }
+});
+
 test('One unchanged unnamed button groups across an outside update using its latest whole accepted claim', () => {
   const first = identifiedCapture('first'),
     later = identifiedCapture('later');
