@@ -12,6 +12,7 @@ import { safeError } from './config.js';
 import { collectBrowserFacts, summarizeAxe } from './evidence-checks.js';
 import { installControlIdentity } from './control-identity.js';
 import { publicBrowserProxy } from './public-network.js';
+import { readRecordedFocusHelp, type RecordedFocusHelp } from './focus-help.js';
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
 export const isCommitment = (name: string) =>
@@ -232,6 +233,7 @@ export class BrowserWalk {
       url: this.page.url(),
       aria: await this.page.locator('body').ariaSnapshot(),
       focus: await this.focus(),
+      focusHelp: await readRecordedFocusHelp(this.page),
       scroll: await this.page.evaluate(() => ({ x: scrollX, y: scrollY })),
     };
   }
@@ -396,7 +398,7 @@ export class BrowserWalk {
     if (before.documentEpoch !== state.documentEpoch)
       throw Error('Document changed during observation');
     const asset = this.store.asset(this.runId, `capture_${randomUUID()}.png`, image);
-    const payload: Capture = {
+    const payload: Capture & { focusHelp: RecordedFocusHelp[] } = {
       url: this.page.url(),
       title: await this.page.title(),
       imageFile: asset.file,
@@ -407,6 +409,7 @@ export class BrowserWalk {
       text: visibleText.slice(0, 16000),
       aria: state.aria,
       focus: state.focus,
+      focusHelp: state.focusHelp,
       stateStamp: digest(JSON.stringify(state)),
       stable: identitiesStable && digest(JSON.stringify(before)) === digest(JSON.stringify(state)),
       limits: {

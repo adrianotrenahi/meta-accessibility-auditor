@@ -801,3 +801,317 @@ for (const engine of ['chromium', 'webkit'] as const) {
     }
   });
 }
+
+for (const engine of ['chromium', 'webkit'] as const) {
+  for (const widget of [
+    { group: 'menubar', item: 'menuitem', orientation: '', key: 'ArrowRight' },
+    { group: 'menu', item: 'menuitem', orientation: '', key: 'ArrowDown' },
+    { group: 'tablist', item: 'tab', orientation: 'vertical', key: 'ArrowDown' },
+  ]) {
+    test(`Actual ${engine} enters ${widget.group} then reaches its inactive item with real ${widget.key}`, async () => {
+      const html =
+        '<button>Before</button>' +
+        `<div role="${widget.group}" ${widget.orientation ? 'aria-orientation="' + widget.orientation + '"' : ''}>` +
+        `<button role="${widget.item}" tabindex="0" aria-selected="true">Alojamiento</button>` +
+        `<button role="${widget.item}" id="flight-target" tabindex="-1" aria-selected="false" onclick="this.dataset.activated='yes'">Vuelos</button></div>` +
+        '<button>After</button>' +
+        `<script>const cells=[...document.querySelectorAll('[role="${widget.item}"]')];cells.forEach((cell,i)=>cell.addEventListener('keydown',event=>{if(event.key==='${widget.key}'){event.preventDefault(); const next=cells[(i+1)%cells.length];cell.tabIndex=-1;cell.setAttribute('aria-selected','false');next.tabIndex=0;next.setAttribute('aria-selected','true');next.focus();}}));</script>`;
+      const x = await setup(engine, html);
+      try {
+        const result = await walkToKeyboardTarget(
+          x.walk,
+          x.app.store,
+          x.run.id,
+          x.current,
+          {
+            ...seek,
+            targetRole: widget.item as 'menuitem' | 'tab',
+            targetName: 'Vuelos',
+            activation: 'Enter',
+          },
+          x.signal.signal,
+          x.step,
+        );
+        assert.equal(result.outcome, 'activation_sent', JSON.stringify(x.staleRefusals));
+        assert.deepEqual(
+          result.actions.map((row) => row.payload.requestedAction.key),
+          ['Tab', 'Tab', widget.key, 'Enter'],
+        );
+        assert.equal(
+          await x.walk.page.locator('#flight-target').getAttribute('data-activated'),
+          'yes',
+        );
+        assert.equal((await x.walk.focus()).name, 'Vuelos');
+        assert(result.actions.every((row) => row.payload.outcome === 'performed'));
+        for (const row of result.actions)
+          assert(x.app.store.record(x.run.id, row.payload.sourceCaptureId));
+        assert.equal(x.app.store.usage().requests.length, 0);
+      } finally {
+        await x.close();
+      }
+    });
+  }
+}
+
+test('An explicit menu arrow refuses a target in another native group before input', async () => {
+  const x = await setup(
+    'chromium',
+    '<div role="menubar"><button role="menuitem">Current</button></div><div role="menubar"><button role="menuitem">Vuelos</button></div>',
+  );
+  try {
+    await x.walk.act({ kind: 'press', key: 'Tab', note: 'Enter first actual menubar' }, x.current);
+    const source = await x.walk.captureSettled();
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      source,
+      { ...seek, targetRole: 'menuitem', targetName: 'Vuelos', traversalKey: 'ArrowRight' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'unavailable');
+    assert.equal(result.actions.length, 0);
+    assert.equal((await x.walk.focus()).name, 'Current');
+  } finally {
+    await x.close();
+  }
+});
+
+for (const engine of ['chromium', 'webkit'] as const) {
+  test(`Actual ${engine} retains role-less focus help originals while traversing several controls in one intent`, async () => {
+    const html =
+      '<button id="currency" data-help="currency-help">Currency</button><button id="language" data-help="language-help">Language</button><button>Target</button>' +
+      '<a href="#footer">Select your currency</a>' +
+      '<div id="currency-help" hidden style="position:absolute;pointer-events:none">Select your currency</div>' +
+      '<div id="language-help" hidden style="position:absolute;pointer-events:none">Select your language</div>' +
+      '<script>document.querySelectorAll("button[data-help]").forEach(button=>{const help=document.getElementById(button.dataset.help);button.addEventListener("focus",()=>{button.setAttribute("aria-describedby",help.id);help.hidden=false;});button.addEventListener("blur",()=>{help.hidden=true;button.removeAttribute("aria-describedby");});});</script>';
+    const x = await setup(engine, html);
+    try {
+      const result = await walkToKeyboardTarget(
+        x.walk,
+        x.app.store,
+        x.run.id,
+        x.current,
+        seek,
+        x.signal.signal,
+        x.step,
+      );
+      assert.equal(result.outcome, 'reached', JSON.stringify(x.staleRefusals));
+      assert.deepEqual(
+        result.actions.map((row) => row.payload.requestedAction.key),
+        ['Tab', 'Tab', 'Tab'],
+      );
+      const captures = x.app.store
+        .records(x.run.id)
+        .filter((row) => row.kind === 'capture' && row.seq >= x.current.seq);
+      assert(
+        captures.length >= 4,
+        'The fixture original and every actual after-state must remain saved.',
+      );
+      assert(
+        captures.some(
+          (row) =>
+            row.payload.focusHelp?.length === 1 &&
+            row.payload.aria.includes('- text: Select your currency'),
+        ),
+      );
+      assert(
+        captures.some(
+          (row) =>
+            row.payload.focusHelp?.length === 1 &&
+            row.payload.aria.includes('- text: Select your language'),
+        ),
+      );
+      assert(captures.every((row) => row.payload.aria.includes('link "Select your currency"')));
+      assert.equal(x.app.store.usage().requests.length, 0);
+    } finally {
+      await x.close();
+    }
+  });
+}
+
+test('Recorded focus help cannot hide an unrelated changed price during traversal', async () => {
+  const x = await setup(
+    'chromium',
+    '<p id="price">EUR 48</p><button id="first">First</button><button>Target</button><div id="hint" hidden style="position:absolute;pointer-events:none">Help only</div><script>document.querySelector("#first").addEventListener("focus",event=>{event.target.setAttribute("aria-describedby","hint");document.querySelector("#hint").hidden=false;document.querySelector("#price").textContent="EUR 99";});</script>',
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { ...seek, activation: 'Enter' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'changed');
+    assert.equal(result.actions.length, 1);
+    assert.equal(result.current.payload.focusHelp.length, 1);
+    assert(result.current.payload.aria.includes('EUR 99'));
+    assert.equal((await x.walk.focus()).name, 'First');
+    assert(!result.actions.some((row) => row.payload.requestedAction.key === 'Enter'));
+  } finally {
+    await x.close();
+  }
+});
+
+const describedButtons =
+  '<button id="first">First</button><button id="middle">Middle</button><button id="target" onclick="this.dataset.activated=\'yes\'">Target</button><div id="hint" hidden style="position:absolute;pointer-events:none">Fare EUR 48</div>';
+
+test('A first-seen display-only description permits focus movement but cannot inherit activation', async () => {
+  const x = await setup(
+    'chromium',
+    describedButtons +
+      '<script>first.addEventListener("focus",()=>{first.setAttribute("aria-describedby","hint");hint.hidden=false;});first.addEventListener("blur",()=>{hint.hidden=true;first.removeAttribute("aria-describedby");});</script>',
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { ...seek, activation: 'Enter' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'changed');
+    assert.equal(result.actions.length, 3);
+    assert.equal((await x.walk.focus()).name, 'Target');
+    assert(!result.actions.some((row) => row.payload.requestedAction.key === 'Enter'));
+    assert.equal(await x.walk.page.locator('#target').getAttribute('data-activated'), null);
+    await x.walk.act(
+      {
+        kind: 'press',
+        key: 'Enter',
+        note: 'A new independent decision from the reached current original',
+      },
+      await x.walk.captureSettled(),
+    );
+    assert.equal(await x.walk.page.locator('#target').getAttribute('data-activated'), 'yes');
+  } finally {
+    await x.close();
+  }
+});
+
+test('A changed recorded price description stops before an unsent key can be refreshed', async () => {
+  const x = await setup(
+    'chromium',
+    describedButtons +
+      '<script>first.addEventListener("focus",()=>{first.setAttribute("aria-describedby","hint");hint.hidden=false;});</script>',
+  );
+  let calls = 0;
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      async (before, action, guard) => {
+        if (++calls === 2)
+          await x.walk.page.locator('#hint').evaluate((node) => (node.textContent = 'Fare EUR 99'));
+        return x.step(before, action, guard);
+      },
+    );
+    assert.equal(result.outcome, 'changed');
+    assert.equal(result.actions.length, 1);
+    assert.equal((await x.walk.focus()).name, 'First');
+    assert(result.current.payload.aria.includes('Fare EUR 99'));
+    assert(
+      x.app.store
+        .records(x.run.id)
+        .filter((row) => row.kind === 'capture')
+        .some((row) => row.payload.aria.includes('Fare EUR 48')),
+    );
+    assert.equal(calls, 2, 'No refresh of the unsent key after changed description content');
+  } finally {
+    await x.close();
+  }
+});
+
+test('Description history survives disappearance and refuses new content when the same ID returns', async () => {
+  const x = await setup(
+    'chromium',
+    describedButtons +
+      '<script>first.addEventListener("focus",()=>{first.setAttribute("aria-describedby","hint");hint.hidden=false;});first.addEventListener("blur",()=>{hint.hidden=true;first.removeAttribute("aria-describedby");});target.addEventListener("focus",()=>{target.setAttribute("aria-describedby","hint");hint.textContent="Fare EUR 99";hint.hidden=false;});</script>',
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { ...seek, activation: 'Enter' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'changed');
+    assert.equal(result.actions.length, 3);
+    assert.equal((await x.walk.focus()).name, 'Target');
+    assert(result.current.payload.aria.includes('Fare EUR 99'));
+    assert.equal(await x.walk.page.locator('#target').getAttribute('data-activated'), null);
+    assert(
+      x.app.store
+        .records(x.run.id)
+        .filter((row) => row.kind === 'capture')
+        .some((row) => row.seq > x.current.seq && row.payload.focusHelp?.length === 0),
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test('An unbound plain role-tooltip cannot inherit activation after previously unseen information', async () => {
+  const x = await setup(
+    'chromium',
+    '<button id="first">First</button><button id="target" onclick="this.dataset.activated=\'yes\'">Target</button><script>first.addEventListener("focus",()=>{const hint=document.createElement("div");hint.setAttribute("role","tooltip");hint.textContent="Fare EUR 99";document.body.append(hint);});</script>',
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { ...seek, activation: 'Enter' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'changed');
+    assert.equal((await x.walk.focus()).name, 'Target');
+    assert.equal(result.actions.length, 2);
+    assert.equal(await x.walk.page.locator('#target').getAttribute('data-activated'), null);
+  } finally {
+    await x.close();
+  }
+});
+
+test('Description history includes the normal control name when two owners have no DOM id', async () => {
+  const html =
+    '<button data-owner="a">Owner A</button><button data-owner="b">Owner B</button><button>Target</button><div id="hint" hidden style="position:absolute;pointer-events:none">Shared description</div><script>document.querySelectorAll("[data-owner]").forEach(button=>{button.addEventListener("focus",()=>{button.setAttribute("aria-describedby","hint");hint.hidden=false;});button.addEventListener("blur",()=>{hint.hidden=true;button.removeAttribute("aria-describedby");});});</script>';
+  const x = await setup('chromium', html);
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'changed');
+    assert.equal(result.actions.length, 2);
+    assert.equal((await x.walk.focus()).name, 'Owner B');
+    const captures = x.app.store
+      .records(x.run.id)
+      .filter((row) => row.kind === 'capture' && row.payload.focusHelp?.length === 1);
+    assert(captures.some((row) => row.payload.focus.name === 'Owner A'));
+    assert(captures.some((row) => row.payload.focus.name === 'Owner B'));
+    assert(captures.every((row) => row.payload.focusHelp[0].focus.domId === ''));
+  } finally {
+    await x.close();
+  }
+});

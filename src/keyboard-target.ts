@@ -1,4 +1,6 @@
 import type { ElementHandle, Locator } from 'playwright';
+import { stripRecordedFocusHelp, recordedFocusHelpRows } from './focus-help.js';
+import { nativeTraversalKey, sameNativeArrowGroup } from './native-keyboard.js';
 import { recordIsIntact, type Store } from './store.js';
 import type { BrowserWalk } from './browser.js';
 import type { RecordEntry } from './types.js';
@@ -25,9 +27,10 @@ const controls =
 /** Compare semantic page content without plain, noninteractive focus tooltips.
  * Originals retain those tooltips and every picture; this is not image equivalence.
  */
-export function traversalPageShape(aria: string) {
+function tooltipProjection(aria: string) {
   const lines = aria.split('\n');
   const kept: string[] = [];
+  const descriptions: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const start = lines[i]!.match(/^(\s*)- tooltip(?:\s|:|$)/);
     if (!start) {
@@ -47,9 +50,14 @@ export function traversalPageShape(aria: string) {
       return role && ['text', 'generic', 'paragraph', 'strong', 'emphasis', 'img'].includes(role);
     });
     if (!plain) kept.push(...lines.slice(i, end));
+    else descriptions.push(lines.slice(i, end).join('\n'));
     i = end - 1;
   }
-  return kept.join('\n');
+  return { aria: kept.join('\n'), descriptions };
+}
+
+export function traversalPageShape(aria: string) {
+  return tooltipProjection(aria).aria;
 }
 
 /** Roving calendar selection may change only local checked/selected flags.
@@ -60,7 +68,7 @@ export function nativeGridShape(aria: string, targetName: string) {
   const label = JSON.stringify(targetName);
   const blocks: { start: number; end: number }[] = [];
   for (let i = 0; i < lines.length; i++) {
-    const group = lines[i]!.match(/^(\s*)- (?:table|grid|listbox)(?:\s|:|$)/);
+    const group = lines[i]!.match(/^(\s*)- (?:table|grid|listbox|menubar|menu|tablist)(?:\s|:|$)/);
     if (!group) continue;
     let end = i + 1;
     while (end < lines.length && (lines[end]!.match(/^\s*/)?.[0].length ?? 0) > group[1]!.length)
@@ -70,7 +78,7 @@ export function nativeGridShape(aria: string, targetName: string) {
         .slice(i + 1, end)
         .some((line) =>
           new RegExp(
-            '^\\s*- (?:checkbox|radio|option|gridcell) ' +
+            '^\\s*- (?:checkbox|radio|option|gridcell|menuitem|tab) ' +
               label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
               '(?: |:|$)',
           ).test(line),
@@ -83,7 +91,9 @@ export function nativeGridShape(aria: string, targetName: string) {
   return lines
     .map((line, i) => {
       if (i <= block.start || i >= block.end) return line;
-      const item = line.match(/^(\s*- (?:checkbox|radio|option|gridcell) "(?:\\.|[^"\\])*")(.*)$/);
+      const item = line.match(
+        /^(\s*- (?:checkbox|radio|option|gridcell|menuitem|tab) "(?:\\.|[^"\\])*")(.*)$/,
+      );
       return item
         ? item[1]! + item[2]!.replace(/ \[(?:checked|selected)(?:=(?:true|false|mixed))?\]/g, '')
         : line;
@@ -205,34 +215,69 @@ export async function walkToKeyboardTarget(
   const focused = async () =>
     handle.evaluate((element) => document.activeElement === element).catch(() => false);
   const focusHandles: ElementHandle[] = [];
-  const key = decision.traversalKey ?? 'Tab';
-  const arrow = key.startsWith('Arrow');
-  const canTraverseGrid =
-    !arrow ||
-    (await handle.evaluate((element) => {
-      const group = element.closest('table,[role=grid],[role=listbox]');
-      return (
-        !!group &&
-        !!document.activeElement &&
-        group.contains(document.activeElement) &&
-        ['checkbox', 'radio', 'option', 'gridcell'].includes(element.getAttribute('role') ?? '')
-      );
-    }));
+  const requestedKey = decision.traversalKey ?? 'Tab';
+  const arrow = requestedKey.startsWith('Arrow');
+  const rovingTarget = await handle.evaluate((element) =>
+    ['menuitem', 'tab'].includes(element.getAttribute('role') ?? ''),
+  );
+  const canTraverseGrid = !arrow || (await sameNativeArrowGroup(handle));
   if (!canTraverseGrid) {
     await handle.dispose();
     return stop(
       'unavailable',
-      'Arrow traversal requires a current focused cell in the same native grid. No input was sent.',
+      'Arrow traversal requires a focused item in the same native keyboard group. No input was sent.',
     );
   }
   const targetName =
     decision.targetName ??
     start.payload.elements.find((element: any) => element.id === decision.targetId)?.name ??
     '';
-  const shapeOf = (aria: string) =>
-    arrow ? nativeGridShape(aria, targetName) : traversalPageShape(aria);
+  const comparisonAria = (capture: RecordEntry) =>
+    traversalPageShape(stripRecordedFocusHelp(capture.payload.aria, capture.payload.focusHelp));
+  const shapeOf = (capture: RecordEntry) =>
+    arrow || rovingTarget
+      ? nativeGridShape(comparisonAria(capture), targetName)
+      : comparisonAria(capture);
+  // One history for the whole intent, including helpers hidden between keys.
+  // Structural display-only qualification never establishes harmless meaning.
+  const descriptionHistory = new Map<string, string>();
+  const roleTooltipHistory = new Set<string>();
+  let newlyObservedDescription = false;
+  const recordDescriptions = (capture: RecordEntry, initial = false) => {
+    for (const block of tooltipProjection(capture.payload.aria).descriptions) {
+      if (!roleTooltipHistory.has(block)) {
+        roleTooltipHistory.add(block);
+        if (!initial) newlyObservedDescription = true;
+      }
+    }
+    for (const row of recordedFocusHelpRows(capture.payload.focusHelp)) {
+      const focus = capture.payload.focus ?? {};
+      const signature = JSON.stringify({
+        row,
+        owner: {
+          tag: focus.tag,
+          id: focus.id,
+          role: focus.role,
+          name: focus.name,
+        },
+      });
+      const previous = descriptionHistory.get(row.descriptionId);
+      if (previous !== undefined && previous !== signature) return true;
+      if (previous === undefined) {
+        descriptionHistory.set(row.descriptionId, signature);
+        if (!initial) newlyObservedDescription = true;
+      }
+    }
+    return false;
+  };
+  recordDescriptions(start, true);
+  const changedDescription = () =>
+    stop(
+      'changed',
+      'A previously recorded description changed during traversal. Its full original remains saved; a fresh decision is needed before further input.',
+    );
   try {
-    const shape = shapeOf(start.payload.aria);
+    const shape = shapeOf(start);
     for (let i = 0; i <= MAX_TARGET_KEYS; i++) {
       active();
       if (!(await connected()) || !(await handle.isVisible()) || !(await handle.isEnabled()))
@@ -242,6 +287,11 @@ export async function walkToKeyboardTarget(
         );
       if (await focused()) {
         if (decision.activation) {
+          if (newlyObservedDescription)
+            return stop(
+              'changed',
+              'The requested control is now focused. New description information was recorded during movement; a fresh decision is needed before activation. No target activation was sent.',
+            );
           active();
           const next = await step(
             current,
@@ -295,12 +345,27 @@ export async function walkToKeyboardTarget(
       }
       active();
       const beforeStep = current;
+      const key = await nativeTraversalKey(handle, requestedKey);
+      const arrowGuard = key.startsWith('Arrow')
+        ? async () => (await connected()) && (await sameNativeArrowGroup(handle))
+        : undefined;
+      if (arrowGuard && !(await arrowGuard()))
+        return stop(
+          'changed',
+          'Keyboard focus left the original native group. A fresh decision is needed; no arrow input was sent.',
+        );
       const keyAction: Action = {
         kind: 'press',
         key,
         note: 'Move keyboard focus toward the requested original control.',
       };
-      let next = await step(current, keyAction);
+      let next = await step(current, keyAction, arrowGuard);
+      active();
+      if (recordDescriptions(next.current)) {
+        current = next.current;
+        if (next.performed) actions.push(next.performed);
+        return changedDescription();
+      }
       if (
         !next.performed &&
         focus &&
@@ -309,7 +374,7 @@ export async function walkToKeyboardTarget(
           .evaluate((element) => element.isConnected && document.activeElement === element)
           .catch(() => false)) &&
         next.current.payload.url === beforeStep.payload.url &&
-        next.current.payload.aria === beforeStep.payload.aria &&
+        comparisonAria(next.current) === comparisonAria(beforeStep) &&
         (await walk.page.evaluate(() => performance.timeOrigin)) === epoch
       ) {
         const withoutAppearance = (value: any) => {
@@ -327,12 +392,18 @@ export async function walkToKeyboardTarget(
             {
               method: 'keyboard_target_observation_refresh',
               reason:
-                'Focus appearance changed before input. A fresh original was recorded; the unsent key is attempted once with no repeated input or extra model decision.',
+                'Focus appearance or recorded display-only help changed before input. A fresh original was recorded; the unsent key is attempted once with no repeated input or extra model decision.',
             },
             [beforeStep.id, next.current.id],
           );
           active();
-          next = await step(next.current, keyAction);
+          next = await step(next.current, keyAction, arrowGuard);
+          active();
+          if (recordDescriptions(next.current)) {
+            current = next.current;
+            if (next.performed) actions.push(next.performed);
+            return changedDescription();
+          }
         }
       }
       current = next.current;
@@ -342,7 +413,7 @@ export async function walkToKeyboardTarget(
         !next.performed ||
         current.payload.url !== start.payload.url ||
         (await walk.page.evaluate(() => performance.timeOrigin)) !== epoch ||
-        shapeOf(current.payload.aria) !== shape
+        shapeOf(current) !== shape
       )
         return stop(
           'changed',
