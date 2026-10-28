@@ -285,7 +285,7 @@ test('Automatic start continues from one fresh observation and always cleans up'
         measureAttempts++;
         throw new MeasurementStateChanged(stale.id, 'before');
       },
-      async capture() {
+      async captureSettled() {
         captures++;
         return fresh;
       },
@@ -370,7 +370,7 @@ test('Stopping during refresh and unknown scan failures cannot be recovered as u
           if (mode === 'aborted-measurement') controller.abort();
           throw failure;
         },
-        async capture() {
+        async captureSettled() {
           captures++;
           controller.abort();
           return x.capture();

@@ -1,12 +1,17 @@
 import { publicEntryLimit } from './public-target.js';
 import { z } from 'zod';
-import { BrowserWalk, MeasurementStateChanged } from './browser.js';
+import {
+  BrowserWalk,
+  MeasurementStateChanged,
+  ActionStateChanged,
+  ObservationUnsettled,
+} from './browser.js';
 import { VoiceOverProbe } from './voiceover.js';
 import { Store } from './store.js';
 import {
   MetaModels,
   IncompleteModelResult,
-  actionSchema,
+  navigationActionSchema,
   analysisSchema,
   reviewSchema,
   type Action,
@@ -199,6 +204,8 @@ export class Runner {
       });
       let current = await walk.start(run.url);
       if (this.stopForDeniedPage(run, walk, current, true)) return;
+      if (run.mode === 'live' && current.payload.stable !== true)
+        current = await walk.captureSettled(current);
       declareCriterionScopes(this.store, run.id);
       const initialMeasurement = await this.automaticMeasurement(
         run,
@@ -448,6 +455,7 @@ export class Runner {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15 * 60000)]);
     let unchangedTraversal = 0;
     let decisionAllowanceSpent = true;
+    let finalReviewSafe = true;
     try {
       for (let i = 0; i < 20; i++) {
         walk.assertActive();
@@ -458,7 +466,7 @@ export class Runner {
           'driver',
           snap.records,
           walk.images(imageRecordsForRead(snap)),
-          actionSchema,
+          navigationActionSchema,
           false,
           signal,
           snap.read,
@@ -504,8 +512,26 @@ export class Runner {
               [before.id],
             );
           }
-          const performed = await walk.act(action, current);
-          current = await walk.capture();
+          let performed: RecordEntry;
+          try {
+            performed = await walk.act(action, current);
+          } catch (error) {
+            if (!(error instanceof ActionStateChanged)) throw error;
+            this.store.append(
+              run.id,
+              'limit',
+              'browser',
+              {
+                reason:
+                  'The page changed before input. The stale decision was not performed; navigation resumes from a fresh observation and a new decision.',
+              },
+              [current.id],
+            );
+            current = await walk.captureSettled();
+            unchangedTraversal = 0;
+            continue;
+          }
+          current = await walk.captureSettled();
           if (this.stopForDeniedPage(run, walk, current)) return;
           try {
             const afterContext = await readJourneyContext(walk, current);
@@ -572,9 +598,13 @@ export class Runner {
           [current.id],
         );
       current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
+    } catch (error) {
+      if (error instanceof ObservationUnsettled) finalReviewSafe = false;
+      throw error;
     } finally {
       returnEvidence.clear();
       if (
+        finalReviewSafe &&
         !signal.aborted &&
         this.store.run(run.id).state === 'running' &&
         !this.stopForDeniedPage(run, walk, current)
@@ -611,14 +641,14 @@ export class Runner {
           method: 'automatic_accessibility_scan',
           state: error.stage === 'before' ? 'NOT_TESTED' : 'INCONCLUSIVE',
           reason:
-            'The page changed before its automatic measurement could settle. This check remains unknown; navigation resumes from one fresh observation without repeating input or the scan.',
+            'The page changed before its automatic measurement could settle. This check remains unknown; navigation resumes from a bounded observation refresh without repeating input or the scan.',
           sourceCaptureId: error.captureId,
           unavailableObservationId: error.observationId ?? null,
         },
         [current.id, ...(error.observationId ? [error.observationId] : [])],
       );
-      // One observation refresh only: another scan could make its replacement stale again.
-      const refreshed = await walk.capture();
+      // At most three observation reads, with no new input or scan; each original remains saved.
+      const refreshed = await walk.captureSettled();
       if (signal.aborted) throw Error('The run stopped during the automatic observation refresh.');
       walk.assertActive();
       declareCriterionScopes(this.store, run.id);

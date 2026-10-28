@@ -384,7 +384,7 @@ test('A denied page after an actual requested input stops before error-page anal
     async act() {
       return store.append(run.id, 'action', 'browser', { key: 'Tab' }, [original.id]);
     },
-    async capture() {
+    async captureSettled() {
       return store.append(run.id, 'capture', 'browser', {
         title: 'Access Denied',
         url: run.url,
