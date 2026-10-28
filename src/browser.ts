@@ -6,7 +6,7 @@ import type { Action } from './models.js';
 import { permittedUrl } from './network.js';
 import { randomUUID } from 'node:crypto';
 import { LiveFrames } from './live-frame.js';
-import { readPage } from './page-observation.js';
+import { documentWasReplaced, readPage } from './page-observation.js';
 import { safeError } from './config.js';
 import { collectBrowserFacts, summarizeAxe } from './evidence-checks.js';
 import { installControlIdentity } from './control-identity.js';
@@ -27,7 +27,9 @@ export class MeasurementStateChanged extends Error {
     super(
       stage === 'before'
         ? 'The original page state is no longer stable/current; no scan was attempted.'
-        : 'The page changed during measurement; its saved raw result remains untrusted.',
+        : observationId
+          ? 'The page changed during measurement; its saved raw result remains untrusted.'
+          : 'The page changed during measurement; no usable scan result was saved.',
     );
   }
 }
@@ -578,36 +580,45 @@ export class BrowserWalk {
     )
       throw Error('The measurement needs an original capture from this run.');
     if (source.payload.stable !== true) throw new MeasurementStateChanged(source.id, 'before');
-    const before = await this.observationStamp();
-    if (source.payload.stateStamp !== before)
-      throw new MeasurementStateChanged(source.id, 'before');
-    const result = await new AxeBuilder({ page: this.page })
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
-      .analyze();
-    const facts = await collectBrowserFacts(this.page, source, result);
-    const observation = this.store.append(
-      this.runId,
-      'observation',
-      'axe-core',
-      {
-        method: 'automatic_accessibility_scan',
-        sourceCaptureId: source.id,
-        sourceCaptureHash: source.hash,
-        sourceImageHash: source.payload.imageHash,
-        stable:
-          source.payload.stateStamp === before &&
-          source.payload.stateStamp === (await this.observationStamp()),
-        engine: result.testEngine,
-        ...summarizeAxe(result),
-        facts,
-        limit:
-          'This scan is not a keyboard or screen-reader test and does not certify the website.',
-      },
-      [source.id],
-    );
-    if (observation.payload.stable !== true)
-      throw new MeasurementStateChanged(source.id, 'during', observation.id);
-    return observation;
+    let stage: 'before' | 'during' = 'before';
+    try {
+      const before = await this.observationStamp();
+      if (source.payload.stateStamp !== before)
+        throw new MeasurementStateChanged(source.id, 'before');
+      stage = 'during';
+      const result = await new AxeBuilder({ page: this.page })
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
+        .analyze();
+      const facts = await collectBrowserFacts(this.page, source, result);
+      const observation = this.store.append(
+        this.runId,
+        'observation',
+        'axe-core',
+        {
+          method: 'automatic_accessibility_scan',
+          sourceCaptureId: source.id,
+          sourceCaptureHash: source.hash,
+          sourceImageHash: source.payload.imageHash,
+          stable:
+            source.payload.stateStamp === before &&
+            source.payload.stateStamp === (await this.observationStamp()),
+          engine: result.testEngine,
+          ...summarizeAxe(result),
+          facts,
+          limit:
+            'This scan is not a keyboard or screen-reader test and does not certify the website.',
+        },
+        [source.id],
+      );
+      if (observation.payload.stable !== true)
+        throw new MeasurementStateChanged(source.id, 'during', observation.id);
+      return observation;
+    } catch (error) {
+      if (!documentWasReplaced(error) || this.page.isClosed()) throw error;
+      this.assertActive();
+      // Let the runner refresh its observation once; never retry this scan or its input.
+      throw new MeasurementStateChanged(source.id, stage);
+    }
   }
   image(record: RecordEntry) {
     return (
