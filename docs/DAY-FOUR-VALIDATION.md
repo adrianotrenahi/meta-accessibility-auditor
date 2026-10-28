@@ -65,6 +65,14 @@ Retained local evidence (ignored by Git): `output/day-four-cavioo-live/browser/f
 
 Private Cavioo validation passed on Node 22: required quick check with **10,074 tests in 707 files**, lint and types, plus the website build. Logs: `/private/tmp/meta-day4-private-quick-check-final.log` and `/private/tmp/meta-day4-private-web-build-final.log`. Separate actual desktop/320px offline proofs cover malformed optional details/recovery, controls and confirmed discard. The paired private proposal's external review additionally found that a slow optional assessment can outlast the browser's read deadline; that correction and verification remain in the private review lifecycle.
 
+### External-review clarifications
+
+The public correction passes **228/228 tests** and the build. The explicit records-only notice appears once per baseline, names its untested visual/criterion scope and leaves separately supported earlier assessments intact. The original baseline still owes all fifteen checks in the shared report. A no-proposal control retains all 60 required checks across four captures, all 60 incomplete, and no score; its analyst packet contains four records and three pictures without falsely including the baseline's criterion scope. Declaring a required check does not mean the picture was examined.
+
+The pre-run manifest retains cumulative non-SAM request history, including discarded runs, and explicitly labels it `modelCallsScope: local-history-including-discarded-runs`. It has no current-run identity. The counter describes local request records, not guaranteed successful generations; per-run spending stays separate. A two-run/discarded-history test checks that boundary. Deliberately removing the baseline notice or hiding earlier request history makes the corresponding test fail; working sources stay unchanged. Proof: `/private/tmp/meta-public-review-clarity-break-proof.json`.
+
+These clarifications use offline instrumentation only. The actual paid generation retains its original source fingerprints in `scope.json` and its first published code version, `4ffab71b09545f78ded58440c58d2425d96cfa5b`; no new model response or rewritten original is claimed for the clarification batch. The private review separately rejects removing required per-screen criteria and caching results by the ordinary report revision: a synthetic altered fact changes a criterion from FAIL to INCONCLUSIVE while that report revision and its picture list stay identical. Fresh evidence validation must remain in place.
+
 ## Impact on the UX
 
 Cavioo's layout and components are unchanged by the public-engine work. The intended flow remains the website browser, reviewed live finding bubbles, then the report and original screenshots. A missing picture or unsupported return comparison stays unknown instead of becoming an apparent pass or an invented finding.
@@ -74,7 +82,7 @@ For example, the approved synthetic email surviving Back can support a reviewed,
 ## Still pending
 
 - **Active live bubbles and complete customer flow — Codex:** actual model-backed report/original delivery is proved for the retained controlled run; active matching bubbles at both widths, production access/dispatch and broader controls remain in the existing full-flow proof ticket. No further paid Start is part of this result.
-- **Private correction verification — Codex and reviewers:** complete the slow-optional-read correction, its focused timing/recovery proof and required checks, then request VERIFY after the external findings are consolidated. The first private 10,074-test check/build already passed.
-- **Independent review and shipping — Codex and reviewers:** publish the public proposal, complete both proposals' required external reviews and handle confirmed findings. Adriano decides when the new changes merge.
+- **Private correction verification — Codex and reviewers:** verify the final write-confinement and note-format corrections. The earlier slow-read and report-tab corrections already passed VERIFY; the final required 10,074-test check and configured website build pass too.
+- **Independent review and shipping — Codex and reviewers:** complete correction verification and answer every review thread on the public and private proposals. Adriano decides when the new changes merge.
 - **Broader mixed return packets — existing evidence limit:** retain explicit incompleteness when additional independently required screenshots do not fit. No additional allowance or evidence-dropping workaround is part of this change.
 - **Human labels, false-finding measurement and remaining demo work — Adriano and root agent:** continue the reviewed labels/benchmark, SAM and broader accessibility evidence, final reconciliation, participant/video and submission work recorded in the build plan. This local note establishes no general accuracy improvement or completed final product demonstration.

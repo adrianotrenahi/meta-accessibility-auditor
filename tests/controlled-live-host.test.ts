@@ -120,6 +120,7 @@ test('Configured live host authenticates and accepts only its fixed mode, with i
     assert.equal(manifest.mode, 'live');
     assert.equal(manifest.capabilities.manualCheckpoints, false);
     assert.equal(manifest.modelCalls, 0);
+    assert.equal(manifest.modelCallsScope, 'local-history-including-discarded-runs');
     const requestId = randomUUID();
     await assert.rejects(request('POST', '/api/host/runs', { mode: 'offline', requestId }));
     await assert.rejects(
@@ -147,6 +148,20 @@ test('Configured live host authenticates and accepts only its fixed mode, with i
       0,
       'Contract fixture starts no real browser or model.',
     );
+    // Local request records are instrumentation; no provider request is made.
+    const history = store.create('Earlier local instrumentation', origin + '/shop', 'offline');
+    for (const role of ['analyst', 'sam'] as const) {
+      const reservation = store.reserve(history.id, role, 1, approved());
+      store.settle(reservation, 1, 'completed');
+    }
+    store.finish(history.id, 'partial');
+    store.discard(history.id);
+    const current = store.reserve(created.body.id, 'driver', 1, approved());
+    store.settle(current, 1, 'completed');
+    const counted = (await request('GET', '/api/host')).body;
+    assert.equal(counted.modelCalls, 2, 'History includes discarded non-SAM request records.');
+    assert.equal(counted.modelCallsScope, 'local-history-including-discarded-runs');
+    assert.equal(store.usage(created.body.id).requests.length, 1);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

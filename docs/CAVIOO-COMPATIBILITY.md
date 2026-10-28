@@ -1,5 +1,7 @@
 # Cavioo compatibility
 
+The pre-run host manifest's `modelCalls` counts non-SAM request records across the local folder, including discarded runs; it does not identify a current run or promise that every request succeeded. `modelCallsScope: local-history-including-discarded-runs` labels that scope explicitly. Per-run spending remains in each run's existing cost object.
+
 Day 4, 28 October: the separate local host now supports an explicit controlled model-test startup. Default launches remain offline. Its configured mode and controlled shop cannot be changed by a browser request; the engine still requires a current bounded private approval for every paid reservation. This does not activate the new engine in Cavioo's customer services. The private host consumes optional fifteen-criterion details through existing run and screen notes, preserving the same browser, bubbles, report and original-image viewers. Invalid or delayed optional details remain a visible limitation without removing core evidence. DAY-FOUR-VALIDATION.md records the actual tests and outstanding scope.
 
 Required direction, 27 October 2026. Build a fresh audit engine that works behind Cavioo's existing experience. Keep the current audit setup, visible browser, finding bubbles and final report with screenshots for every captured screen. Use the actual Cavioo components in the private app, including its typography, colours, spacing, icons, focus behaviour and responsive layout. A similar-looking replacement is not component reuse.

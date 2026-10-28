@@ -346,6 +346,46 @@ for (const preserved of [true, false])
     }
   });
 
+test('A records-only baseline retains all required checks and one explicit untested notice', () => {
+  const x = fixture();
+  try {
+    const scope = x.store
+      .records(x.run.id)
+      .find(
+        (record) =>
+          record.kind === 'criterion_scope' && record.payload.captureId === x.beforeType.id,
+      );
+    assert(scope, 'The baseline still owes all declared checks.');
+    for (let n = 0; n < 2; n++) {
+      const packet = requestEvidence(x.store, x.run.id, 'analyst', x.current);
+      assert.equal(packet.records.filter((record) => record.kind === 'capture').length, 4);
+      assert.equal(suppliedImageIds(packet.read, packet.records).length, 3);
+      assert(!packet.records.some((record) => record.id === scope.id));
+      const notices = packet.records.filter(
+        (record) => record.payload.method === 'records_only_return_baseline',
+      );
+      assert.equal(notices.length, 1);
+      assert.equal(notices[0].payload.state, 'NOT_TESTED');
+      assert.equal(notices[0].payload.recordsOnlyCaptureId, x.beforeType.id);
+      assert.match(notices[0].payload.reason, /without supplying its picture/);
+      assert.deepEqual(notices[0].sources, [x.beforeType.id]);
+      const report = x.report();
+      assert.equal(report.coverage.requiredChecks, 60);
+      assert.equal(report.coverage.remainingChecks, 60);
+      assert.equal(report.score, null);
+      for (const result of report.results) {
+        const check = result.checks.find((row) => row.captureId === x.beforeType.id);
+        assert(check);
+        assert.equal(check.verdict, 'NOT_TESTED');
+        assert.equal(check.complete, false);
+      }
+    }
+    assert.equal(x.store.usage().requests.length, 0);
+  } finally {
+    x.close();
+  }
+});
+
 test('Only a complete exact approved nonvisual baseline earns the single records-only image', () => {
   for (const damage of [
     'field',

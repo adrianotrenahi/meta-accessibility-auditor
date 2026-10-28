@@ -179,6 +179,29 @@ export function requestEvidence(
   if (recordsOnly)
     for (const capture of originals.filter((r) => r.kind === 'capture'))
       store.image(runId, capture.payload.imageFile);
+  if (
+    recordsOnly &&
+    !records.some(
+      (record) =>
+        record.kind === 'limit' &&
+        record.payload.method === 'records_only_return_baseline' &&
+        record.payload.recordsOnlyCaptureId === recordsOnly.captureId,
+    )
+  )
+    store.append(
+      runId,
+      'limit',
+      'browser',
+      {
+        method: 'records_only_return_baseline',
+        state: 'NOT_TESTED',
+        recordsOnlyCaptureId: recordsOnly.captureId,
+        comparisonId: recordsOnly.comparisonId,
+        reason:
+          'A return-check request read this pre-typing baseline as an original record without supplying its picture. That request did not examine this screen visually or settle its criteria. Unsupported checks remain NOT_TESTED; any separately supported earlier assessment is unchanged.',
+      },
+      [recordsOnly.captureId],
+    );
   const receipt = makeImageReceipt(originals, current.id, recordsOnly);
   const snapshot = store.snapshot(runId, role, roots, receipt);
   for (const r of snapshot.records)

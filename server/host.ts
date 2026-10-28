@@ -40,6 +40,7 @@ export async function hostRequest(
         manualCheckpoints: mode === 'offline',
       },
       modelCalls: store.usage().requests.filter((request) => request.role !== 'sam').length,
+      modelCallsScope: 'local-history-including-discarded-runs',
     });
     return;
   }
