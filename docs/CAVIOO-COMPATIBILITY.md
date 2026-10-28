@@ -137,3 +137,29 @@ The private Cavioo layout/components and default customer browser remain unchang
 by Day 3. Consuming the additional criterion/visual content through those actual
 components is part of the remaining complete model-backed host work, rather than
 proof already supplied by this optional reply. See DAY-THREE-VALIDATION.md.
+
+
+## Public website connection (28 October)
+
+The separately configured local host can use `--public-websites` to accept the
+website, journey and edited Desktop keyboard steps from the existing host setup.
+The authenticated start carries that complete target. A retry keeps its original
+identity and refuses a changed URL, journey or plan. The engine saves the original
+plan in the shared evidence pool before the browser starts. The default controlled
+shop remains the no-spend regression path; ordinary customer startup stays disabled.
+
+This mode requires the same private current bounded approval and model key as the
+controlled live host. The engine admits public HTTP/HTTPS destinations, checks all
+resolved addresses, and connects through a local forwarding service that uses only
+the checked address. Redirects and other public booking domains are allowed; local
+and private destinations are refused, including after DNS changes.
+
+Typing is limited to short terms in identified search fields. Patient, account and
+payment details are outside the run. Both English and Spanish commitment controls
+are refused. These guards do not establish that every website is operable: a login,
+challenge, embedded form, unsupported field or the existing twenty-decision allowance
+can leave the journey incomplete. The report must retain that limit and the original
+pictures. Completed model decisions do not prove the requested appointment exists.
+
+No private application source, production database, existing customer browser
+settings, model key or local ownership session belongs in this public repository.

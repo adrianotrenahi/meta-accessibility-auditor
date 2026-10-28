@@ -10,10 +10,11 @@ import { readPage } from './page-observation.js';
 import { safeError } from './config.js';
 import { collectBrowserFacts, summarizeAxe } from './evidence-checks.js';
 import { installControlIdentity } from './control-identity.js';
+import { publicBrowserProxy } from './public-network.js';
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
 export const isCommitment = (name: string) =>
-  /\b(place|confirm|submit|complete)\s+(?:my\s+|your\s+|the\s+)?(order|purchase|booking|reservation)|\b(pay|subscribe|sign\s*up|register|sign\s*in|log\s*in|buy\s*now)\b/i.test(
+  /\b(place|confirm|submit|complete)\s+(?:my\s+|your\s+|the\s+)?(order|purchase|booking|reservation)|\b(pay|subscribe|sign\s*up|register|sign\s*in|log\s*in|buy\s*now)\b|\b(confirmar|finalizar|completar|reservar)\s+(?:(?:la|mi|tu|el|su|una)\s+)?(?:cita|reserva|pedido|compra)\b|\b(pagar|registrarse|iniciar sesi[oó]n|crear cuenta)\b/i.test(
     name,
   );
 /** An intact original no longer describes the page; this is an observation limit. */
@@ -30,11 +31,49 @@ export class MeasurementStateChanged extends Error {
     );
   }
 }
+export function publicSearchInput(
+  focus: {
+    tag: string;
+    type: string;
+    role?: string;
+    name: string;
+    fieldName?: string;
+    autocomplete?: string;
+    searchForm?: boolean;
+    paymentForm?: boolean;
+  },
+  text: string,
+) {
+  if (
+    !text.trim() ||
+    text.length > 160 ||
+    /[\r\n@]/.test(text) ||
+    focus.paymentForm ||
+    !['input', 'textarea'].includes(focus.tag) ||
+    !['', 'text', 'search'].includes(focus.type) ||
+    (focus.autocomplete && !['off', 'on'].includes(focus.autocomplete))
+  )
+    return false;
+  const label = focus.name + ' ' + (focus.fieldName ?? '');
+  if (
+    /\b(patient|paciente|nombre|apellido|name|dni|nie|passport|email|tel[eé]fono|address|direcci[oó]n|card|tarjeta|password|contrase[nñ]a)\b/i.test(
+      label,
+    )
+  )
+    return false;
+  return (
+    focus.type === 'search' ||
+    focus.role === 'searchbox' ||
+    focus.searchForm === true ||
+    /\b(search|buscar|b[uú]squeda|especialidad|specialty|ciudad|city)\b/i.test(label)
+  );
+}
 export class BrowserWalk {
   browser?: Browser;
   private closing?: Promise<void>;
   private launching?: Promise<Browser>;
   private closingRequested = false;
+  private publicProxy?: Awaited<ReturnType<typeof publicBrowserProxy>>;
   page!: Page;
   actions = 0;
   started = Date.now();
@@ -46,6 +85,7 @@ export class BrowserWalk {
     public controlledOrigin: string,
     public headless = false,
     public engine: 'webkit' | 'chromium' = 'webkit',
+    public publicWebsite = false,
   ) {
     this.frames = new LiveFrames(
       runId,
@@ -75,10 +115,22 @@ export class BrowserWalk {
   }
   async start(url: string) {
     this.assertActive();
-    const approved = await permittedUrl(url, this.controlledOrigin);
+    const controlledOrigin = this.publicWebsite ? '' : this.controlledOrigin;
+    const approved = await permittedUrl(url, controlledOrigin);
+    if (this.publicWebsite) {
+      const proxy = await publicBrowserProxy();
+      if (this.closingRequested) {
+        await proxy.close();
+        throw Error('The browser is closing.');
+      }
+      this.publicProxy = proxy;
+    }
     this.assertActive();
     this.launching = (this.engine === 'webkit' ? webkit : chromium).launch({
       headless: this.headless,
+      ...(this.publicProxy
+        ? { proxy: { server: this.publicProxy.url, bypass: '<-loopback>' } }
+        : {}),
     });
     this.browser = await this.launching;
     this.assertActive();
@@ -95,8 +147,10 @@ export class BrowserWalk {
         if (u.protocol === 'data:') return route.continue();
         await permittedUrl(
           u.href,
-          this.controlledOrigin,
-          route.request().isNavigationRequest() ? approved.origin : undefined,
+          controlledOrigin,
+          !this.publicWebsite && route.request().isNavigationRequest()
+            ? approved.origin
+            : undefined,
         );
         await route.continue();
       } catch {
@@ -132,6 +186,10 @@ export class BrowserWalk {
           e?.getAttribute('aria-label') ?? (inputButton ? (e as HTMLInputElement).value : ''),
         href: e?.getAttribute('href') ?? '',
         type: e?.getAttribute('type') ?? '',
+        role: e?.getAttribute('role') ?? '',
+        autocomplete: e?.getAttribute('autocomplete') ?? '',
+        fieldName: e?.getAttribute('name') ?? '',
+        searchForm: form?.getAttribute('role') === 'search',
         hasForm: !!form,
         paymentForm: !!form?.querySelector('[autocomplete^="cc-"],input[name*="card" i]'),
         appearance: style
@@ -373,9 +431,15 @@ export class BrowserWalk {
         throw Error('Passwords and file inputs are outside this demo.');
       if (
         !action.text ||
-        !['test@example.org', 'Demo', 'Visitor', 'Demo Street', '12345'].includes(action.text)
+        !(this.publicWebsite
+          ? publicSearchInput(before, action.text)
+          : ['test@example.org', 'Demo', 'Visitor', 'Demo Street', '12345'].includes(action.text))
       )
-        throw Error('Only the approved synthetic demonstration values may be entered.');
+        throw Error(
+          this.publicWebsite
+            ? 'Only a short search term in an identified search field can be entered; patient, account and payment details are outside this run.'
+            : 'Only the approved synthetic demonstration values may be entered.',
+        );
       this.count();
       await this.page.keyboard.type(action.text);
     } else if (action.kind === 'scroll') {
@@ -497,7 +561,11 @@ export class BrowserWalk {
     if (!this.closing)
       this.closing = (async () => {
         const browser = this.browser ?? (await this.launching?.catch(() => undefined));
-        await browser?.close();
+        try {
+          await browser?.close();
+        } finally {
+          await this.publicProxy?.close();
+        }
       })();
     await this.closing;
   }
