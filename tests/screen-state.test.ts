@@ -284,7 +284,9 @@ for (const engine of ['chromium', 'webkit'] as const) {
   });
 
   for (const mode of ['open', 'closed'] as const) {
-    test(`${engine}: ${mode} shadow content stays on the actual-image path`, async () => {
+    // Shadow content leaves the rendered fingerprint incomplete, as on most real sites.
+    // An unchanged page records the Tab as facts; a changed accessible page takes a picture.
+    test(`${engine}: ${mode} shadow content with an unchanged page needs no picture per Tab`, async () => {
       const x = await setup(
         engine,
         '<x-shadow></x-shadow><button>A</button><button id="target">Target</button>',
@@ -297,15 +299,48 @@ for (const engine of ['chromium', 'webkit'] as const) {
         }, mode);
         const original = await x.walk.captureSettled();
         assert.equal(original.payload.screenState, undefined);
+        const pictures = x.pictures();
         const after = await x.step(original, { kind: 'press', key: 'Tab', note: 'Actual Tab' });
-        assert.equal(after.current.kind, 'capture');
-        assert.equal(after.current.payload.screenState, undefined);
-        assert(x.pictures() >= 2);
+        assert.equal(after.current.kind, 'observation');
+        assert.equal(after.current.payload.screenStateFingerprint, undefined);
+        assert.equal(after.current.payload.pageStamp, original.payload.pageStamp);
+        assert.equal(
+          after.current.payload.comparison,
+          'page-state-and-identical-accessibility-snapshot',
+        );
+        assert.equal(after.current.payload.sourceImageHash, original.payload.imageHash);
+        assert.equal(x.pictures(), pictures);
         assert.equal(x.app.store.usage().requests.length, 0);
+        // The facts-only observation is still a valid source for the next Tab.
+        const next = await x.step(after.current, { kind: 'press', key: 'Tab', note: 'Next' });
+        assert(['observation', 'capture'].includes(next.current.kind));
       } finally {
         await x.close();
       }
     });
+    // A closed shadow root is unreadable to every observation, including the accessibility
+    // snapshot; its facts-only record names its comparison instead of claiming more.
+    if (mode === 'open')
+      test(`${engine}: ${mode} shadow content changed by a Tab takes an actual new screen`, async () => {
+        const x = await setup(
+          engine,
+          '<x-shadow></x-shadow><button>A</button><button id="target">Target</button>',
+        );
+        try {
+          await x.walk.page.locator('x-shadow').evaluate((element, mode) => {
+            const shadow = element.attachShadow({ mode });
+            shadow.innerHTML =
+              '<button onfocus="this.nextElementSibling.hidden=false">Shadow control</button><p hidden>Offer ends today</p>';
+          }, mode);
+          const original = await x.walk.captureSettled();
+          const pictures = x.pictures();
+          const after = await x.step(original, { kind: 'press', key: 'Tab', note: 'Actual Tab' });
+          assert.equal(after.current.kind, 'capture');
+          assert(x.pictures() > pictures);
+        } finally {
+          await x.close();
+        }
+      });
   }
 
   test(`${engine}: lightweight focus decoration records its actual current paint separately`, async () => {

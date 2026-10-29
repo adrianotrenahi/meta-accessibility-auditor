@@ -524,7 +524,15 @@ test('Runner refreshes a target that changed during the model decision without p
   const reason = mock.method(MetaModels.prototype, 'reason', async () => {
     decisions++;
     if (decisions === 1) {
-      await x.walk.page.locator('h1').evaluate((e) => (e.textContent = 'Changed while thinking'));
+      // A popup opening is a meaningful change; ordinary copy drift is tolerated (page-state/1).
+      await x.walk.page
+        .locator('h1')
+        .evaluate((e) =>
+          e.insertAdjacentHTML(
+            'afterend',
+            '<div role="dialog" aria-label="Changed while thinking"></div>',
+          ),
+        );
       return seek;
     }
     return decisions === 2 ? seek : { kind: 'finish', note: 'The fresh target was reached.' };

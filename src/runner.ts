@@ -42,6 +42,7 @@ import {
 } from './assessment.js';
 import { FocusedCheckBudget, type MissingEvidenceRequest } from './evidence-checks.js';
 import { performFocusedCheck } from './focused-checks.js';
+import { clearPageBlockers } from './page-blockers.js';
 import {
   readJourneyContext,
   compareJourneyTotals,
@@ -288,6 +289,13 @@ export class Runner {
       );
       current = initialMeasurement.current;
       if (this.stopForDeniedPage(run, walk, current, true)) return;
+      // Instrumented walks without a live page have nothing to clear.
+      if (run.mode === 'live' && walk.page) {
+        current = await clearPageBlockers(walk, this.store, run.id, current, controller.signal, {
+          arrival: true,
+        });
+        if (this.stopForDeniedPage(run, walk, current, true)) return;
+      }
       this.store.append(
         run.id,
         'navigator_note',
@@ -739,6 +747,14 @@ export class Runner {
               },
               [performed.id, current.id],
             );
+          }
+          // A new page often brings its own consent banner. Cleared only after this
+          // input's own before/after comparison, so the dismissal is never credited to it.
+          if (current.payload.url !== before.payload.url && walk.page) {
+            current = await clearPageBlockers(walk, this.store, run.id, current, signal, {
+              arrival: false,
+            });
+            if (this.stopForDeniedPage(run, walk, current)) return;
           }
           unchangedTraversal =
             action.kind === 'press' &&

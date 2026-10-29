@@ -339,8 +339,10 @@ test('A screen changed during the model decision refreshes without completing th
   t.mock.method(x.runner as any, 'review', async () => {});
   t.mock.method(MetaModels.prototype, 'reason', async () => {
     if (++calls > 1) return { kind: 'finish', note: 'Stop after the refused stale completion.' };
+    // A popup opening is a meaningful change; ordinary copy drift is tolerated (page-state/1).
     await x.walk.page.locator('h1').evaluate((element) => {
       element.textContent = 'Changed page';
+      element.insertAdjacentHTML('afterend', '<div role="dialog" aria-label="Changed page"></div>');
     });
     return {
       kind: 'step_done',
