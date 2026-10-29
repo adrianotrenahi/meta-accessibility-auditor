@@ -19,7 +19,7 @@ import {
   visualObservationListSchema,
   VISUAL_INSPECTION_GUIDANCE,
 } from './visual-inspection.js';
-import { missingEvidenceSchema } from './evidence-checks.js';
+import { missingEvidenceSchema, normalizeMissingEvidence } from './evidence-checks.js';
 import { EvidenceRequestLimit } from './request-evidence.js';
 import {
   journeyPlanSchema,
@@ -173,7 +173,9 @@ export const analysisSchema = z.object({
   coverage: visualCoverageListSchema.default([]),
   visualObservations: visualObservationListSchema.default([]),
   criterionProposals: z.array(criterionAssessmentSchema).max(15).default([]),
-  missingEvidence: z.array(missingEvidenceSchema).max(2).default([]),
+  missingEvidence: z
+    .preprocess(normalizeMissingEvidence, z.array(missingEvidenceSchema).max(2))
+    .default([]),
 });
 export const reviewSchema = z.object({
   decisions: z

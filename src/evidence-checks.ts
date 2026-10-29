@@ -32,6 +32,23 @@ export const missingEvidenceSchema = z
       });
   });
 export type MissingEvidenceRequest = z.infer<typeof missingEvidenceSchema>;
+/**
+ * The JSON schema a model receives cannot say that only keyboard_activation takes an
+ * activation key and control name. A stray key or name on another method carries no
+ * meaning and is removed; an activation request missing either is not performed.
+ * Only these optional requests are tidied: every other malformed result still fails.
+ */
+export function normalizeMissingEvidence(value: unknown) {
+  if (!Array.isArray(value)) return value;
+  return value
+    .flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return [item];
+      const { activationKey, targetName, ...request } = item as Record<string, unknown>;
+      if (request.method !== 'keyboard_activation') return [request];
+      return activationKey != null && targetName != null ? [item] : [];
+    })
+    .slice(0, 2);
+}
 export type FocusedMethod = MissingEvidenceRequest['method'];
 
 /** Claims a slot before execution, so a failed check is not a free retry. */
