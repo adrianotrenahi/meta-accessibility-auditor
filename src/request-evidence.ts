@@ -8,7 +8,12 @@ import {
   UNRECOGNISED_BUNDLE_LIMIT,
   journeyDataSchema,
 } from './journey-evidence.js';
-import { makeImageReceipt, suppliedImageIds, PROVIDER_IMAGE_LIMIT } from './image-receipt.js';
+import {
+  makeImageReceipt,
+  suppliedImageIds,
+  PROVIDER_IMAGE_LIMIT,
+  readHashMatches,
+} from './image-receipt.js';
 
 export class EvidenceRequestLimit extends Error {
   constructor(
@@ -261,29 +266,101 @@ export function requestEvidence(
   if (captureIds.size > (role === 'driver' ? 1 : PROVIDER_IMAGE_LIMIT))
     throw new EvidenceRequestLimit(role);
   if (role === 'reviewer') {
-    // Optional criteria reuse the mandatory original pictures; they cannot enlarge the finding packet.
+    // A focused check can create a new current picture after the analyst has proposed
+    // criteria. Keep those exact proposals with their own originals, without displacing
+    // mandatory finding evidence or exceeding the existing request bounds.
     const selectedIds = new Set(originals.map((record) => record.id));
+    const omit = (proposal: RecordEntry, reason: string) => {
+      if (
+        records.some(
+          (record) =>
+            record.kind === 'limit' &&
+            record.author === 'reviewer' &&
+            record.payload.method === 'criterion_review_selection' &&
+            record.payload.proposalId === proposal.id &&
+            record.payload.proposalHash === proposal.hash &&
+            record.payload.checkpointCaptureId === current.id &&
+            record.payload.reason === reason,
+        )
+      )
+        return;
+      store.append(
+        runId,
+        'limit',
+        'reviewer',
+        {
+          method: 'criterion_review_selection',
+          state: 'INCONCLUSIVE',
+          proposalId: proposal.id,
+          proposalHash: proposal.hash,
+          checkpointCaptureId: current.id,
+          reason,
+        },
+        [current.id],
+      );
+    };
     let selectedProposals = 0;
     for (const proposal of records
       .filter((record) => record.kind === 'criterion_proposal')
       .reverse()) {
-      if (selectedProposals === 5) break;
+      if (selectedProposals === 5) {
+        omit(
+          proposal,
+          'This checkpoint already supplies five newer criterion proposals. This exact proposal remains unassessed here.',
+        );
+        continue;
+      }
       let closure: RecordEntry[];
       try {
         closure = originalClosure(records, [proposal.id]);
+        const analystRead = records.find((record) => record.id === proposal.payload.readSnapshotId);
+        if (
+          !analystRead ||
+          analystRead.kind !== 'read_snapshot' ||
+          analystRead.author !== 'analyst' ||
+          !recordIsIntact(analystRead) ||
+          !readHashMatches(analystRead, proposal.payload.readSnapshotHash) ||
+          analystRead.seq >= proposal.seq ||
+          !Array.isArray(analystRead.payload.records) ||
+          closure.some(
+            (record) =>
+              record.id !== proposal.id &&
+              (record.seq >= analystRead.seq ||
+                !analystRead.payload.records.some(
+                  (pin: any) =>
+                    pin.id === record.id &&
+                    pin.hash === record.hash &&
+                    JSON.stringify(pin.sources) === JSON.stringify(record.sources),
+                )),
+          )
+        )
+          throw Error('The proposal no longer matches its original analyst read.');
+        for (const capture of closure.filter((record) => record.kind === 'capture'))
+          if (!captureIds.has(capture.id)) store.image(runId, capture.payload.imageFile);
       } catch {
         // Missing or changed optional evidence cannot prevent review of intact existing findings.
+        omit(
+          proposal,
+          'Required original criterion evidence is missing, changed or unstable. This exact proposal remains unassessed here.',
+        );
         continue;
       }
       const addedCaptures = closure
         .filter((record) => record.kind === 'capture')
         .map((record) => record.id);
-      if (addedCaptures.some((id) => !captureIds.has(id))) continue;
+      if (new Set([...captureIds, ...addedCaptures]).size > PROVIDER_IMAGE_LIMIT) {
+        omit(
+          proposal,
+          'Required original criterion pictures exceed this checkpoint image allowance. This exact proposal remains unassessed here.',
+        );
+        continue;
+      }
       for (const record of closure)
         if (!selectedIds.has(record.id)) {
           selectedIds.add(record.id);
           originals.push(record);
         }
+      for (const id of addedCaptures) captureIds.add(id);
       selectedProposals++;
     }
   }
