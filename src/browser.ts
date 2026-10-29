@@ -1,5 +1,5 @@
 import { originalAriaName } from './aria-name.js';
-import { webkit, chromium, type Browser, type Page } from 'playwright';
+import { webkit, chromium, type Browser, type ElementHandle, type Page } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
 import { Store, digest, recordIsIntact } from './store.js';
 import { LIMITS, type Capture, type RecordEntry } from './types.js';
@@ -14,7 +14,13 @@ import { collectBrowserFacts, summarizeAxe } from './evidence-checks.js';
 import { installControlIdentity } from './control-identity.js';
 import { publicBrowserProxy } from './public-network.js';
 import { readRecordedFocusHelp, type RecordedFocusHelp } from './focus-help.js';
-import { ariaDifference, openDialogs, pageStamp, sameForInput } from './page-state.js';
+import {
+  ariaDifference,
+  contentSettled,
+  openDialogs,
+  pageStamp,
+  sameForInput,
+} from './page-state.js';
 import {
   meaningfulScreenFingerprint,
   renderedScreenShape,
@@ -87,7 +93,11 @@ export function publicSearchInput(
     focus.type === 'search' ||
     focus.role === 'searchbox' ||
     focus.searchForm === true ||
-    /\b(search|buscar|b[uú]squeda|especialidad|specialty|ciudad|city)\b/i.test(label)
+    /\b(search|buscar|b[uú]squeda|especialidad|specialty|ciudad|city)\b/i.test(label) ||
+    // Travel search fields: places and dates, never personal details (refused above).
+    /\bwhere\s+(from|to)\b|\b(origin|destination|airport|departure|return|dates?|check.?in|check.?out|desde|hacia|origen|destino|aeropuerto|salida|llegada|ida|vuelta|fechas?)\b/i.test(
+      label,
+    )
   );
 }
 export class BrowserWalk {
@@ -104,6 +114,8 @@ export class BrowserWalk {
   private lastScreenState?: { fingerprint: string; original: RecordEntry };
   private readonly controlIdentityKey = '__access_walk_control_' + randomUUID();
   private readonly pointerStateKey = '__access_walk_pointer_' + randomUUID();
+  /** Page-side registry of the exact controls each original listed (no DOM change). */
+  private readonly stampKey = '__access_walk_stamp_' + randomUUID();
   constructor(
     public store: Store,
     public runId: string,
@@ -306,11 +318,28 @@ export class BrowserWalk {
     for (let attempt = 0; attempt < 3; attempt++) {
       this.assertActive();
       attempts.push(current);
-      if (current.payload.stable === true) return current;
+      if (current.payload.stable === true && current.payload.contentDrift?.settled !== false)
+        return current;
       if (attempt < 2) {
-        await this.page.waitForTimeout(200);
+        await this.page.waitForTimeout(400);
         current = await this.capture();
       }
+    }
+    // Same page, focus and popups, but its copy kept changing (a live ticker, a
+    // carousel). The latest original is used; nothing is inferred from the drift.
+    if (current.payload.stable === true) {
+      this.store.append(
+        this.runId,
+        'limit',
+        'browser',
+        {
+          method: 'content_still_changing',
+          reason:
+            'Page text kept changing across three observations while address, focus and popups stayed the same. The latest original is used.',
+        },
+        attempts.map((item) => item.id),
+      );
+      return current;
     }
     const reason =
       'The page did not settle across three observations. No input was repeated; the journey remains incomplete.';
@@ -347,20 +376,36 @@ export class BrowserWalk {
     const locators = this.page.locator(controls);
     // Real sites put many hidden menu links before their search form. Choose the
     // first 60 visible controls, those on screen first; ids keep the page position.
-    const listed = await locators.evaluateAll((targets) => {
-      const onScreen: number[] = [];
-      const offScreen: number[] = [];
-      targets.forEach((target, index) => {
-        const box = target.getBoundingClientRect();
-        const style = getComputedStyle(target);
-        if (!box.width || !box.height || style.visibility === 'hidden' || style.display === 'none')
-          return;
-        const shown =
-          box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth;
-        (shown ? onScreen : offScreen).push(index);
-      });
-      return [...onScreen, ...offScreen].slice(0, 60).sort((a, b) => a - b);
-    });
+    const stampToken = randomUUID();
+    const listed = await locators.evaluateAll(
+      (targets, { key, token }) => {
+        const onScreen: number[] = [];
+        const offScreen: number[] = [];
+        targets.forEach((target, index) => {
+          const box = target.getBoundingClientRect();
+          const style = getComputedStyle(target);
+          if (
+            !box.width ||
+            !box.height ||
+            style.visibility === 'hidden' ||
+            style.display === 'none'
+          )
+            return;
+          const shown =
+            box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth;
+          (shown ? onScreen : offScreen).push(index);
+        });
+        const chosen = [...onScreen, ...offScreen].slice(0, 60).sort((a, b) => a - b);
+        // Each original keeps live references to the exact controls it listed, so a
+        // decision naming e69 reaches that element even when its name is repeated.
+        const registry: Map<string, Map<string, Element>> = ((globalThis as any)[key] ??=
+          new Map());
+        registry.set(token, new Map(chosen.map((index) => ['e' + index, targets[index]!])));
+        for (const old of [...registry.keys()].slice(0, -8)) registry.delete(old);
+        return chosen;
+      },
+      { key: this.stampKey, token: stampToken },
+    );
     for (const i of listed) {
       const locator = locators.nth(i);
       if (!(await locator.isVisible().catch(() => false))) continue;
@@ -468,6 +513,7 @@ export class BrowserWalk {
       before.aria === state.aria ? 0 : ariaDifference(before.aria, state.aria).length;
     const stable =
       identitiesStable && sameForInput({ ...before, pageStamp: pageStamp(before) }, state);
+    const settled = contentSettled(before.aria, state.aria);
     const beforeFingerprint = meaningfulScreenFingerprint(screenBefore);
     const fingerprint =
       stable && beforeFingerprint && beforeFingerprint === meaningfulScreenFingerprint(screenAfter)
@@ -504,7 +550,8 @@ export class BrowserWalk {
       stateStamp: digest(JSON.stringify(state)),
       pageStamp: pageStamp(state),
       stable,
-      ...(contentDrift ? { contentDrift: { changedLines: contentDrift } } : {}),
+      ...(contentDrift ? { contentDrift: { changedLines: contentDrift, settled } } : {}),
+      stampToken,
       ...(screenState ? { screenState } : {}),
       limits: {
         ...(!identitiesStable ? { controlIdentityChanged: true } : {}),
@@ -524,6 +571,24 @@ export class BrowserWalk {
     this.lastOriginal = { id: original.id, url: payload.url, documentEpoch: state.documentEpoch };
     this.lastScreenState = fingerprint ? { fingerprint, original: primary ?? original } : undefined;
     return original;
+  }
+  /** The exact element an original listed as `id`, while it is still on the page.
+   * Read from a page-side registry; nothing is added to the page itself. */
+  async listedControl(
+    source: RecordEntry,
+    id: string,
+  ): Promise<ElementHandle<HTMLElement | SVGElement> | null> {
+    if (typeof source.payload.stampToken !== 'string' || !/^e\d+$/.test(id)) return null;
+    const found = await this.page.evaluateHandle(
+      ({ key, token, id }) => {
+        const element = (globalThis as any)[key]?.get(token)?.get(id) as Element | undefined;
+        return element?.isConnected ? element : null;
+      },
+      { key: this.stampKey, token: source.payload.stampToken, id },
+    );
+    const element = found.asElement();
+    if (!element) await found.dispose();
+    return element as ElementHandle<HTMLElement | SVGElement> | null;
   }
   /** Ordinary Tab movement gets original focus facts, not another screenshot.
    * A changed/uncertain rendered state still takes the ordinary full image. */
@@ -570,7 +635,7 @@ export class BrowserWalk {
       (!fingerprint || !previous) &&
       typeof original.payload.pageStamp === 'string' &&
       original.payload.pageStamp === pageStamp(state) &&
-      original.payload.aria === state.aria;
+      contentSettled(original.payload.aria, state.aria);
     if (
       !(sameScreen || samePage) ||
       digest(JSON.stringify(state.focus)) !== digest(JSON.stringify(performed.payload.after))
@@ -582,7 +647,7 @@ export class BrowserWalk {
       digest(JSON.stringify(state)) !== digest(JSON.stringify(after)) ||
       (sameScreen
         ? meaningfulScreenFingerprint(afterShape) !== fingerprint
-        : original.payload.aria !== after.aria)
+        : !contentSettled(original.payload.aria, after.aria))
     )
       return this.captureSettled();
     return this.store.append(
@@ -607,7 +672,7 @@ export class BrowserWalk {
           ? { screenStateFingerprint: fingerprint }
           : {
               pageStamp: pageStamp(after),
-              comparison: 'page-state-and-identical-accessibility-snapshot',
+              comparison: 'page-state-and-bounded-content-drift',
             }),
       },
       [source.id, performed.id],

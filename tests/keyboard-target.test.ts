@@ -233,31 +233,58 @@ test('Missing/ambiguous/disabled targets and changed original payload send no ke
   }
 });
 
-test('A focus-triggered page change or target replacement ends traversal before another key', async () => {
-  for (const change of [
-    "document.querySelector('h1').textContent='Changed price EUR 48'",
-    "document.querySelector('#target').outerHTML='<button id=target>Target</button>'",
-  ]) {
-    const x = await setup(
-      'chromium',
-      `<h1>Original</h1><button onfocus="${change}">A</button><button id="target">Target</button>`,
+test('A focus-triggered target replacement ends traversal before another key', async () => {
+  const x = await setup(
+    'chromium',
+    `<h1>Original</h1><button onfocus="document.querySelector('#target').outerHTML='<button id=target>Target</button>'">A</button><button id="target">Target</button>`,
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
     );
-    try {
-      const result = await walkToKeyboardTarget(
-        x.walk,
-        x.app.store,
-        x.run.id,
-        x.current,
-        seek,
-        x.signal.signal,
-        x.step,
+    assert.equal(result.outcome, 'changed');
+    assert.equal(result.actions.length, 1);
+    assert.notEqual((await x.walk.focus()).name, 'Target');
+  } finally {
+    await x.close();
+  }
+});
+
+// page-state/1: copy changing elsewhere does not stop a Tab walk, but a price that
+// changed during the walk always blocks the requested activation.
+test('A focus-triggered price change lets focus arrive but never activates', async () => {
+  const x = await setup(
+    'chromium',
+    `<h1>Original</h1><button onfocus="document.querySelector('h1').textContent='Changed price EUR 48'">A</button><button id="target" onclick="this.dataset.activated='yes'">Target</button>`,
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { ...seek, activation: 'Enter' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'changed');
+    assert.equal((await x.walk.focus()).name, 'Target');
+    assert.equal(await x.walk.page.locator('#target').getAttribute('data-activated'), null);
+    assert(!result.actions.some((row) => row.payload.requestedAction.key === 'Enter'));
+    const limit = x.app.store
+      .records(x.run.id)
+      .findLast(
+        (row) => row.kind === 'limit' && row.payload.method === 'keyboard_target_traversal',
       );
-      assert.equal(result.outcome, 'changed');
-      assert.equal(result.actions.length, 1);
-      assert.notEqual((await x.walk.focus()).name, 'Target');
-    } finally {
-      await x.close();
-    }
+    assert.match(limit!.payload.reason, /price on the page changed/);
+  } finally {
+    await x.close();
   }
 });
 
@@ -530,7 +557,7 @@ test('Runner refreshes a target that changed during the model decision without p
         .evaluate((e) =>
           e.insertAdjacentHTML(
             'afterend',
-            '<div role="dialog" aria-label="Changed while thinking"></div>',
+            '<div role="dialog" aria-label="Changed while thinking"><p>Sign in for member deals</p></div>',
           ),
         );
       return seek;
@@ -957,11 +984,10 @@ test('Recorded focus help cannot hide an unrelated changed price during traversa
       x.signal.signal,
       x.step,
     );
+    // page-state/1: focus may move on, but the changed price blocks activation.
     assert.equal(result.outcome, 'changed');
-    assert.equal(result.actions.length, 1);
-    assert.equal(result.current.payload.focusHelp.length, 1);
     assert(result.current.payload.aria.includes('EUR 99'));
-    assert.equal((await x.walk.focus()).name, 'First');
+    assert.equal((await x.walk.focus()).name, 'Target');
     assert(!result.actions.some((row) => row.payload.requestedAction.key === 'Enter'));
   } finally {
     await x.close();
@@ -1246,6 +1272,7 @@ test('Temporary indexed handles and non-element active handles are explicitly re
   const locator = x.walk.page.locator.bind(x.walk.page);
   const evaluateHandle = x.walk.page.evaluateHandle.bind(x.walk.page);
   let indexedDisposed = 0,
+    listedDisposed = 0,
     nullDisposed = 0,
     suppliedNull = false;
   const wrapHandle = (handle: any, released: () => void) => {
@@ -1280,7 +1307,8 @@ test('Temporary indexed handles and non-element active handles are explicitly re
       suppliedNull = true;
       return wrapHandle(await evaluateHandle(() => null), () => nullDisposed++);
     }
-    return (evaluateHandle as any)(fn, ...rest);
+    const handle = await (evaluateHandle as any)(fn, ...rest);
+    return String(fn).includes('isConnected') ? wrapHandle(handle, () => listedDisposed++) : handle;
   });
   try {
     const target = x.current.payload.elements.find((e: any) => e.name === 'Target');
@@ -1296,7 +1324,9 @@ test('Temporary indexed handles and non-element active handles are explicitly re
     );
     assert.equal(result.outcome, 'reached');
     assert.equal(result.actions.length, 2);
-    assert.equal(indexedDisposed, 1);
+    // page-state/1 reads the listed element directly; no indexed handle is made.
+    assert.equal(indexedDisposed, 0);
+    assert.equal(listedDisposed, 1);
     assert(suppliedNull);
     assert.equal(nullDisposed, 1);
   } finally {
@@ -1367,5 +1397,54 @@ test('Combined final review keeps its own allowance incomplete while driver, glo
       review.mock.restore();
       await x.close();
     }
+  }
+});
+
+const twoOrigins =
+  '<section><h2>Hotels</h2><label>Where from?<input id="hotel"></label></section>' +
+  '<section><h2>Flights</h2><label>Where from?<input id="flight"></label><button>Search</button></section>';
+
+test('A target id reaches the second of two same-named fields, as on eDreams', async () => {
+  const x = await setup('chromium', twoOrigins);
+  try {
+    const fields = x.current.payload.elements.filter((e: any) => e.name === 'Where from?');
+    assert.equal(fields.length, 2);
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { kind: 'focus_target', targetId: fields[1].id, note: 'Reach the flight origin' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'reached');
+    assert.equal(await x.walk.page.evaluate(() => document.activeElement?.id), 'flight');
+  } finally {
+    await x.close();
+  }
+});
+
+test('A repeated name is refused when the listed control was replaced by a lookalike', async () => {
+  const x = await setup('chromium', twoOrigins);
+  try {
+    const fields = x.current.payload.elements.filter((e: any) => e.name === 'Where from?');
+    await x.walk.page.evaluate(() => {
+      const old = document.querySelector('#flight')!;
+      old.replaceWith(old.cloneNode(true));
+    });
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { kind: 'focus_target', targetId: fields[1].id, note: 'Reach the flight origin' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'unavailable');
+    assert.equal(result.actions.length, 0);
+  } finally {
+    await x.close();
   }
 });

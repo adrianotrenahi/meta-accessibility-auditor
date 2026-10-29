@@ -342,7 +342,10 @@ test('A screen changed during the model decision refreshes without completing th
     // A popup opening is a meaningful change; ordinary copy drift is tolerated (page-state/1).
     await x.walk.page.locator('h1').evaluate((element) => {
       element.textContent = 'Changed page';
-      element.insertAdjacentHTML('afterend', '<div role="dialog" aria-label="Changed page"></div>');
+      element.insertAdjacentHTML(
+        'afterend',
+        '<div role="dialog" aria-label="Changed page"><p>Sign in for member deals</p></div>',
+      );
     });
     return {
       kind: 'step_done',

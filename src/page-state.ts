@@ -56,7 +56,9 @@ function focusKey(focus: unknown) {
 
 /**
  * Whether a saved observation still describes the page closely enough to send
- * the next key. Only the walk uses this; scans and journey evidence keep the
+ * the next key: same document, address, scroll, open popups and focus. Copy
+ * elsewhere on the page (promotions, counters) does not matter to a key; the
+ * chosen control is checked separately. Scans and journey evidence keep the
  * exact state stamp. Records saved before page-state/1 keep exact comparison.
  */
 export function sameForInput(
@@ -74,8 +76,7 @@ export function sameForInput(
   return (
     saved.pageStamp === pageStamp(state) &&
     focusKey(saved.focus) === focusKey(state.focus) &&
-    digest(JSON.stringify(saved.focusHelp)) === digest(JSON.stringify(state.focusHelp)) &&
-    contentSettled(saved.aria, state.aria)
+    digest(JSON.stringify(saved.focusHelp)) === digest(JSON.stringify(state.focusHelp))
   );
 }
 
@@ -107,4 +108,21 @@ export async function openDialogs(page: Page) {
     }
     return result;
   });
+}
+
+/** Popup lines in an accessibility snapshot; an opened or closed popup always matters. */
+export function dialogLines(aria: string) {
+  return aria
+    .split('\n')
+    .filter((line) => dialogLine.test(line))
+    .join('\n');
+}
+
+const moneyText = /[€$£¥]\s?\d|\d\s?[€$£¥]|\b(?:EUR|USD|GBP|JPY)\s?\d|\d\s?(?:EUR|USD|GBP|JPY)\b/i;
+/** Lines that state an amount of money; any change to them is checked before activation. */
+export function moneyLines(aria: string) {
+  return aria
+    .split('\n')
+    .filter((line) => moneyText.test(line))
+    .join('\n');
 }
