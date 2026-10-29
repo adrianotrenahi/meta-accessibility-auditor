@@ -158,7 +158,7 @@ test('Ambiguous saved results withhold SAM rather than selecting a reply or chan
   }
 });
 
-test('The host boundary refuses a SAM receipt moved to a wrong target, source image or coordinate system', () => {
+test('The host drops only unverifiable optional SAM, preserving the independent original finding', () => {
   const x = sample();
   try {
     const snapshot = exportHostSnapshot(x.store, x.run.id).snapshot;
@@ -194,11 +194,43 @@ test('The host boundary refuses a SAM receipt moved to a wrong target, source im
     for (const mutate of mutations) {
       const changed = structuredClone(snapshot);
       mutate(changed);
-      assert.equal(hostSnapshotSchema.safeParse(changed).success, false);
+      const before = JSON.stringify(changed);
+      const accepted = hostSnapshotSchema.parse(changed);
+      assert.equal(accepted.findings.length, snapshot.findings.length);
+      assert.equal(accepted.findings[0].anchor?.sam, undefined);
+      assert.deepEqual(accepted.findings[0].anchor?.box, snapshot.findings[0].anchor?.box);
+      assert.deepEqual(accepted.captures, snapshot.captures);
+      assert(accepted.limits.some((limit) => limit.includes('without SAM')));
+      assert.equal(
+        JSON.stringify(changed),
+        before,
+        'The original received packet stays unchanged.',
+      );
     }
     const legacy = structuredClone(snapshot);
     delete legacy.findings[0].anchor!.sam;
     assert.equal(hostSnapshotSchema.safeParse(legacy).success, true);
+  } finally {
+    x.close();
+  }
+});
+
+test('SAM source-size refusal preserves a larger ordinary report and never relaxes its decoder guard', () => {
+  const x = sample();
+  try {
+    const input = exportHostSnapshot(x.store, x.run.id).snapshot;
+    input.captures[0].width = 1440;
+    input.captures[0].height = 1100;
+    input.findings[0].anchor!.sam!.width = 1440;
+    input.findings[0].anchor!.sam!.height = 1100;
+    const result = hostSnapshotSchema.parse(input);
+    assert.equal(1440 * 1100 > 1_500_000, true);
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].anchor?.sam, undefined);
+    assert.deepEqual(result.findings[0].anchor?.box, x.element.box);
+    const unsupported = structuredClone(input);
+    unsupported.findings[0].anchor!.box.x = 1440;
+    assert.equal(hostSnapshotSchema.safeParse(unsupported).success, false);
   } finally {
     x.close();
   }

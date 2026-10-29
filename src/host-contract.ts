@@ -1,5 +1,5 @@
-import { z } from 'zod';
 import { samAssociationSchema, samAssociationFits } from './sam-association.js';
+import { z } from 'zod';
 
 const id = z.string().min(1).max(200);
 const webUrl = z
@@ -130,7 +130,7 @@ export const hostSnapshotSchema = z
           captureIds: z.array(id).min(1),
           sourceIds: z.array(id).min(1),
           anchor: z
-            .object({ captureId: id, elementId: id, box, sam: samAssociationSchema.optional() })
+            .object({ captureId: id, elementId: id, box, sam: z.unknown().optional() })
             .strict()
             .nullable(),
         })
@@ -153,6 +153,36 @@ export const hostSnapshotSchema = z
       .strict(),
   })
   .strict()
+  .transform((snapshot) => {
+    let withheld = false;
+    const findings = snapshot.findings.map((finding) => {
+      if (!finding.anchor) return { ...finding, anchor: null };
+      const { sam: originalSam, ...anchor } = finding.anchor;
+      const capture = snapshot.captures.find((c) => c.id === anchor.captureId);
+      const parsed = samAssociationSchema.safeParse(originalSam);
+      const sam =
+        parsed.success && capture && samAssociationFits(parsed.data, anchor, capture)
+          ? parsed.data
+          : undefined;
+      if (originalSam !== undefined && !sam) withheld = true;
+      const retainedAnchor: typeof anchor & { sam?: z.infer<typeof samAssociationSchema> } = sam
+        ? { ...anchor, sam }
+        : anchor;
+      return { ...finding, anchor: retainedAnchor };
+    });
+    return {
+      ...snapshot,
+      findings,
+      limits: withheld
+        ? [
+            ...new Set([
+              ...snapshot.limits,
+              'An optional SAM association could not be verified; the independently supported finding is retained without SAM.',
+            ]),
+          ]
+        : snapshot.limits,
+    };
+  })
   .superRefine((snapshot, ctx) => {
     if (snapshot.activity && snapshot.activity.runId !== snapshot.run.id)
       ctx.addIssue({ code: 'custom', message: 'Recorded activity belongs to a different run' });

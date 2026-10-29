@@ -11,6 +11,10 @@ reply and outline path stay outside it. No model is constructed or requested.
 
 An unavailable, changed, empty, unresolved or ambiguous saved reply provides no
 SAM receipt. Its separately reviewed finding and ordinary marker remain usable.
+Both current readers also drop an unverifiable optional association without
+discarding its independently supported finding, images or report. They preserve
+the original received data and add a limited note; core finding/source failures
+remain strict refusals.
 Original-image withdrawal continues to withhold the whole dependent finding.
 For example, a receipt for an Add button on the product screen cannot attach to
 a basket screen that happens to contain the same pixels or a reused target name.
@@ -18,6 +22,12 @@ a basket screen that happens to contain the same pixels or a reused target name.
 The receiver must support the optional receipt before this exporter is merged;
 an older strict `host-v1` receiver will refuse the new field. Old snapshots
 without the optional field remain supported.
+
+The existing saved-mask decoder supports originals up to 1,500,000 pixels. The
+association guard deliberately mirrors that existing full-source limit; it is
+not a new mask-only allowance. A 1440 by 900 original fits; a 1440 by 1100
+original does not. Larger ordinary reports remain usable without a SAM
+association. No source-image or decoder guard is bypassed or increased here.
 
 ## Impact on the UX
 

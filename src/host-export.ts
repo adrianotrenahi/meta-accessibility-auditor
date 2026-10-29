@@ -1,8 +1,8 @@
+import { exportHostSamAssociation } from './host-sam.js';
 import { digest, type Store } from './store.js';
 import { hostSnapshotSchema } from './host-contract.js';
 import { exportKeyboardEvidence } from './keyboard-evidence.js';
 import { exportHostActivity } from './host-activity.js';
-import { exportHostSamAssociation } from './host-sam.js';
 
 /** A whitelist projection: model prompts, raw candidates and private settings never leave here. */
 export function exportHostSnapshot(store: Store, runId: string) {
