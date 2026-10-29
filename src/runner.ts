@@ -2,9 +2,10 @@ import { RoleAllowanceLimit } from './role-allowance.js';
 import { walkToKeyboardTarget } from './keyboard-target.js';
 import { publicEntryLimit, PUBLIC_TRAFFIC_CHALLENGE } from './public-target.js';
 import { z } from 'zod';
+import { isDeepStrictEqual } from 'node:util';
 import { BrowserWalk, MeasurementStateChanged, ActionStateChanged } from './browser.js';
 import { VoiceOverProbe } from './voiceover.js';
-import { Store } from './store.js';
+import { Store, digest, recordIsIntact } from './store.js';
 import {
   MetaModels,
   IncompleteModelResult,
@@ -13,7 +14,15 @@ import {
   reviewSchema,
   type Action,
 } from './models.js';
-import type { RecordEntry, Run } from './types.js';
+import { LIMITS, type Approval, type RecordEntry, type Run } from './types.js';
+import {
+  ORDERED_JOURNEY_VERSION,
+  approvedJourneyPlanSchema,
+  journeyPlanSchema,
+  readOrderedJourney,
+  currentJourneyInstruction,
+  completeJourneyInstruction,
+} from './journey-steps.js';
 import { approval, safeError } from './config.js';
 import { mapElement } from './segmentation.js';
 import { EvidenceRequestLimit, requestEvidence } from './request-evidence.js';
@@ -91,6 +100,7 @@ export class Runner {
   constructor(
     public store: Store,
     public origin: string,
+    private getApproval: () => Approval = approval,
   ) {}
   async start(options: {
     mode: 'offline' | 'live';
@@ -104,17 +114,50 @@ export class Runner {
     publicWebsite?: boolean;
     steps?: import('./public-target.js').PublicTarget['steps'];
     requestTargetHash?: string;
+    prepared?: { run: Run; proposalId: string; proposalHash: string };
   }) {
     if (this.active) throw Error('Another run is using the browser.');
-    if (options.mode === 'live') approval();
+    if (options.mode === 'live') this.getApproval();
     const url = options.url ?? this.origin + '/shop/?case=broken';
-    const run = this.store.create(
-      options.goal ??
-        'Add the canvas bag to the basket and review the form, stopping before any order.',
-      url,
-      options.mode,
-      options.requestId,
-    );
+    let proposal: RecordEntry | undefined;
+    let approvedSteps = options.steps;
+    if (options.prepared) {
+      const saved = this.store.run(options.prepared.run.id);
+      const original = this.store.record(saved.id, options.prepared.proposalId);
+      if (
+        options.mode !== 'live' ||
+        saved.mode !== 'live' ||
+        saved.state !== 'running' ||
+        !saved.startedAt ||
+        !Number.isFinite(Date.parse(saved.startedAt)) ||
+        !isDeepStrictEqual(saved, options.prepared.run) ||
+        !options.requestId ||
+        this.store.hostStart(options.requestId) !== saved.id ||
+        (options.url !== undefined && options.url !== saved.url) ||
+        (options.goal !== undefined && options.goal !== saved.goal) ||
+        !original ||
+        original.kind !== 'plan' ||
+        !recordIsIntact(original) ||
+        original.hash !== options.prepared.proposalHash ||
+        original.payload.proposalVersion !== 'journey-proposal/1' ||
+        readOrderedJourney(this.store.records(saved.id))
+      )
+        throw Error('Start requires the exact activated run and its unchanged prepared proposal.');
+      journeyPlanSchema.parse({ steps: original.payload.steps });
+      approvedSteps = approvedJourneyPlanSchema.parse({
+        steps: options.steps ?? original.payload.steps,
+      }).steps;
+      proposal = original;
+    }
+    const run = options.prepared
+      ? this.store.run(options.prepared.run.id)
+      : this.store.create(
+          options.goal ??
+            'Add the canvas bag to the basket and review the form, stopping before any order.',
+          url,
+          options.mode,
+          options.requestId,
+        );
     const walk = new BrowserWalk(
       this.store,
       run.id,
@@ -133,8 +176,10 @@ export class Runner {
       controller,
       options.voiceOver !== false,
       options.manualCheckpoints === true,
-      options.steps,
+      approvedSteps,
       options.requestTargetHash,
+      proposal,
+      options.requestId,
     )
       .catch((e) => {
         this.store.append(run.id, 'limit', 'runner', { cleanup: safeError(e) });
@@ -183,32 +228,52 @@ export class Runner {
     manualCheckpoints: boolean,
     steps?: import('./public-target.js').PublicTarget['steps'],
     requestTargetHash?: string,
+    proposal?: RecordEntry,
+    startRequestId?: string,
   ) {
     try {
-      this.store.append(run.id, 'plan', 'driver', {
-        goal: run.goal,
-        ...(steps ? { steps, requestTargetHash } : {}),
-        mode: run.mode,
-        model:
-          run.mode === 'offline' ? 'Saved offline examples; no AI inference' : 'muse-spark-1.3',
-        stopBoundary: 'No orders, payments, account creation or bookings.',
-        ...(walk.publicWebsite
-          ? {
-              typingBoundary:
-                'Only short search terms in identified search fields. Do not enter patient, personal, account or payment details. Stop at that boundary and report the actual limitation.',
-            }
-          : {}),
-        criteriaVersion: CRITERIA_VERSION,
-        focusedChecks: {
-          maximum: 2,
-          reservedForVoiceOver: withVoiceOver ? 2 : 0,
-          extraModelRequests: 0,
+      this.store.append(
+        run.id,
+        'plan',
+        'driver',
+        {
+          goal: run.goal,
+          ...(steps ? { steps, requestTargetHash } : {}),
+          ...(proposal
+            ? {
+                executionVersion: ORDERED_JOURNEY_VERSION,
+                proposalId: proposal.id,
+                proposalHash: proposal.hash,
+                startRequestId,
+                stepsOrigin:
+                  digest(JSON.stringify(steps)) === digest(JSON.stringify(proposal.payload.steps))
+                    ? 'generated-proposal'
+                    : 'owner-edited-approved-plan',
+              }
+            : {}),
+          mode: run.mode,
+          model:
+            run.mode === 'offline' ? 'Saved offline examples; no AI inference' : 'muse-spark-1.3',
+          stopBoundary: 'No orders, payments, account creation or bookings.',
+          ...(walk.publicWebsite
+            ? {
+                typingBoundary:
+                  'Only short search terms in identified search fields. Do not enter patient, personal, account or payment details. Stop at that boundary and report the actual limitation.',
+              }
+            : {}),
+          criteriaVersion: CRITERIA_VERSION,
+          focusedChecks: {
+            maximum: 2,
+            reservedForVoiceOver: withVoiceOver ? 2 : 0,
+            extraModelRequests: 0,
+          },
+          keyboardPattern:
+            walk.engine === 'webkit'
+              ? 'Mac WebKit Option-Tab includes links; Tab/Shift+Tab requests are performed as Alt+Tab/Alt+Shift+Tab and both requested and actual keys are recorded.'
+              : 'Chromium Tab/Shift+Tab; requested and actual keys are recorded.',
         },
-        keyboardPattern:
-          walk.engine === 'webkit'
-            ? 'Mac WebKit Option-Tab includes links; Tab/Shift+Tab requests are performed as Alt+Tab/Alt+Shift+Tab and both requested and actual keys are recorded.'
-            : 'Chromium Tab/Shift+Tab; requested and actual keys are recorded.',
-      });
+        proposal ? [proposal.id] : [],
+      );
       let current = await walk.start(run.url);
       if (this.stopForDeniedPage(run, walk, current, true)) return;
       if (run.mode === 'live' && current.payload.stable !== true)
@@ -463,10 +528,20 @@ export class Runner {
     let unchangedTraversal = 0;
     let decisionAllowanceSpent = true;
     let finalReviewSafe = true;
+    const remainingDecisions = Math.max(
+      0,
+      LIMITS.driver -
+        this.store.usage(run.id).requests.filter((request) => request.role === 'driver').length,
+    );
     try {
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < remainingDecisions; i++) {
         walk.assertActive();
         if (this.stopForDeniedPage(run, walk, current)) return;
+        const journey = readOrderedJourney(this.store.records(run.id));
+        if (journey && !currentJourneyInstruction(journey).currentStep) {
+          decisionAllowanceSpent = false;
+          break;
+        }
         const snap = requestEvidence(this.store, run.id, 'driver', current);
         const action = await models.reason(
           run.id,
@@ -490,8 +565,73 @@ export class Runner {
           [current.id],
         );
         if (action.kind === 'finish') {
+          if (journey && currentJourneyInstruction(journey).currentStep)
+            this.store.append(
+              run.id,
+              'limit',
+              'driver',
+              {
+                method: 'unfinished_journey',
+                reason:
+                  'The navigator stopped before every approved instruction was completed. Remaining instructions and untested criteria stay unknown.',
+                pendingStepId: journey.steps[journey.currentIndex]!.id,
+              },
+              [journey.planId, current.id],
+            );
           decisionAllowanceSpent = false;
           break;
+        }
+        if (action.kind === 'step_done') {
+          const instruction = journey && currentJourneyInstruction(journey).currentStep;
+          if (!instruction || action.stepId !== instruction.id || action.captureId !== current.id) {
+            this.store.append(
+              run.id,
+              'limit',
+              'driver',
+              {
+                method: 'step_completion_refused',
+                reason:
+                  'The requested completion does not match the current instruction and its current original. No instruction was advanced and no input was sent.',
+              },
+              [current.id],
+            );
+            continue;
+          }
+          try {
+            await walk.verifyOriginalCapture(current);
+          } catch (error) {
+            if (!(error instanceof ActionStateChanged)) throw error;
+            this.store.append(
+              run.id,
+              'limit',
+              'driver',
+              {
+                method: 'step_completion_refused',
+                reason:
+                  'The screen changed before instruction completion could be checked. No instruction was advanced and no input was sent.',
+              },
+              [current.id],
+            );
+            current = await walk.captureSettled();
+            continue;
+          }
+          completeJourneyInstruction(
+            this.store,
+            run.id,
+            action.stepId!,
+            action.captureId!,
+            current,
+          );
+          unchangedTraversal = 0;
+          const updated = readOrderedJourney(this.store.records(run.id))!;
+          current = (await this.automaticMeasurement(run, walk, current, signal)).current;
+          if (this.stopForDeniedPage(run, walk, current)) return;
+          if (!currentJourneyInstruction(updated).currentStep) {
+            decisionAllowanceSpent = false;
+            break;
+          }
+          current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
+          continue;
         }
         if (action.kind === 'focus_target') {
           try {
@@ -622,7 +762,7 @@ export class Runner {
           }
         }
         if (this.stopForDeniedPage(run, walk, current)) return;
-        if (i % 3 === 2) {
+        if (!journey && i % 3 === 2) {
           current = (await this.automaticMeasurement(run, walk, current, signal)).current;
           if (this.stopForDeniedPage(run, walk, current)) return;
           current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
@@ -635,8 +775,9 @@ export class Runner {
           'limit',
           'driver',
           {
-            reason:
-              'The robot used its twenty navigation decisions and stopped. This limit does not establish a website defect.',
+            reason: readOrderedJourney(this.store.records(run.id))
+              ? 'The robot used its remaining navigation decisions and stopped. Planning and navigation share at most twenty driver requests; this limit does not establish a website defect.'
+              : 'The robot used its twenty navigation decisions and stopped. This limit does not establish a website defect.',
           },
           [current.id],
         );

@@ -13,6 +13,7 @@ import { hostRequest } from './host.js';
 import { sessionLock } from '../src/lock.js';
 import { assessmentForRun } from '../src/assessment.js';
 import { controlledHostMode } from './controlled-live.js';
+import { JourneyPlanner } from '../src/journey-planner.js';
 export const visibleKinds = new Set([
   'plan',
   'action',
@@ -48,6 +49,7 @@ export async function startServer(
   let origin = `http://127.0.0.1:${port}`;
   const runner = new Runner(store, origin),
     token = randomBytes(24).toString('hex');
+  const planner = new JourneyPlanner(store, undefined, () => !!runner.active);
   if (frontend && !existsSync('dist/client/index.html')) {
     release();
     store.close();
@@ -79,6 +81,7 @@ export async function startServer(
           json,
           mode: hostMode,
           publicWebsites: options.publicWebsites === true,
+          planner,
         });
       if (url.pathname.startsWith('/shop')) {
         res.writeHead(200, {
@@ -230,6 +233,7 @@ export async function startServer(
     origin,
     token,
     close: async () => {
+      await planner.close();
       if (runner.active) await runner.stop(runner.active.run.id);
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
