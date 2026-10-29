@@ -364,3 +364,43 @@ test('Failed record deletion preserves originals and pending file cleanup can be
     x.close();
   }
 });
+
+test('Legacy saved captures gain no invented state receipts or record hashes on reopen', () => {
+  const x = sample();
+  try {
+    const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+    const legacy = structuredClone(first);
+    for (const capture of legacy.captures) {
+      delete capture.recordHash;
+      delete capture.screenState;
+    }
+    const reopened = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.deepEqual(reopened.captures, legacy.captures);
+    assert.equal(reopened.captures[0]!.recordHash, undefined);
+    assert.equal(reopened.captures[0]!.screenState, undefined);
+    assert.deepEqual(applyHostSnapshot(legacy, reopened).captures, legacy.captures);
+    x.store.append(x.run.id, 'capture', 'browser', {
+      ...x.capture.payload,
+      screenState: {
+        version: 'meaningful-screen/1',
+        purpose: 'screen',
+        fingerprint: 'f'.repeat(64),
+      },
+    });
+    const mixed = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.deepEqual(mixed.captures[0], legacy.captures[0]);
+    assert.equal(mixed.captures[1]!.screenState?.purpose, 'screen');
+    assert.deepEqual(applyHostSnapshot(legacy, mixed).captures[0], legacy.captures[0]);
+    const forged = structuredClone(reopened);
+    forged.sequence++;
+    forged.captures[0]!.recordHash = 'a'.repeat(64);
+    forged.captures[0]!.screenState = {
+      version: 'meaningful-screen/1',
+      purpose: 'screen',
+      fingerprint: 'f'.repeat(64),
+    };
+    assert.throws(() => applyHostSnapshot(legacy, forged), /cannot be changed/);
+  } finally {
+    x.close();
+  }
+});

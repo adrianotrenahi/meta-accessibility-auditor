@@ -15,6 +15,7 @@ export async function installPointerState(context: BrowserContext, key: string) 
     let sequence = 0;
     let nextObject = 0;
     const objectIds = new WeakMap<object, number>();
+    const unfocusedPaint = new WeakMap<object, readonly string[]>();
     window.addEventListener(
       'pointerover',
       () => {
@@ -33,8 +34,13 @@ export async function installPointerState(context: BrowserContext, key: string) 
       enumerable: false,
       configurable: false,
       writable: false,
-      value: Object.freeze((object?: object) => {
+      value: Object.freeze((object?: object, paint?: readonly string[] | null) => {
         if (object === undefined) return sequence;
+        if (paint === null) return unfocusedPaint.get(object) ?? null;
+        if (paint !== undefined) {
+          unfocusedPaint.set(object, paint);
+          return paint;
+        }
         let id = objectIds.get(object);
         if (id === undefined) {
           id = ++nextObject;
@@ -135,6 +141,19 @@ export async function renderedScreenShape(page: Page, pointerKey: string) {
             }
           : null;
       if (image && (!image.complete || /\.gif(?:[?#]|$)/i.test(image.source))) complete = false;
+      const control = element.closest(
+        'button,a[href],input,textarea,select,[role=button],[role=link],[tabindex]',
+      );
+      const focusedControl =
+        control && (control === document.activeElement || control.contains(document.activeElement));
+      const actualPaint = [style.color, style.backgroundColor, style.boxShadow];
+      // Only the active control's decoration may use its own previously observed
+      // unfocused paint. Every other control retains its actual current paint.
+      const paint =
+        control && typeof reader === 'function'
+          ? reader(element, focusedControl ? null : actualPaint)
+          : actualPaint;
+      if (!paint) complete = false;
       return [
         {
           tag: element.tagName,
@@ -153,13 +172,7 @@ export async function renderedScreenShape(page: Page, pointerKey: string) {
           transform: style.transform,
           content: style.content,
           backgroundImage: style.backgroundImage,
-          // A control's focus colour/shadow is recorded in focus facts. Paint
-          // changes elsewhere and actual hover identity remain meaningful.
-          paint: element.closest(
-            'button,a[href],input,textarea,select,[role=button],[role=link],[tabindex]',
-          )
-            ? null
-            : [style.color, style.backgroundColor, style.boxShadow],
+          paint,
           font: [style.fontFamily, style.fontSize, style.fontWeight, style.lineHeight],
           image,
         },
@@ -167,18 +180,30 @@ export async function renderedScreenShape(page: Page, pointerKey: string) {
     });
     if (document.getAnimations().some((animation) => animation.playState === 'running'))
       complete = false;
-    return { complete, text: (body as HTMLElement).innerText, visible, styles };
+    const activeStyle =
+      document.activeElement instanceof Element ? getComputedStyle(document.activeElement) : null;
+    const focusAppearance = activeStyle
+      ? {
+          color: activeStyle.color,
+          backgroundColor: activeStyle.backgroundColor,
+          boxShadow: activeStyle.boxShadow,
+        }
+      : null;
+    return { complete, text: (body as HTMLElement).innerText, visible, styles, focusAppearance };
   }, pointerKey);
+  const { focusAppearance, ...rendered } = value;
   return {
     complete: value.complete && Number.isSafeInteger(pointerEpoch),
-    fingerprint: digest(JSON.stringify({ ...value, pointerEpoch })),
+    fingerprint: digest(JSON.stringify({ ...rendered, pointerEpoch })),
+    focusAppearance,
   };
 }
 
 export function meaningfulScreenFingerprint(state: any): string | undefined {
   if (state.screenShape?.complete !== true) return;
-  const { focus: _focus, ...screen } = state;
-  return digest(JSON.stringify(screen));
+  const { focus: _focus, screenShape: shape, ...screen } = state;
+  const { focusAppearance: _appearance, ...screenShape } = shape;
+  return digest(JSON.stringify({ ...screen, screenShape }));
 }
 
 export function exportScreenState(record: RecordEntry, originals: readonly RecordEntry[]) {

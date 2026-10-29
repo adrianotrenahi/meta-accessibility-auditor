@@ -39,6 +39,7 @@ import {
   ReturnEvidence,
 } from './journey-evidence.js';
 export class Runner {
+  private readonly targetJourneyContexts = new WeakMap<BrowserWalk, Map<string, RecordEntry>>();
   active?: { run: Run; walk: BrowserWalk; probe: VoiceOverProbe; controller: AbortController };
   completion?: Promise<void>;
   private waiting?: { runId: string; release: () => void };
@@ -689,7 +690,39 @@ export class Runner {
     const focusMovement =
       action.kind === 'press' &&
       ['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.key ?? '');
-    if (focusMovement) {
+    let contexts = this.targetJourneyContexts.get(walk);
+    if (!contexts) {
+      contexts = new Map();
+      this.targetJourneyContexts.set(walk, contexts);
+    }
+    const readContext = async (source: RecordEntry) => {
+      try {
+        const context = await readJourneyContext(walk, source);
+        contexts!.set(source.id, context);
+        return context;
+      } catch (error) {
+        this.store.append(
+          run.id,
+          'limit',
+          'runner',
+          {
+            reason:
+              'Journey context was unavailable; no price, choice or return result is inferred.',
+            detail: safeError(error),
+          },
+          [source.id],
+        );
+      }
+    };
+    let beforeContext =
+      before.kind === 'capture'
+        ? await readContext(before)
+        : contexts.get(before.payload.sourceCaptureId);
+    const simplePage =
+      beforeContext?.payload.stable === true &&
+      beforeContext.payload.data?.commerce === null &&
+      beforeContext.payload.data?.choices?.length === 0;
+    if (focusMovement && simplePage) {
       try {
         const performed = await walk.act(action, before, expectedTarget);
         return { current: await walk.observeKeyboardMovement(before, performed), performed };
@@ -698,22 +731,11 @@ export class Runner {
         return { current: await walk.captureSettled() };
       }
     }
-    // Lightweight focus facts never stand in for a fresh activation image.
-    if (before.kind !== 'capture') before = await walk.captureSettled();
-    let beforeContext: RecordEntry | undefined;
-    try {
-      beforeContext = await readJourneyContext(walk, before);
-    } catch (error) {
-      this.store.append(
-        run.id,
-        'limit',
-        'runner',
-        {
-          reason: 'Journey context was unavailable; no price, choice or return result is inferred.',
-          detail: safeError(error),
-        },
-        [before.id],
-      );
+    // Declared commerce/choices and unknown context keep their strict original
+    // before/action/after comparison. Lightweight facts never replace those images.
+    if (before.kind !== 'capture') {
+      before = await walk.captureSettled();
+      beforeContext = await readContext(before);
     }
     let performed: RecordEntry;
     try {

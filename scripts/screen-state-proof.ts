@@ -71,7 +71,8 @@ try {
     .locator('dialog')
     .evaluate((element) => (element as HTMLDialogElement).showModal());
   const dialog = await walk.captureSettled();
-  assert.equal(dialog.payload.screenState.purpose, 'screen');
+  assert.notEqual(dialog.id, focus.id);
+  assert.notEqual(dialog.payload.screenState?.purpose, 'same-state-evidence');
   const read = app.store.snapshot(run.id, 'reviewer');
   app.store.append(
     run.id,

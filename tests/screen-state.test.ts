@@ -308,6 +308,61 @@ for (const engine of ['chromium', 'webkit'] as const) {
     });
   }
 
+  test(`${engine}: lightweight focus decoration records its actual current paint separately`, async () => {
+    const x = await setup(
+      engine,
+      '<style>button{background:white;color:black;box-shadow:none}button:focus{background:rgb(255,0,0);box-shadow:0 0 0 3px blue}</style><button>First</button><button id="target">Target</button>',
+    );
+    try {
+      const next = await x.step(x.current, { kind: 'press', key: 'Tab', note: 'Actual Tab' });
+      assert.equal(next.current.kind, 'observation');
+      assert.equal(next.current.payload.focusAppearance.backgroundColor, 'rgb(255, 0, 0)');
+      assert(next.current.payload.focusAppearance.boxShadow.includes('rgb(0, 0, 255)'));
+      assert.equal(next.current.payload.sourceImageHash, x.current.payload.imageHash);
+      assert.equal(x.pictures(), 0);
+    } finally {
+      await x.close();
+    }
+  });
+  test(`${engine}: focus changing another control's paint takes a full original`, async () => {
+    const x = await setup(
+      engine,
+      '<style>#first:focus ~ #target {background:red;box-shadow:0 0 0 3px blue}</style><button id="first">First</button><button id="target">Target</button>',
+    );
+    try {
+      const next = await x.step(x.current, { kind: 'press', key: 'Tab', note: 'Actual Tab' });
+      assert.equal(next.current.kind, 'capture');
+      assert(x.pictures() >= 1);
+      assert.notEqual(next.current.payload.screenState?.purpose, 'same-state-evidence');
+    } finally {
+      await x.close();
+    }
+  });
+  test(`${engine}: a Tab-triggered declared total retains the strict original journey comparison`, async () => {
+    const bundle =
+      '<section itemscope itemtype="https://schema.org/Offer"><span id="price" itemprop="price">24</span><meta itemprop="priceCurrency" content="EUR"><div itemprop="includesObject" itemscope itemtype="https://schema.org/TypeAndQuantityNode"><meta itemprop="amountOfThisGood" content="1"><div itemprop="typeOfGood" itemscope itemtype="https://schema.org/Product"><meta itemprop="sku" content="bag"></div></div></section>';
+    const x = await setup(
+      engine,
+      bundle +
+        '<button onfocus="document.querySelector(\'#price\').textContent=\'48\'">First</button><button id="target">Target</button>',
+    );
+    try {
+      const next = await x.step(x.current, { kind: 'press', key: 'Tab', note: 'Actual Tab' });
+      assert.equal(next.current.kind, 'capture');
+      const comparison = x.app.store
+        .records(x.run.id)
+        .find((record) => record.payload.method === 'comparable_totals');
+      assert(comparison);
+      assert.equal(comparison.payload.comparable, true);
+      assert.equal(comparison.payload.beforeTotal, 24);
+      assert.equal(comparison.payload.afterTotal, 48);
+      assert.equal(comparison.payload.beforeCaptureId, x.current.id);
+      assert.equal(comparison.payload.actionId, next.performed!.id);
+      assert.equal(x.app.store.usage().requests.length, 0);
+    } finally {
+      await x.close();
+    }
+  });
   test(`${engine}: a recorded hover is a new meaningful state even on the same URL`, async () => {
     const x = await setup(
       engine,

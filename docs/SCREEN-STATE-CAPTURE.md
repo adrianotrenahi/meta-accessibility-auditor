@@ -9,14 +9,18 @@ page is unchanged. A lightweight observation explicitly says that its linked
 image is an earlier page original, not a picture of the newly recorded focus.
 It can authorize only another Tab movement. Activation, a new model decision and
 analysis still require a fresh full original under the existing input/image guards.
+Declared bundle prices, choice states or unknown journey context keep the ordinary
+original before/action/after comparison, including its strict C11 evidence.
 
 The optional `meaningful-screen/1` receipt identifies a complete bounded rendered
 state separately from its necessary full evidence pictures. Its signature keeps
 URL, document, accessible content, visible DOM attributes/values, text, layout,
 scroll, images, hover and displayed help strict. Bounded stylesheet rules and
 native stylesheet identities also guard rule edits and opaque-sheet replacement;
-incomplete rules or font loading disable reuse. Control focus decoration is
-recorded as facts, not a new screen. Changing content, a modal, menu, viewport,
+incomplete rules or font loading disable reuse. Only the active control and its descendants may use their own previously
+observed unfocused paint as decoration. Unknown baselines disable reuse; changed
+paint on every other control remains meaningful. The lightweight observation separately records the actual active colour,
+background and shadow; its linked older image is not a photograph of that focus. Changing content, a modal, menu, viewport,
 hover, or a changed/unknown rendered signature takes the ordinary image path.
 Animated, embedded or shadow/custom-element surfaces, incomplete image loading and more than 2,500 DOM
 nodes conservatively disable reuse. This is not a pixel-equality promise.

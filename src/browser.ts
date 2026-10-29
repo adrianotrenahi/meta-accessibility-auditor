@@ -533,9 +533,10 @@ export class BrowserWalk {
     )
       return this.captureSettled();
     const after = await readPage(this.page, () => this.observedState());
+    const afterShape = await this.meaningfulObservation(after);
     if (
       digest(JSON.stringify(state)) !== digest(JSON.stringify(after)) ||
-      meaningfulScreenFingerprint(await this.meaningfulObservation(after)) !== fingerprint
+      meaningfulScreenFingerprint(afterShape) !== fingerprint
     )
       return this.captureSettled();
     const originalId = source.kind === 'capture' ? source.id : source.payload.sourceCaptureId;
@@ -557,6 +558,7 @@ export class BrowserWalk {
         url: after.url,
         aria: after.aria,
         focus: after.focus,
+        focusAppearance: afterShape.screenShape.focusAppearance,
         focusHelp: after.focusHelp,
         stateStamp: digest(JSON.stringify(after)),
         screenStateFingerprint: fingerprint,
