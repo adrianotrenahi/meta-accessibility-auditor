@@ -1,5 +1,6 @@
 import { RoleAllowanceLimit } from './role-allowance.js';
 import { walkToKeyboardTarget } from './keyboard-target.js';
+import { disposeKeyboardCycles } from './keyboard-cycle-memory.js';
 import { publicEntryLimit, PUBLIC_TRAFFIC_CHALLENGE } from './public-target.js';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
@@ -202,7 +203,7 @@ export class Runner {
     this.store.finish(id, 'stopped', 'Stopped by the owner.');
     active.controller.abort();
     await active.probe.cleanup();
-    await active.walk.close();
+    await Promise.all([disposeKeyboardCycles(active.walk), active.walk.close()]);
     await completion;
   }
   private stopForDeniedPage(run: Run, walk: BrowserWalk, current: RecordEntry, initial = false) {
@@ -349,7 +350,7 @@ export class Runner {
           await probe.cleanup();
         } finally {
           try {
-            await walk.close();
+            await Promise.all([disposeKeyboardCycles(walk), walk.close()]);
           } finally {
             this.focusedBudgets.delete(run.id);
           }
