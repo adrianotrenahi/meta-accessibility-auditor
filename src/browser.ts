@@ -4,7 +4,9 @@ import AxeBuilder from '@axe-core/playwright';
 import { Store, digest, recordIsIntact } from './store.js';
 import { LIMITS, type Capture, type RecordEntry } from './types.js';
 import type { Action } from './models.js';
-import { permittedUrl } from './network.js';
+import { permittedUrl, isPublicAddress } from './network.js';
+import { isIP } from 'node:net';
+import { BrowserWindows } from './browser-windows.js';
 import { randomUUID } from 'node:crypto';
 import { LiveFrames } from './live-frame.js';
 import { documentWasReplaced, readPage } from './page-observation.js';
@@ -95,6 +97,7 @@ export class BrowserWalk {
   private launching?: Promise<Browser>;
   private closingRequested = false;
   private publicProxy?: Awaited<ReturnType<typeof publicBrowserProxy>>;
+  private windows?: BrowserWindows;
   page!: Page;
   actions = 0;
   started = Date.now();
@@ -180,15 +183,63 @@ export class BrowserWalk {
             controlledOrigin,
             route.request().isNavigationRequest() ? approved.origin : undefined,
           );
+        if (this.windows && !(await this.windows.allows(route.request())))
+          throw Error('This window has no expected navigation from the current page.');
         await route.continue();
       } catch {
         await route.abort('blockedbyclient');
       }
     });
     this.page = await context.newPage();
-    this.page.setDefaultTimeout(8000);
-    this.page.on('dialog', (dialog) => void dialog.dismiss());
-    this.page.on('popup', (popup) => void popup.close());
+    this.windows = new BrowserWindows({
+      context,
+      current: () => this.page,
+      active: () => this.assertActive(),
+      permitted: async (raw) => {
+        const url = new URL(raw);
+        const host = url.hostname.replace(/^\[|\]$/g, '');
+        if (
+          !['http:', 'https:'].includes(url.protocol) ||
+          url.username ||
+          url.password ||
+          (this.publicWebsite && isIP(host) && !isPublicAddress(host)) ||
+          (!this.publicWebsite && ![controlledOrigin, approved.origin].includes(url.origin))
+        )
+          throw Error('The new-window destination is outside the public website boundary.');
+        // The original context route and pinned public proxy still authorize
+        // the actual request. Window selection adds no DNS or network path.
+        return url;
+      },
+      adopted: (page) => {
+        this.page = page;
+        this.lastOriginal = undefined;
+      },
+      record: (outcome, reason, sourceCaptureId) => {
+        if (
+          this.closingRequested ||
+          !this.store.hasRun(this.runId) ||
+          this.store.run(this.runId).state !== 'running'
+        )
+          return;
+        const sources =
+          sourceCaptureId && this.store.record(this.runId, sourceCaptureId)
+            ? [sourceCaptureId]
+            : [];
+        this.store.append(
+          this.runId,
+          outcome === 'adopted' ? 'navigator_note' : 'limit',
+          'browser',
+          {
+            method: 'browser_window',
+            outcome,
+            reason,
+            ...(outcome === 'adopted' ? { kind: 'progress', text: reason } : {}),
+            sourceCaptureId: sourceCaptureId ?? null,
+          },
+          sources,
+        );
+      },
+    });
     this.count();
     await this.page.goto(approved.href, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await this.page.bringToFront();
@@ -681,8 +732,32 @@ export class BrowserWalk {
         throw new ActionStateChanged(
           'The original target changed before activation; no activation was sent.',
         );
-      this.count();
-      await this.page.keyboard.press(action.key === 'Space' ? 'Space' : action.key);
+      const preparedWindow =
+        before.tag === 'a' && before.href && ['Enter', 'Space'].includes(action.key)
+          ? await this.windows?.prepare(this.page, action.key, source.id)
+          : undefined;
+      try {
+        if (preparedWindow) {
+          await this.verifyOriginalCapture(source);
+          if (
+            !(await preparedWindow.stillFocused()) ||
+            (expectedTarget && !(await expectedTarget()))
+          )
+            throw new ActionStateChanged(
+              'The original new-window control changed; no activation was sent.',
+            );
+        }
+        this.count();
+        const pendingWindow = preparedWindow?.arm();
+        try {
+          await this.page.keyboard.press(action.key === 'Space' ? 'Space' : action.key);
+          await pendingWindow?.wait();
+        } finally {
+          pendingWindow?.cancel();
+        }
+      } finally {
+        await preparedWindow?.dispose().catch(() => {});
+      }
     } else if (action.kind === 'type') {
       if (before.type === 'password' || before.type === 'file')
         throw Error('Passwords and file inputs are outside this demo.');
@@ -833,6 +908,7 @@ export class BrowserWalk {
     this.frames.close();
     if (!this.closing)
       this.closing = (async () => {
+        await this.windows?.close();
         const browser = this.browser ?? (await this.launching?.catch(() => undefined));
         try {
           await browser?.close();
