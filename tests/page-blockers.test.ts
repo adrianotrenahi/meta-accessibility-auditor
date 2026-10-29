@@ -235,3 +235,19 @@ test('At arrival, a popup that ignores Escape is closed by its bare × button', 
     assert.equal(notes.at(-1).cleared, true);
   });
 });
+
+test('A visible search form after many hidden menu links is still listed for the navigator', async () => {
+  await withWalk(async (walk) => {
+    const hidden = Array.from({ length: 80 }, (_, i) => `<a href="#m${i}">Menu ${i}</a>`).join('');
+    await walk.page.setContent(
+      `<html lang="en"><body><nav style="display:none">${hidden}</nav><h1>Search. Book. Travel.</h1>` +
+        '<label>Where from?<input type="text"></label><button>Search Flights</button></body></html>',
+    );
+    const capture = await walk.captureSettled();
+    const names = capture.payload.elements.map((element: any) => element.name);
+    assert(names.includes('Where from?'), JSON.stringify(names));
+    assert(names.includes('Search Flights'));
+    const field = capture.payload.elements.find((element: any) => element.name === 'Where from?');
+    assert.equal(field.id, 'e80', 'The id keeps the control position on the page.');
+  });
+});

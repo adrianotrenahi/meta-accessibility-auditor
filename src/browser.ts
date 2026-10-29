@@ -167,6 +167,12 @@ export class BrowserWalk {
     });
     await installControlIdentity(context, this.controlIdentityKey);
     await installPointerState(context, this.pointerStateKey);
+    // WebKit can report one document's timeOrigin 1 ms apart on later reads, which
+    // looked like a new document. Read it once per document and keep that value.
+    await context.addInitScript(() => {
+      const origin = performance.timeOrigin;
+      Object.defineProperty(performance, 'timeOrigin', { value: origin, configurable: false });
+    });
     await context.route('**/*', async (route) => {
       try {
         const u = new URL(route.request().url());
@@ -339,8 +345,23 @@ export class BrowserWalk {
     });
     const elements = [];
     const locators = this.page.locator(controls);
-    const count = Math.min(await locators.count(), 60);
-    for (let i = 0; i < count; i++) {
+    // Real sites put many hidden menu links before their search form. Choose the
+    // first 60 visible controls, those on screen first; ids keep the page position.
+    const listed = await locators.evaluateAll((targets) => {
+      const onScreen: number[] = [];
+      const offScreen: number[] = [];
+      targets.forEach((target, index) => {
+        const box = target.getBoundingClientRect();
+        const style = getComputedStyle(target);
+        if (!box.width || !box.height || style.visibility === 'hidden' || style.display === 'none')
+          return;
+        const shown =
+          box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth;
+        (shown ? onScreen : offScreen).push(index);
+      });
+      return [...onScreen, ...offScreen].slice(0, 60).sort((a, b) => a - b);
+    });
+    for (const i of listed) {
       const locator = locators.nth(i);
       if (!(await locator.isVisible().catch(() => false))) continue;
       const box = await locator.boundingBox();
