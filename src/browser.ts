@@ -23,7 +23,7 @@ import {
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
 export const isCommitment = (name: string) =>
-  /\b(place|confirm|submit|complete)\s+(?:my\s+|your\s+|the\s+)?(order|purchase|booking|reservation)|\b(pay|subscribe|sign\s*up|register|sign\s*in|log\s*in|buy\s*now)\b|\b(confirmar|finalizar|completar|reservar)\s+(?:(?:la|mi|tu|el|su|una)\s+)?(?:cita|reserva|pedido|compra)\b|\b(pagar|registrarse|iniciar sesi[oó]n|crear cuenta)\b/i.test(
+  /\b(place|confirm|submit|complete)\s+(?:my\s+|your\s+|the\s+)?(order|purchase|booking|reservation)|\b(pay|subscribe|sign\s*up|register|sign\s*in|log\s*in|(?:buy|book)\s*now)\b|\b(confirmar|finalizar|completar|reservar)\s+(?:(?:la|mi|tu|el|su|una)\s+)?(?:cita|reserva|pedido|compra)\b|\b(pagar|registrarse|iniciar sesi[oó]n|crear cuenta)\b/i.test(
     name,
   );
 /** An intact original no longer describes the page; this is an observation limit. */
