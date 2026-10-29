@@ -9,6 +9,7 @@ import {
 } from './evidence-checks.js';
 import { safeError } from './config.js';
 import type { RecordEntry } from './types.js';
+import type { ElementHandle } from 'playwright';
 
 /** Shares the same two slots between native checks and missing-fact requests. */
 export async function performFocusedCheck(
@@ -79,19 +80,39 @@ export async function performFocusedCheck(
     [source.id],
   );
   let result: RecordEntry | undefined;
+  let focusedTarget: ElementHandle | null | undefined;
   try {
     if (signal.aborted) throw Error('The run stopped before the focused input.');
     if (request.method === 'measurement') result = await walk.measurements(current);
     else if (request.method === 'voiceover') result = await probe!.check(current);
-    else
+    else {
+      let expectedTarget: (() => Promise<boolean>) | undefined;
+      if (request.method === 'keyboard_activation') {
+        const active = await walk.page.evaluateHandle(() => document.activeElement);
+        focusedTarget = active.asElement();
+        if (!focusedTarget) {
+          await active.dispose();
+          throw Error('The named focused control is no longer available; no activation was sent.');
+        }
+        const target = focusedTarget;
+        expectedTarget = () =>
+          target
+            .evaluate((element) => element.isConnected && document.activeElement === element)
+            .catch(() => false);
+      }
       result = await walk.act(
         {
           kind: 'press',
-          key: 'Tab',
-          note: 'One bounded keyboard-focus observation requested by the analyst; this does not establish activation or journey success.',
+          key: request.method === 'keyboard_activation' ? request.activationKey! : 'Tab',
+          note:
+            request.method === 'keyboard_activation'
+              ? 'One explicitly requested key on the named, already focused control; its outcome remains to be observed.'
+              : 'One bounded keyboard-focus observation requested by the analyst; this does not establish activation or journey success.',
         },
         current,
+        expectedTarget,
       );
+    }
     // Save the tested state before any navigation/restoration. A failed read never repeats input.
     const after = await walk.capture();
     const observed =
@@ -131,5 +152,7 @@ export async function performFocusedCheck(
     );
     if (signal.aborted) throw error;
     return current;
+  } finally {
+    await focusedTarget?.dispose().catch(() => {});
   }
 }
