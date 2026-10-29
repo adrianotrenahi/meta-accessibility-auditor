@@ -14,6 +14,12 @@ import { collectBrowserFacts, summarizeAxe } from './evidence-checks.js';
 import { installControlIdentity } from './control-identity.js';
 import { publicBrowserProxy } from './public-network.js';
 import { readRecordedFocusHelp, type RecordedFocusHelp } from './focus-help.js';
+import {
+  meaningfulScreenFingerprint,
+  renderedScreenShape,
+  installPointerState,
+  type ScreenState,
+} from './screen-state.js';
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
 export const isCommitment = (name: string) =>
@@ -94,7 +100,9 @@ export class BrowserWalk {
   started = Date.now();
   readonly frames: LiveFrames;
   private lastOriginal?: { id: string; url: string; documentEpoch: number };
+  private lastScreenState?: { fingerprint: string; original: RecordEntry };
   private readonly controlIdentityKey = '__access_walk_control_' + randomUUID();
+  private readonly pointerStateKey = '__access_walk_pointer_' + randomUUID();
   constructor(
     public store: Store,
     public runId: string,
@@ -157,6 +165,7 @@ export class BrowserWalk {
       acceptDownloads: false,
     });
     await installControlIdentity(context, this.controlIdentityKey);
+    await installPointerState(context, this.pointerStateKey);
     await context.route('**/*', async (route) => {
       try {
         const u = new URL(route.request().url());
@@ -239,6 +248,13 @@ export class BrowserWalk {
       scroll: await this.page.evaluate(() => ({ x: scrollX, y: scrollY })),
     };
   }
+  private async meaningfulObservation(state: Awaited<ReturnType<BrowserWalk['observedState']>>) {
+    return {
+      ...state,
+      title: await this.page.title(),
+      screenShape: await renderedScreenShape(this.page, this.pointerStateKey),
+    };
+  }
   async capture(): Promise<RecordEntry> {
     const previous = this.lastOriginal;
     return readNavigationCapture(
@@ -300,6 +316,7 @@ export class BrowserWalk {
   private async captureOnce(): Promise<RecordEntry> {
     this.assertActive();
     const before = await this.observedState();
+    const screenBefore = await this.meaningfulObservation(before);
     const contextFingerprint = await this.page.locator('body').evaluate(async (body) => {
       // A nested form/wrapper can omit the product title or image. Use the whole original body.
       // Only its local fingerprint is retained, never additional raw context HTML.
@@ -417,9 +434,32 @@ export class BrowserWalk {
         element.controlInstance = undefined;
     }
     const state = await this.observedState();
+    const screenAfter = await this.meaningfulObservation(state);
     if (before.documentEpoch !== state.documentEpoch)
       throw Error('Document changed during observation');
     const asset = this.store.asset(this.runId, `capture_${randomUUID()}.png`, image);
+    const stable =
+      identitiesStable && digest(JSON.stringify(before)) === digest(JSON.stringify(state));
+    const beforeFingerprint = meaningfulScreenFingerprint(screenBefore);
+    const fingerprint =
+      stable && beforeFingerprint && beforeFingerprint === meaningfulScreenFingerprint(screenAfter)
+        ? beforeFingerprint
+        : undefined;
+    const primary =
+      fingerprint && this.lastScreenState?.fingerprint === fingerprint
+        ? this.lastScreenState.original
+        : undefined;
+    const screenState: ScreenState | undefined = fingerprint
+      ? primary
+        ? {
+            version: 'meaningful-screen/1',
+            purpose: 'same-state-evidence',
+            fingerprint,
+            primaryCaptureId: primary.id,
+            primaryCaptureHash: primary.hash,
+          }
+        : { version: 'meaningful-screen/1', purpose: 'screen', fingerprint }
+      : undefined;
     const payload: Capture & { focusHelp: RecordedFocusHelp[] } = {
       url: this.page.url(),
       title: await this.page.title(),
@@ -433,7 +473,8 @@ export class BrowserWalk {
       focus: state.focus,
       focusHelp: state.focusHelp,
       stateStamp: digest(JSON.stringify(state)),
-      stable: identitiesStable && digest(JSON.stringify(before)) === digest(JSON.stringify(state)),
+      stable,
+      ...(screenState ? { screenState } : {}),
       limits: {
         ...(!identitiesStable ? { controlIdentityChanged: true } : {}),
         totalControls: await locators.count(),
@@ -450,7 +491,109 @@ export class BrowserWalk {
     };
     const original = this.store.append(this.runId, 'capture', 'browser', payload);
     this.lastOriginal = { id: original.id, url: payload.url, documentEpoch: state.documentEpoch };
+    this.lastScreenState = fingerprint ? { fingerprint, original: primary ?? original } : undefined;
     return original;
+  }
+  /** Ordinary Tab movement gets original focus facts, not another screenshot.
+   * A changed/uncertain rendered state still takes the ordinary full image. */
+  async observeKeyboardMovement(source: RecordEntry, performed: RecordEntry): Promise<RecordEntry> {
+    this.assertActive();
+    if (
+      source.runId !== this.runId ||
+      !recordIsIntact(source) ||
+      this.store.record(this.runId, source.id)?.hash !== source.hash ||
+      source.payload.stable !== true ||
+      !(
+        source.kind === 'capture' ||
+        (source.kind === 'observation' && source.payload.method === 'keyboard_focus/1')
+      ) ||
+      performed.runId !== this.runId ||
+      performed.kind !== 'action' ||
+      !recordIsIntact(performed) ||
+      this.store.record(this.runId, performed.id)?.hash !== performed.hash ||
+      performed.payload.outcome !== 'performed' ||
+      performed.payload.action?.kind !== 'press' ||
+      !['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(performed.payload.action.key) ||
+      performed.sources.length !== 1 ||
+      performed.sources[0] !== source.id ||
+      source.seq >= performed.seq
+    )
+      throw Error('A lightweight focus observation needs its exact performed Tab.');
+    const state = await readPage(this.page, () => this.observedState());
+    const fingerprint = meaningfulScreenFingerprint(await this.meaningfulObservation(state));
+    const previous =
+      source.kind === 'capture'
+        ? source.payload.screenState?.fingerprint
+        : source.payload.screenStateFingerprint;
+    if (
+      !fingerprint ||
+      !previous ||
+      fingerprint !== previous ||
+      digest(JSON.stringify(state.focus)) !== digest(JSON.stringify(performed.payload.after))
+    )
+      return this.captureSettled();
+    const after = await readPage(this.page, () => this.observedState());
+    const afterShape = await this.meaningfulObservation(after);
+    if (
+      digest(JSON.stringify(state)) !== digest(JSON.stringify(after)) ||
+      meaningfulScreenFingerprint(afterShape) !== fingerprint
+    )
+      return this.captureSettled();
+    const originalId = source.kind === 'capture' ? source.id : source.payload.sourceCaptureId;
+    const original = this.store.record(this.runId, originalId);
+    if (!original || original.kind !== 'capture' || !recordIsIntact(original))
+      throw Error('The lightweight focus observation lost its original screen.');
+    return this.store.append(
+      this.runId,
+      'observation',
+      'browser',
+      {
+        method: 'keyboard_focus/1',
+        stable: true,
+        sourceCaptureId: original.id,
+        sourceCaptureHash: original.hash,
+        sourceImageHash: original.payload.imageHash,
+        // This original image predates the newly recorded focus. It is not a picture of it.
+        imageScope: 'earlier-screen-original; current-focus-is-recorded-facts-only',
+        url: after.url,
+        aria: after.aria,
+        focus: after.focus,
+        focusAppearance: afterShape.screenShape.focusAppearance,
+        focusHelp: after.focusHelp,
+        stateStamp: digest(JSON.stringify(after)),
+        screenStateFingerprint: fingerprint,
+      },
+      [source.id, performed.id],
+    );
+  }
+  private async verifyKeyboardObservation(source: RecordEntry) {
+    this.assertActive();
+    const original = this.store.record(this.runId, source.payload.sourceCaptureId);
+    if (
+      source.kind !== 'observation' ||
+      source.author !== 'browser' ||
+      source.payload.method !== 'keyboard_focus/1' ||
+      source.payload.stable !== true ||
+      source.runId !== this.runId ||
+      !recordIsIntact(source) ||
+      this.store.record(this.runId, source.id)?.hash !== source.hash ||
+      !original ||
+      original.kind !== 'capture' ||
+      !recordIsIntact(original) ||
+      original.payload.stable !== true ||
+      original.seq >= source.seq ||
+      original.hash !== source.payload.sourceCaptureHash ||
+      original.payload.imageHash !== source.payload.sourceImageHash ||
+      original.payload.screenState?.fingerprint !== source.payload.screenStateFingerprint
+    )
+      throw Error('Keyboard input needs an intact focus observation and original screen.');
+    const state = await this.observedState();
+    if (
+      source.payload.stateStamp !== digest(JSON.stringify(state)) ||
+      source.payload.screenStateFingerprint !==
+        meaningfulScreenFingerprint(await this.meaningfulObservation(state))
+    )
+      throw new ActionStateChanged('The recorded focus changed before input; refresh first.');
   }
   async verifyOriginalCapture(source: RecordEntry) {
     this.assertActive();
@@ -478,7 +621,14 @@ export class BrowserWalk {
       );
   }
   async act(action: Action, source: RecordEntry, expectedTarget?: () => Promise<boolean>) {
-    await this.verifyOriginalCapture(source);
+    if (source.kind === 'observation' && source.payload.method === 'keyboard_focus/1') {
+      if (
+        action.kind !== 'press' ||
+        !['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.key ?? '')
+      )
+        throw Error('A fresh screenshot is required before activation or another action.');
+      await this.verifyKeyboardObservation(source);
+    } else await this.verifyOriginalCapture(source);
     if (action.kind === 'focus_target')
       throw Error('A target traversal must record its individual keyboard inputs.');
     const before = await this.focus();
@@ -578,8 +728,10 @@ export class BrowserWalk {
       'browser',
       {
         method: 'actual_keyboard_or_browser',
-        sourceCaptureId: source.id,
-        sourceImageHash: source.payload.imageHash,
+        sourceCaptureId: source.kind === 'capture' ? source.id : source.payload.sourceCaptureId,
+        sourceImageHash:
+          source.kind === 'capture' ? source.payload.imageHash : source.payload.sourceImageHash,
+        ...(source.kind === 'observation' ? { sourceObservationId: source.id } : {}),
         action,
         requestedAction,
         before,

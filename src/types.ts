@@ -55,6 +55,7 @@ export interface ElementInfo {
   box: { x: number; y: number; width: number; height: number };
 }
 export interface Capture {
+  screenState?: import('./screen-state-contract.js').ScreenState;
   stateStamp: string;
   stable: boolean;
   url: string;

@@ -1,6 +1,7 @@
 import { samAssociationSchema, samAssociationFits } from './sam-association.js';
 import { z } from 'zod';
 import { hostAnalysisSchema } from './host-analysis.js';
+import { normalizeScreenStateCaptures } from './screen-state-contract.js';
 
 const id = z.string().min(1).max(200);
 const webUrl = z
@@ -104,6 +105,8 @@ export const hostSnapshotSchema = z
         .object({
           id,
           sequence: z.number().int().positive(),
+          recordHash: hash.optional(),
+          screenState: z.unknown().optional(),
           imageHash: hash,
           imageAvailable: z.boolean(),
           imageFile: z.string().regex(/^images\/[a-f0-9]{64}\.png$/),
@@ -156,6 +159,7 @@ export const hostSnapshotSchema = z
   })
   .strict()
   .transform((snapshot) => {
+    const states = normalizeScreenStateCaptures(snapshot.captures);
     let withheld = false;
     const findings = snapshot.findings.map((finding) => {
       if (!finding.anchor) return { ...finding, anchor: null };
@@ -174,15 +178,26 @@ export const hostSnapshotSchema = z
     });
     return {
       ...snapshot,
+      captures: states.captures,
       findings,
-      limits: withheld
-        ? [
-            ...new Set([
-              ...snapshot.limits,
-              'An optional SAM association could not be verified; the independently supported finding is retained without SAM.',
-            ]),
-          ]
-        : snapshot.limits,
+      limits:
+        withheld || states.withheld
+          ? [
+              ...new Set([
+                ...snapshot.limits,
+                ...(withheld
+                  ? [
+                      'An optional SAM association could not be verified; the independently supported finding is retained without SAM.',
+                    ]
+                  : []),
+                ...(states.withheld
+                  ? [
+                      'Optional screen-state grouping could not be verified; original screens remain separate.',
+                    ]
+                  : []),
+              ]),
+            ]
+          : snapshot.limits,
     };
   })
   .superRefine((snapshot, ctx) => {
