@@ -1,3 +1,4 @@
+import { exportHostSamAssociation } from './host-sam.js';
 import { digest, type Store } from './store.js';
 import { hostSnapshotSchema } from './host-contract.js';
 import { exportKeyboardEvidence } from './keyboard-evidence.js';
@@ -84,8 +85,21 @@ export function exportHostSnapshot(store: Store, runId: string) {
           b.y >= 0 &&
           b.x + b.width <= record.payload.width &&
           b.y + b.height <= record.payload.height
-        )
-          anchor = { captureId: record.id, elementId: element.id, box: b };
+        ) {
+          const sam = exportHostSamAssociation(
+            records,
+            record,
+            element,
+            assets.get(`images/${record.payload.imageHash}.png`)!,
+          );
+          if (sam.limit) limits.push(sam.limit);
+          anchor = {
+            captureId: record.id,
+            elementId: element.id,
+            box: b,
+            ...(sam.association ? { sam: sam.association } : {}),
+          };
+        }
       }
     }
     return [

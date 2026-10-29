@@ -1,3 +1,4 @@
+import { samAssociationSchema, samAssociationFits } from './sam-association.js';
 import { z } from 'zod';
 import { hostAnalysisSchema } from './host-analysis.js';
 
@@ -130,7 +131,10 @@ export const hostSnapshotSchema = z
           severity: z.enum(['blocker', 'serious', 'minor']),
           captureIds: z.array(id).min(1),
           sourceIds: z.array(id).min(1),
-          anchor: z.object({ captureId: id, elementId: id, box }).strict().nullable(),
+          anchor: z
+            .object({ captureId: id, elementId: id, box, sam: z.unknown().optional() })
+            .strict()
+            .nullable(),
         })
         .strict(),
     ),
@@ -151,6 +155,36 @@ export const hostSnapshotSchema = z
       .strict(),
   })
   .strict()
+  .transform((snapshot) => {
+    let withheld = false;
+    const findings = snapshot.findings.map((finding) => {
+      if (!finding.anchor) return { ...finding, anchor: null };
+      const { sam: originalSam, ...anchor } = finding.anchor;
+      const capture = snapshot.captures.find((c) => c.id === anchor.captureId);
+      const parsed = samAssociationSchema.safeParse(originalSam);
+      const sam =
+        parsed.success && capture && samAssociationFits(parsed.data, anchor, capture)
+          ? parsed.data
+          : undefined;
+      if (originalSam !== undefined && !sam) withheld = true;
+      const retainedAnchor: typeof anchor & { sam?: z.infer<typeof samAssociationSchema> } = sam
+        ? { ...anchor, sam }
+        : anchor;
+      return { ...finding, anchor: retainedAnchor };
+    });
+    return {
+      ...snapshot,
+      findings,
+      limits: withheld
+        ? [
+            ...new Set([
+              ...snapshot.limits,
+              'An optional SAM association could not be verified; the independently supported finding is retained without SAM.',
+            ]),
+          ]
+        : snapshot.limits,
+    };
+  })
   .superRefine((snapshot, ctx) => {
     if (snapshot.activity && snapshot.activity.runId !== snapshot.run.id)
       ctx.addIssue({ code: 'custom', message: 'Recorded activity belongs to a different run' });
@@ -203,6 +237,14 @@ export const hostSnapshotSchema = z
       if (finding.anchor) {
         const capture = snapshot.captures.find((c) => c.id === finding.anchor!.captureId);
         const b = finding.anchor.box;
+        if (
+          finding.anchor.sam &&
+          (!capture || !samAssociationFits(finding.anchor.sam, finding.anchor, capture))
+        )
+          ctx.addIssue({
+            code: 'custom',
+            message: 'SAM association does not match its original finding target',
+          });
         if (
           !capture ||
           !capture.stable ||
