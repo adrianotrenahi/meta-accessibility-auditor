@@ -535,6 +535,7 @@ export class Runner {
     let current = start;
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15 * 60000)]);
     let unchangedTraversal = 0;
+    let unreachedTargets = 0;
     let decisionAllowanceSpent = true;
     let finalReviewSafe = true;
     const remainingDecisions = Math.max(
@@ -573,6 +574,7 @@ export class Runner {
           },
           [current.id],
         );
+        if (action.kind !== 'focus_target') unreachedTargets = 0;
         if (action.kind === 'finish') {
           if (journey && currentJourneyInstruction(journey).currentStep)
             this.store.append(
@@ -657,6 +659,27 @@ export class Runner {
               traversed.current.kind === 'capture'
                 ? traversed.current
                 : await walk.captureSettled();
+            // Two requested controls in a row that keys could not reach: further
+            // decisions would only repeat the attempt, so navigation ends here and
+            // the final analysis reads the recorded keyboard evidence.
+            unreachedTargets = ['cycle', 'unavailable'].includes(traversed.outcome)
+              ? unreachedTargets + 1
+              : 0;
+            if (unreachedTargets >= 2) {
+              this.store.append(
+                run.id,
+                'limit',
+                'driver',
+                {
+                  method: 'unreached_targets',
+                  reason:
+                    'Two requested controls in a row could not be reached by keyboard. Navigation stopped so the recorded keyboard evidence can be analysed; remaining instructions stay incomplete.',
+                },
+                [current.id],
+              );
+              decisionAllowanceSpent = false;
+              break;
+            }
           } catch (error) {
             if (!(error instanceof ActionStateChanged)) throw error;
             this.store.append(

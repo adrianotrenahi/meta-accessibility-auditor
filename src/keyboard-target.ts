@@ -536,12 +536,43 @@ export async function walkToKeyboardTarget(
             redact,
           });
           active();
-          return stop(
+          const result = stop(
             'cycle',
             'Keyboard focus returned to a previously visited control. The robot stopped this traversal; no website keyboard barrier is inferred.',
             { ...(evidence ? { cycleEvidence: evidence } : { cycleMemory: 'unavailable' }) },
             [start.id, ...actions.map((record) => record.id)],
           );
+          // Measured evidence for the analyst: real Tab presses went round the page
+          // and never focused a control that was visible and enabled when the walk
+          // began. The analyst may report it under C05; the reviewer still decides.
+          if (!arrow && !rovingTarget && actions.length > 0 && (await connected()))
+            store.append(
+              runId,
+              'observation',
+              'browser',
+              {
+                method: 'keyboard_reach/1',
+                reached: false,
+                fullCycle: true,
+                target: {
+                  captureId: start.id,
+                  id: decision.targetId ?? null,
+                  role: decision.targetRole ?? null,
+                  name: redact(targetName),
+                  visibleAndEnabledAtStart: true,
+                },
+                keysPressed: actions.length,
+                key: requestedKey,
+                focusOrder: focusFacts.map((fact) => ({
+                  role: fact.role,
+                  name: redact(fact.name),
+                })),
+                limit:
+                  'Measured with real key presses in this browser. It is not a screen-reader test.',
+              },
+              [...new Set([start.id, current.id, ...actions.map((record) => record.id)])],
+            );
+          return result;
         }
       } else await activeHandle.dispose();
       active();

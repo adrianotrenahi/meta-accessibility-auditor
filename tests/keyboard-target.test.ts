@@ -1497,3 +1497,77 @@ test('Focus held for three Tab presses in a row ends the walk as a stall', async
     await x.close();
   }
 });
+
+test('A visible control that Tab never reaches is saved as measured keyboard evidence', async () => {
+  const x = await setup(
+    'chromium',
+    '<button>A</button><button>B</button><button tabindex="-1">Target</button>',
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'cycle');
+    const reach = x.app.store
+      .records(x.run.id)
+      .find((row) => row.kind === 'observation' && row.payload.method === 'keyboard_reach/1');
+    assert(reach, 'The barrier is recorded as a measurement, not only as a robot limit.');
+    assert.equal(reach.payload.reached, false);
+    assert.equal(reach.payload.target.name, 'Target');
+    assert.equal(reach.payload.target.visibleAndEnabledAtStart, true);
+    // The real order: the page itself, A, B, back to the page, then A again.
+    assert.deepEqual(
+      reach.payload.focusOrder.map((fact: any) => fact.name),
+      ['', 'A', 'B', '', 'A'],
+    );
+    assert(reach.sources.includes(x.current.id));
+    assert(result.actions.every((action) => reach.sources.includes(action.id)));
+    // The analyst's evidence pack for the screen after the walk includes it.
+    const { requestEvidence } = await import('../src/request-evidence.js');
+    const latest = await x.walk.captureSettled();
+    const pack = requestEvidence(x.app.store, x.run.id, 'analyst', latest);
+    assert(pack.records.some((row) => row.id === reach.id));
+  } finally {
+    await x.close();
+  }
+});
+
+test('Runner ends navigation after two requested controls in a row cannot be reached', async () => {
+  const x = await setup(
+    'chromium',
+    '<button>A</button><button>B</button><button tabindex="-1">Target</button>',
+  );
+  const runner = new Runner(x.app.store, x.app.origin);
+  let decisions = 0;
+  const reason = mock.method(MetaModels.prototype, 'reason', async () => {
+    decisions++;
+    return seek;
+  });
+  const analyse = mock.method(
+    runner as any,
+    'analyseCheckpoint',
+    async (_m: any, _r: any, current: any) => current,
+  );
+  const review = mock.method(runner as any, 'review', async () => {});
+  try {
+    await (runner as any).live(x.run, x.walk, new VoiceOverProbe(x.walk), x.current, x.signal);
+    assert.equal(decisions, 2, 'No third decision is bought for the same unreachable control.');
+    assert(
+      x.app.store
+        .records(x.run.id)
+        .some((row) => row.kind === 'limit' && row.payload.method === 'unreached_targets'),
+    );
+    assert.equal(analyse.mock.callCount(), 1, 'The final analysis still runs.');
+  } finally {
+    reason.mock.restore();
+    analyse.mock.restore();
+    review.mock.restore();
+    await x.close();
+  }
+});
