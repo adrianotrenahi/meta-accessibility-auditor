@@ -19,6 +19,7 @@ import { exportHostSnapshot } from '../src/host-export.js';
 import { MetaModels, analysisSchema, reviewSchema } from '../src/models.js';
 import { digest } from '../src/store.js';
 import type { CriteriaReport } from '../src/criteria.js';
+import { requestEvidence } from '../src/request-evidence.js';
 
 test('Provisional or partial run counts never become an overall score before final completion', () => {
   const computed = {
@@ -323,6 +324,122 @@ test('The pipeline reviews an unscored visual claim and a separate criterion wit
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Offline criterion-only review keeps the original scope after recapture and survives reopening', async () => {
+  for (const outcome of ['keep', 'unresolved', 'empty'] as const) {
+    const dir = mkdtempSync(join(tmpdir(), 'access-walk-criterion-recapture-'));
+    let store = new Store(dir);
+    try {
+      const x = setup(store);
+      declareCriterionScopes(store, x.run.id);
+      const analyst = requestEvidence(store, x.run.id, 'analyst', x.capture);
+      recordAnalysisDetails(store, x.run.id, analyst, [x.capture.id], {
+        criterionProposals: [
+          {
+            captureId: x.capture.id,
+            criterionId: 'C02',
+            verdict: 'FAIL',
+            reason: 'Offline control: the original browser measurement exposes an empty name.',
+            sources: [x.capture.id, x.observation.id],
+            missingEvidence: [],
+            screenReaderClaimed: false,
+          },
+        ],
+      });
+      const proposal = store
+        .records(x.run.id)
+        .find((record) => record.kind === 'criterion_proposal')!;
+      assert(proposal);
+      const image = store.asset(
+        x.run.id,
+        'capture_after.png',
+        store.image(x.run.id, x.capture.payload.imageFile),
+      );
+      const after = store.append(x.run.id, 'capture', 'browser', {
+        ...x.capture.payload,
+        imageFile: image.file,
+        imageHash: image.hash,
+      });
+      declareCriterionScopes(store, x.run.id);
+      const originalRows = store.records(x.run.id);
+      assert.equal(assessmentForRun(store, x.run.id).criteria.coverage.assessedChecks, 0);
+      let calls = 0;
+      const models = {
+        async reason(_runId: string, role: string, records: any[], images: any[]) {
+          calls++;
+          assert.equal(role, 'reviewer');
+          for (const source of [proposal, x.capture, x.observation, after])
+            assert(
+              records.some((record) => record.id === source.id && record.hash === source.hash),
+            );
+          assert.deepEqual(
+            images.map((image) => image.captureId).sort(),
+            [x.capture.id, after.id].sort(),
+          );
+          return {
+            decisions: [],
+            criterionDecisions:
+              outcome === 'empty'
+                ? []
+                : [
+                    {
+                      proposalId: proposal.id,
+                      proposalHash: proposal.hash,
+                      verdict: outcome,
+                      premise: outcome === 'keep' ? 'supported' : 'unverified',
+                      reason: 'Offline controlled response; no actual model judgement is claimed.',
+                      sources: [x.capture.id, x.observation.id],
+                    },
+                  ],
+          };
+        },
+      };
+      const walk = {
+        images: (records: any[]) =>
+          records.map((record) => ({
+            captureId: record.id,
+            image:
+              'data:image/png;base64,' +
+              store.image(x.run.id, record.payload.imageFile).toString('base64'),
+          })),
+      };
+      await (new Runner(store, 'http://127.0.0.1:4317') as any).review(
+        models,
+        x.run,
+        after,
+        walk,
+        new AbortController().signal,
+        false,
+      );
+      assert.equal(calls, 1);
+      assert.deepEqual(
+        store.records(x.run.id).filter((record) => record.seq <= originalRows.at(-1)!.seq),
+        originalRows,
+      );
+      store.finish(x.run.id, 'partial', 'Offline saved-response control.');
+      const report = assessmentForRun(store, x.run.id);
+      assert.equal(report.criteria.coverage.assessedChecks, outcome === 'keep' ? 1 : 0);
+      assert.equal(report.criteria.coverage.remainingChecks, outcome === 'keep' ? 29 : 30);
+      assert.equal(report.criteria.score, null);
+      const naming = report.criteria.results.find((result) => result.id === 'C02')!;
+      assert.equal(
+        naming.checks.find((check) => check.captureId === x.capture.id)?.complete,
+        outcome === 'keep',
+      );
+      assert.equal(naming.checks.find((check) => check.captureId === after.id)?.complete, false);
+      assert.equal(store.records(x.run.id).filter((record) => record.kind === 'action').length, 0);
+      assert.equal(store.usage(x.run.id).requests.length, 0);
+      const saved = JSON.stringify(store.records(x.run.id));
+      store.close();
+      store = new Store(dir);
+      assert.deepEqual(assessmentForRun(store, x.run.id), report);
+      assert.equal(JSON.stringify(store.records(x.run.id)), saved);
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 

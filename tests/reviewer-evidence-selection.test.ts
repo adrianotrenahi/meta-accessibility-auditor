@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Store } from '../src/store.js';
+import { Store, digest } from '../src/store.js';
 import { CRITERIA_VERSION, evaluateCriteria, makeCriterionScope } from '../src/criteria.js';
 import { EvidenceRequestLimit, requestEvidence } from '../src/request-evidence.js';
 import type { RecordEntry } from '../src/types.js';
@@ -22,7 +22,7 @@ function fixture(count: number) {
       url: run.url + i,
       text: 'Controlled screen ' + i,
       imageFile: `capture_${i}.png`,
-      imageHash: 'a'.repeat(64),
+      imageHash: store.asset(run.id, `capture_${i}.png`, Buffer.from(`Controlled image ${i}`)).hash,
       limits: { visibleTextTruncated: false },
     }),
   );
@@ -79,13 +79,17 @@ function fixture(count: number) {
   };
 }
 
-test('Optional criteria cannot displace or enlarge current-screen and existing-finding originals', () => {
-  const x = fixture(10);
+test('Optional criteria cannot displace mandatory originals or exceed the image bound', () => {
+  const x = fixture(52);
   try {
     const current = x.captures[0];
-    const candidate = x.candidate(x.captures.slice(1, 7).map((capture) => capture.id));
+    const candidate = x.candidate(x.captures.slice(1, 49).map((capture) => capture.id));
     const fitting = x.proposal(x.captures[2]);
-    const oversized = x.proposal(x.captures[8], [x.captures[8].id, x.captures[9].id]);
+    const fittingExtra = x.proposal(x.captures[49]);
+    const oversized = x.proposal(
+      x.captures[50],
+      x.captures.slice(50).map((capture) => capture.id),
+    );
     const walk = x.store.append(x.run.id, 'action', 'browser', { outcome: 'performed' }, [
       current.id,
     ]);
@@ -98,12 +102,27 @@ test('Optional criteria cannot displace or enlarge current-screen and existing-f
     );
     const read = requestEvidence(x.store, x.run.id, 'reviewer', current);
     const ids = new Set(read.records.map((record) => record.id));
-    for (const required of [current, candidate, ...x.captures.slice(1, 7), fitting, walk, note])
+    for (const required of [
+      current,
+      candidate,
+      ...x.captures.slice(1, 50),
+      fitting,
+      fittingExtra,
+      walk,
+      note,
+    ])
       assert(ids.has(required.id));
     assert(!ids.has(oversized.id));
-    assert(!ids.has(x.captures[8].id));
-    assert(!ids.has(x.captures[9].id));
-    assert.equal(read.records.filter((record) => record.kind === 'capture').length, 7);
+    assert(x.captures.slice(50).every((capture) => !ids.has(capture.id)));
+    assert.equal(read.records.filter((record) => record.kind === 'capture').length, 50);
+    assert(
+      read.records.some(
+        (record) =>
+          record.kind === 'limit' &&
+          record.payload.proposalId === oversized.id &&
+          /image allowance/.test(record.payload.reason),
+      ),
+    );
     assert.equal(
       x.store.records(x.run.id).filter((record) => record.kind === 'criterion_review').length,
       0,
@@ -161,10 +180,21 @@ test('Fitting optional criteria are selected newest first and never exceed five 
     const bounded = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[0]);
     const selected = bounded.records.filter((record) => record.kind === 'criterion_proposal');
     assert.equal(selected.length, 5);
-    assert(!selected.some((record) => record.id === extraCapture.id));
-    assert(!bounded.records.some((record) => record.id === x.captures[8].id));
-    assert(!selected.some((record) => record.id === many[0].id));
-    assert(many.slice(1).every((proposal) => selected.some((record) => record.id === proposal.id)));
+    assert(selected.some((record) => record.id === extraCapture.id));
+    assert(bounded.records.some((record) => record.id === x.captures[8].id));
+    assert(
+      many.slice(0, 2).every((proposal) => !selected.some((record) => record.id === proposal.id)),
+    );
+    assert(many.slice(2).every((proposal) => selected.some((record) => record.id === proposal.id)));
+    for (const omitted of many.slice(0, 2))
+      assert(
+        bounded.records.some(
+          (record) =>
+            record.kind === 'limit' &&
+            record.payload.proposalId === omitted.id &&
+            /five newer/.test(record.payload.reason),
+        ),
+      );
   } finally {
     x.close();
   }
@@ -180,6 +210,158 @@ test('Mandatory finding originals above the documented provider limit still refu
       (error) => error instanceof EvidenceRequestLimit && error.role === 'reviewer',
     );
     assert.equal(x.store.records(x.run.id).length, before);
+  } finally {
+    x.close();
+  }
+});
+
+test('A focused recapture does not lose an earlier criterion proposal when no finding exists', () => {
+  const x = fixture(2);
+  try {
+    const proposal = x.proposal(x.captures[0]);
+    const originals = JSON.stringify(x.store.records(x.run.id));
+    const read = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[1]);
+    for (const original of [proposal, x.scopes[0], ...x.captures]) {
+      assert(
+        read.records.some((record) => record.id === original.id),
+        original.kind,
+      );
+      assert(
+        read.read.payload.records.some(
+          (pin: any) => pin.id === original.id && pin.hash === original.hash,
+        ),
+      );
+    }
+    assert.deepEqual(
+      read.read.payload.imageReceipt.supplied.map((pin: any) => pin.captureId).sort(),
+      x.captures.map((capture) => capture.id).sort(),
+    );
+    assert.equal(
+      JSON.stringify(x.store.records(x.run.id).filter((record) => record.seq < read.read.seq)),
+      originals,
+    );
+    assert.equal(
+      x.store.records(x.run.id).filter((record) => record.kind === 'criterion_review').length,
+      0,
+    );
+    assert.equal(
+      evaluateCriteria(x.store.records(x.run.id), x.run.id, { imageAvailable: () => true }).coverage
+        .assessedChecks,
+      0,
+    );
+  } finally {
+    x.close();
+  }
+});
+
+test('Unavailable optional criterion originals stay unassessed without displacing intact findings', () => {
+  for (const damage of [
+    'missing-source',
+    'changed-source',
+    'rewritten-source',
+    'unstable-source',
+    'missing-image',
+    'changed-image',
+    'rewritten-read',
+  ] as const) {
+    const x = fixture(2);
+    try {
+      const observation = x.store.append(
+        x.run.id,
+        'observation',
+        'browser',
+        { stable: true, method: 'controlled_context' },
+        [x.captures[0].id],
+      );
+      const proposal = x.proposal(x.captures[0], [observation.id]);
+      const candidate = x.candidate([x.captures[1].id]);
+      const imagePath = join(x.store.dir, x.run.id, x.captures[0].payload.imageFile);
+      if (damage === 'missing-image') rmSync(imagePath);
+      if (damage === 'changed-image') writeFileSync(imagePath, 'Changed original image.');
+      if (damage === 'missing-source')
+        x.store.db.prepare('DELETE FROM records WHERE id=?').run(observation.id);
+      if (['changed-source', 'rewritten-source', 'unstable-source'].includes(damage)) {
+        const body = JSON.stringify({
+          ...observation.payload,
+          stable: damage !== 'unstable-source',
+          changed: true,
+        });
+        x.store.db
+          .prepare('UPDATE records SET body=?,hash=? WHERE id=?')
+          .run(
+            body,
+            damage === 'rewritten-source' ? digest(body) : observation.hash,
+            observation.id,
+          );
+      }
+      if (damage === 'rewritten-read') {
+        const read = x.store.record(x.run.id, proposal.payload.readSnapshotId)!;
+        const body = JSON.stringify({
+          ...read.payload,
+          records: read.payload.records.filter((pin: any) => pin.id !== observation.id),
+        });
+        x.store.db
+          .prepare('UPDATE records SET body=?,hash=? WHERE id=?')
+          .run(body, digest(body), read.id);
+      }
+      const read = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[1]);
+      assert(
+        read.records.some((record) => record.id === candidate.id),
+        damage,
+      );
+      assert(!read.records.some((record) => record.id === proposal.id), damage);
+      assert(
+        !read.read.payload.imageReceipt.supplied.some(
+          (pin: any) => pin.captureId === x.captures[0].id,
+        ),
+        damage,
+      );
+      assert(
+        read.records.some(
+          (record) =>
+            record.kind === 'limit' &&
+            record.payload.method === 'criterion_review_selection' &&
+            record.payload.proposalId === proposal.id &&
+            record.payload.proposalHash === proposal.hash &&
+            /missing, changed or unstable/.test(record.payload.reason),
+        ),
+        damage,
+      );
+      assert.equal(
+        x.store.records(x.run.id).filter((record) => record.kind === 'criterion_review').length,
+        0,
+        damage,
+      );
+      assert.equal(
+        evaluateCriteria(x.store.records(x.run.id), x.run.id, { imageAvailable: () => true })
+          .coverage.assessedChecks,
+        0,
+        damage,
+      );
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('Restoring the exact optional image restores proposal selection without rewriting any original', () => {
+  const x = fixture(2);
+  try {
+    const proposal = x.proposal(x.captures[0]);
+    const imagePath = join(x.store.dir, x.run.id, x.captures[0].payload.imageFile);
+    const original = readFileSync(imagePath);
+    const originalProposal = JSON.stringify(proposal);
+    rmSync(imagePath);
+    const absent = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[1]);
+    assert(!absent.records.some((record) => record.id === proposal.id));
+    writeFileSync(imagePath, original);
+    const restored = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[1]);
+    assert(restored.records.some((record) => record.id === proposal.id));
+    assert.equal(JSON.stringify(x.store.record(x.run.id, proposal.id)), originalProposal);
+    assert.equal(
+      x.store.records(x.run.id).filter((record) => record.kind === 'criterion_review').length,
+      0,
+    );
   } finally {
     x.close();
   }
