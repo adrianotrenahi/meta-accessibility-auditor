@@ -1,7 +1,7 @@
 // Free real-site proof: no model request is made. Opens one public page, clears
 // its consent banner and popups the way a run does, then sends six Tab presses
 // and counts how many needed a new picture. Records stay in a temporary folder.
-//   npm run proof:blockers -- https://www.edreams.com/
+//   npm run proof:blockers -- https://www.edreams.com/ [--chromium]
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +16,8 @@ if (!url) throw Error('Pass a public website address.');
 const dir = mkdtempSync(join(tmpdir(), 'blocker-proof-'));
 const store = new Store(dir);
 const run = store.create('Consent and popup proof', url, 'live');
-const walk = new BrowserWalk(store, run.id, '', true, 'webkit', true);
+const engine = process.argv.includes('--chromium') ? 'chromium' : 'webkit';
+const walk = new BrowserWalk(store, run.id, '', true, engine, true);
 const started = Date.now();
 const pictures = () => store.records(run.id).filter((record) => record.kind === 'capture').length;
 try {

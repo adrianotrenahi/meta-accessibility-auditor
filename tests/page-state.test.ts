@@ -92,3 +92,14 @@ test('An empty snapshot never counts as the same page', () => {
   assert.equal(contentSettled(page(['- heading "Flights"']), ''), false);
   assert.equal(contentSettled('', ''), true);
 });
+
+test("eDreams' measured carousel drift (23 differing lines of 286) is settled; results are not", () => {
+  const home = Array.from({ length: 286 }, (_, index) => `- text: Home line ${index}`);
+  const slides = (count: number) => Array.from({ length: count }, (_, i) => `- text: Slide ${i}`);
+  // 12 lines replaced by 11 others: 23 differing lines, the largest drift measured.
+  const drifted = [...home.slice(0, 274), ...slides(11)];
+  assert.equal(ariaDifference(page(home), page(drifted)).length, 23);
+  assert.equal(contentSettled(page(home), page(drifted)), true);
+  const results = Array.from({ length: 200 }, (_, index) => `- link "Flight option ${index}"`);
+  assert.equal(contentSettled(page(home), page([...home.slice(0, 100), ...results])), false);
+});

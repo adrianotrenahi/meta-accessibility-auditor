@@ -8,7 +8,9 @@ import { digest } from './store.js';
  * closing when it is marked as one (dialog, alertdialog, aria-modal, or a known
  * consent banner). An unmarked overlay is ordinary content to these checks.
  */
-export const CONTENT_DRIFT = { minimumLines: 12, share: 0.05 } as const;
+// Measured 29 October in Chromium over 30 seconds: eDreams' carousels changed up to
+// 23 of 286 lines (8%) by themselves; Booking, Renfe, Vueling 0; Ryanair 2.
+export const CONTENT_DRIFT = { minimumLines: 12, share: 0.1 } as const;
 
 const dialogLine = /^\s*- (?:dialog|alertdialog)\b/;
 
