@@ -2,7 +2,11 @@
 
 A focused native link with `target="_blank"` may continue the current journey in its new tab. The engine arms one 1.5-second expectation immediately before the checked Enter or Space input. A private event receipt must observe the actual trusted key on that exact control; a script-dispatched key or an automatic window at the same address is insufficient. The first navigation must start at that link’s declared address, its real opener must be the current page, and the destination must pass the existing website boundary. Redirects retain the same guarded browser context and public network proxy.
 
+Arrival also requires the actual main-document response from that request or its redirect chain. The local proxy marks its own HTTP refusals and strips that marker from forwarded HTTP replies; a failed HTTPS tunnel supplies no website document. A refusal cannot stand in for arrival, and this proof adds no second address lookup. Each asynchronous check remains within the original deadline.
+
 The input record keeps the original source capture and before address, then records the actual followed address. New-page dialog hooks and the live picture reader follow the adopted page. Ordinary Tab movement retains lightweight focus facts tied to that page's original screen; it and DOM modal dismissal do not start a window wait. Stop and close invalidate the expectation before cleanup.
+
+Host activity shows the browser outcome as an input result only after the matching original and actual Enter or Space result exist. It exports fixed outcome text and the permitted key, without copying note prose, addresses or model thoughts.
 
 Unsolicited, sibling, late, forbidden and unverified windows remain refused or explicitly unobserved. A refused or missing window is a robot limit, not proof of a website keyboard barrier. A script-only `window.open` without a declared native link destination is not automatically adopted. Internal blank pages used for automatic measurement are never treated as journey navigation. Downloads remain disabled.
 

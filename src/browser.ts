@@ -195,6 +195,7 @@ export class BrowserWalk {
       context,
       current: () => this.page,
       active: () => this.assertActive(),
+      viaPublicProxy: Boolean(this.publicProxy),
       permitted: async (raw) => {
         const url = new URL(raw);
         const host = url.hostname.replace(/^\[|\]$/g, '');

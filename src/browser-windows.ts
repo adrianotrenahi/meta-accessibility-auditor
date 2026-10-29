@@ -1,4 +1,5 @@
 import type { BrowserContext, ElementHandle, Page, Request } from 'playwright';
+import { PUBLIC_PROXY_REFUSAL_HEADER } from './public-network.js';
 
 export const WINDOW_ARRIVAL_MS = 1500;
 const addressKey = (raw: string) => {
@@ -10,7 +11,7 @@ type PendingWindow = {
   source: Page;
   sourceCaptureId: string;
   destination: string;
-  allowedAddresses: Set<string>;
+  navigations: Set<Request>;
   expires: number;
   candidate?: Page;
   finish: () => void;
@@ -36,6 +37,7 @@ export class BrowserWindows {
       active: () => void;
       permitted: (raw: string) => Promise<URL>;
       adopted: (page: Page) => void;
+      viaPublicProxy?: boolean;
       record: (
         outcome: 'adopted' | 'refused' | 'unobserved',
         reason: string,
@@ -192,7 +194,7 @@ export class BrowserWindows {
       source,
       sourceCaptureId,
       destination: addressKey(destination),
-      allowedAddresses: new Set<string>(),
+      navigations: new Set<Request>(),
       expires: Date.now() + WINDOW_ARRIVAL_MS,
       promise,
       keyObserved,
@@ -239,8 +241,24 @@ export class BrowserWindows {
     let first = request;
     for (let i = 0; first.redirectedFrom() && i < 10; i++) first = first.redirectedFrom()!;
     if (addressKey(first.url()) !== pending.destination) return false;
-    pending.allowedAddresses.add(addressKey(request.url()));
+    pending.navigations.add(request);
     return true;
+  }
+  private documentRequest(pending: PendingWindow, popup: Page, destination: string) {
+    for (const original of [...pending.navigations].reverse()) {
+      let request: Request | null = original;
+      for (let redirects = 0; request && redirects < 10; redirects++) {
+        if (addressKey(request.url()) === addressKey(destination)) {
+          try {
+            const frame = request.frame();
+            if (frame.page() === popup && frame.parentFrame() === null) return request;
+          } catch {
+            // A frame that never became a real document cannot prove arrival.
+          }
+        }
+        request = request.redirectedTo();
+      }
+    }
   }
   private async child(source: Page, popup: Page) {
     const pending = this.pending;
@@ -275,15 +293,49 @@ export class BrowserWindows {
         popup,
         'The verified window action ended before destination checking finished.',
       );
-    if (!url || !pending.allowedAddresses.has(addressKey(url.href))) {
+    const navigation = url && this.documentRequest(pending, popup, url.href);
+    if (!url || !navigation) {
       await this.refuse(popup, 'The new window did not reach the declared permitted destination.');
       return;
     }
-    await popup.bringToFront();
-    if (!this.isCurrent(pending) || source !== this.kit.current())
+    const response = await Promise.race([
+      navigation.response().catch(() => null),
+      pending.promise.then(() => null),
+    ]);
+    if (
+      !this.isCurrent(pending) ||
+      popup.isClosed() ||
+      addressKey(popup.url()) !== addressKey(url.href) ||
+      this.documentRequest(pending, popup, popup.url()) !== navigation
+    )
       return this.refuse(
         popup,
-        'The verified window action ended before the new window could be adopted.',
+        'The verified window action or destination document changed before its response was checked.',
+      );
+    // HTTP refusals carry our proxy's marker; forwarded HTTP replies strip it.
+    // HTTPS refusal ends CONNECT without a document response. A header inside
+    // actual HTTPS content belongs to the website, not to the tunnel proxy.
+    if (
+      !response ||
+      (this.kit.viaPublicProxy &&
+        url.protocol === 'http:' &&
+        response.headers()[PUBLIC_PROXY_REFUSAL_HEADER] === '1')
+    )
+      return this.refuse(
+        popup,
+        'The requested tab had no verified website response or its public connection was refused. No destination arrival is established.',
+      );
+    await popup.bringToFront();
+    if (
+      !this.isCurrent(pending) ||
+      source !== this.kit.current() ||
+      popup.isClosed() ||
+      addressKey(popup.url()) !== addressKey(url.href) ||
+      this.documentRequest(pending, popup, popup.url()) !== navigation
+    )
+      return this.refuse(
+        popup,
+        'The verified window action or destination document changed before the new window could be adopted.',
       );
     if (pending.candidate && pending.candidate !== popup)
       return this.refuse(popup, 'Only one matching window may belong to the actual activation.');

@@ -13,6 +13,7 @@ import {
   pinnedLookup,
   connectDestination,
   forwardHeaders,
+  PUBLIC_PROXY_REFUSAL_HEADER,
 } from '../src/public-network.js';
 import { publicTarget, publicEntryLimit } from '../src/public-target.js';
 import { isCommitment, publicSearchInput } from '../src/browser.js';
@@ -92,15 +93,18 @@ test('Actual HTTP and CONNECT requests cannot reach private destinations, includ
     return [{ address: '127.0.0.1', family: 4 }];
   });
   try {
-    const status = await new Promise<number>((resolve, reject) => {
-      const r = request(proxy.url, { path: 'http://rebound.test:9/private' }, (res) => {
-        res.resume();
-        resolve(res.statusCode!);
-      });
-      r.on('error', reject);
-      r.end();
-    });
-    assert.equal(status, 502);
+    const result = await new Promise<{ status: number; refusal: string | string[] | undefined }>(
+      (resolve, reject) => {
+        const r = request(proxy.url, { path: 'http://rebound.test:9/private' }, (res) => {
+          res.resume();
+          resolve({ status: res.statusCode!, refusal: res.headers[PUBLIC_PROXY_REFUSAL_HEADER] });
+        });
+        r.on('error', reject);
+        r.end();
+      },
+    );
+    assert.equal(result.status, 502);
+    assert.equal(result.refusal, '1');
     assert.equal(calls, 1);
     const tunnel = await new Promise<string>((resolve, reject) => {
       const socket = connect(Number(new URL(proxy.url).port), '127.0.0.1');
@@ -114,6 +118,7 @@ test('Actual HTTP and CONNECT requests cannot reach private destinations, includ
       );
     });
     assert.match(tunnel, /502 Bad Gateway/);
+    assert(tunnel.includes(PUBLIC_PROXY_REFUSAL_HEADER + ': 1'));
     assert.equal(calls, 2);
     await Promise.all([proxy.close(), proxy.close()]);
   } finally {
@@ -507,6 +512,7 @@ test('Forwarding removes hop headers while preserving content and refusing a fam
       'transfer-encoding': 'chunked',
       'content-length': '12',
       'content-type': 'text/html',
+      [PUBLIC_PROXY_REFUSAL_HEADER]: '1',
     }),
     { 'content-type': 'text/html' },
   );

@@ -7,6 +7,9 @@ import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { BrowserWalk } from '../src/browser.js';
 import { BrowserWindows } from '../src/browser-windows.js';
+import { publicBrowserProxy } from '../src/public-network.js';
+import { exportHostActivity } from '../src/host-activity.js';
+import { chromium, webkit } from 'playwright';
 
 test('An expected-window route cannot outlive its deadline while checking the key receipt', async (t) => {
   let now = 1000;
@@ -24,7 +27,7 @@ test('An expected-window route cannot outlive its deadline while checking the ke
     source,
     destination: 'https://example.com/results',
     expires: 1001,
-    allowedAddresses: new Set(),
+    navigations: new Set(),
     keyObserved: async () => {
       now = 1002;
       return true;
@@ -43,7 +46,7 @@ test('An expected-window route cannot outlive its deadline while checking the ke
   await windows.close();
 });
 
-for (const boundary of ['destination', 'foreground'] as const)
+for (const boundary of ['destination', 'response', 'foreground'] as const)
   test(`An expected-window handoff cannot outlive its deadline during ${boundary} verification`, async (t) => {
     let now = 1000;
     t.mock.method(Date, 'now', () => now);
@@ -63,14 +66,6 @@ for (const boundary of ['destination', 'foreground'] as const)
       },
       record() {},
     });
-    (windows as any).pending = {
-      source,
-      destination: 'https://example.com/results',
-      expires: 1001,
-      allowedAddresses: new Set(['https://example.com/results']),
-      keyObserved: async () => true,
-      finish() {},
-    };
     const popup = {
       opener: async () => source,
       waitForLoadState: async () => {},
@@ -82,9 +77,74 @@ for (const boundary of ['destination', 'foreground'] as const)
       },
       close: async () => {},
     };
+    (windows as any).pending = {
+      source,
+      destination: 'https://example.com/results',
+      expires: 1001,
+      navigations: new Set([
+        {
+          url: () => 'https://example.com/results',
+          frame: () => ({ page: () => popup, parentFrame: () => null }),
+          response: async () => {
+            if (boundary === 'response') now = 1002;
+            return { headers: () => ({}) };
+          },
+        },
+      ]),
+      promise: new Promise(() => {}),
+      keyObserved: async () => true,
+      finish() {},
+    };
     await (windows as any).child(source, popup);
     assert.equal(adopted, false);
-    assert.equal(foregrounded, boundary === 'destination' ? 0 : 1);
+    assert.equal(foregrounded, boundary === 'foreground' ? 1 : 0);
+    await windows.close();
+  });
+
+for (const change of ['changed-address', 'same-address-reload'] as const)
+  test(`A new window cannot adopt a ${change} after its response was checked`, async () => {
+    const source = { setDefaultTimeout() {}, on() {} };
+    let url = 'https://example.com/results';
+    let adopted = false;
+    const windows = new BrowserWindows({
+      context: { on() {} } as any,
+      current: () => source as any,
+      active() {},
+      permitted: async (raw) => new URL(raw),
+      adopted() {
+        adopted = true;
+      },
+      record() {},
+    });
+    const popup = {
+      opener: async () => source,
+      waitForLoadState: async () => {},
+      isClosed: () => false,
+      url: () => url,
+      bringToFront: async () => {
+        if (change === 'changed-address') url = 'https://other.example/';
+        else pending.navigations.add(request());
+      },
+      close: async () => {},
+    };
+    const request = () => ({
+      url: () => 'https://example.com/results',
+      frame: () => ({ page: () => popup, parentFrame: () => null }),
+      response: async () => ({ headers: () => ({}) }),
+      redirectedTo: () => null,
+    });
+    const pending = {
+      source,
+      destination: url,
+      expires: Date.now() + 1000,
+      navigations: new Set([request()]),
+      promise: new Promise(() => {}),
+      keyObserved: async () => true,
+      finish() {},
+    };
+    (windows as any).pending = pending;
+    await (windows as any).child(source, popup);
+    assert.equal(adopted, false);
     await windows.close();
   });
 
@@ -96,6 +156,11 @@ async function fixture(engine: 'chromium' | 'webkit') {
     requests.push(req.url ?? '');
     if (req.url === '/broken') {
       res.destroy();
+      return;
+    }
+    if (req.url === '/redirect') {
+      res.writeHead(302, { Location: '/results' });
+      res.end();
       return;
     }
     res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -152,12 +217,146 @@ for (const engine of ['chromium', 'webkit'] as const)
       const after = await f.walk.captureSettled();
       assert.equal(after.payload.url, f.origin + '/results');
       assert(after.payload.text.includes('Results page'));
+      const note = f.store
+        .records(f.run.id)
+        .find(
+          (record) =>
+            record.payload.method === 'browser_window' && record.payload.outcome === 'adopted',
+        )!;
+      const activity = exportHostActivity(f.store.records(f.run.id), f.run.id);
+      const followed = activity.entries.find((entry) => entry.id === note.id);
+      assert(followed, 'The browser outcome must appear in host activity after its actual input.');
+      assert.equal(followed.kind, 'action');
+      assert.equal(followed.action, 'Input result');
+      assert.match(followed.reason, /new tab/);
     } finally {
       await f.close();
     }
   });
 
+for (const engine of ['chromium', 'webkit'] as const)
+  for (const scenario of ['http', 'https', 'website-error'] as const)
+    test(
+      scenario === 'website-error'
+        ? `Actual ${engine} keeps a controlled cross-origin website error observable`
+        : `Actual ${engine} refuses a proxy's private-host ${scenario} response instead of following it as the destination`,
+      async () => {
+        const websiteError = scenario === 'website-error';
+        const scheme = scenario === 'https' ? 'https' : 'http';
+        const destination = `${scheme}://${websiteError ? 'results' : 'internal'}.example/results`;
+        const resolved: string[] = [];
+        const proxy = await publicBrowserProxy(async (hostname) => {
+          resolved.push(hostname);
+          return [{ address: '10.0.0.1', family: 4 }];
+        });
+        const browser = await (engine === 'chromium' ? chromium : webkit).launch({
+          headless: true,
+          proxy: { server: proxy.url, bypass: '<-loopback>' },
+        });
+        let windows: BrowserWindows | undefined;
+        try {
+          const context = await browser.newContext({
+            acceptDownloads: false,
+            serviceWorkers: 'block',
+          });
+          const source = await context.newPage();
+          let current = source;
+          const outcomes: string[] = [];
+          const statuses: number[] = [];
+          context.on('response', (response) => {
+            if (response.url() === destination) statuses.push(response.status());
+          });
+          windows = new BrowserWindows({
+            context,
+            current: () => current,
+            active() {},
+            viaPublicProxy: true,
+            permitted: async (raw) => new URL(raw),
+            adopted: (page) => {
+              current = page;
+            },
+            record: (outcome) => outcomes.push(outcome),
+          });
+          await context.route('**/*', async (route) => {
+            if (route.request().url() === 'http://entry.example/')
+              return route.fulfill({
+                contentType: 'text/html',
+                body: `<a id="next" target="_blank" href="${destination}">Open results</a>`,
+              });
+            if (await windows!.allows(route.request())) {
+              if (websiteError && route.request().url() === destination)
+                return route.fulfill({
+                  status: 502,
+                  contentType: 'text/html',
+                  body: '<h1>Controlled website error</h1>',
+                });
+              return route.continue();
+            }
+            return route.abort('blockedbyclient');
+          });
+          await source.goto('http://entry.example/');
+          await source.locator('#next').focus();
+          const prepared = await windows.prepare(source, 'Enter', 'synthetic-original');
+          assert(prepared);
+          const pending = prepared.arm();
+          try {
+            await source.keyboard.press('Enter');
+            await pending.wait();
+          } finally {
+            pending.cancel();
+            await prepared.dispose();
+          }
+          if (websiteError) {
+            assert(current !== source);
+            assert.equal(current.url(), destination);
+            assert.equal(await current.locator('h1').innerText(), 'Controlled website error');
+            assert(statuses.includes(502));
+            assert(outcomes.includes('adopted'));
+          } else {
+            assert(resolved.includes('internal.example'));
+            if (scheme === 'http') assert(statuses.includes(502));
+            else assert(!statuses.includes(200));
+            assert(current === source, 'A proxy refusal must not replace the tracked page.');
+            assert(!outcomes.includes('adopted'));
+          }
+        } finally {
+          await windows?.close();
+          await browser.close();
+          await proxy.close();
+        }
+      },
+    );
+
 for (const engine of ['chromium', 'webkit'] as const) {
+  test(`Actual ${engine} follows the declared link's real redirect chain and final document response`, async () => {
+    const f = await fixture(engine);
+    try {
+      const source = f.walk.page;
+      await source
+        .locator('#next')
+        .evaluate((element) => element.setAttribute('href', '/redirect'));
+      await source.locator('#next').focus();
+      const original = await f.walk.captureSettled();
+      const result = await f.walk.act(
+        {
+          kind: 'press',
+          key: 'Enter',
+          note: 'Follow the declared redirect to its actual results.',
+        },
+        original,
+      );
+      assert(f.walk.page !== source);
+      assert.equal(f.walk.page.url(), f.origin + '/results');
+      assert.equal(result.payload.sourceCaptureId, original.id);
+      assert.equal(result.payload.urlBefore, f.origin + '/');
+      assert.equal(result.payload.urlAfter, f.origin + '/results');
+      assert(f.requests.includes('/redirect'));
+      assert(f.requests.includes('/results'));
+    } finally {
+      await f.close();
+    }
+  });
+
   test(`Actual ${engine} keeps an unverified broken destination separate from a followed results tab`, async () => {
     const f = await fixture(engine);
     try {

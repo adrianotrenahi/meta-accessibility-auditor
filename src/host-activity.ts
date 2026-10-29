@@ -28,6 +28,42 @@ export function exportHostActivity(records: RecordEntry[], runId: string, runnin
     let target: string | undefined;
     if (
       record.kind === 'navigator_note' &&
+      record.author === 'browser' &&
+      record.payload.method === 'browser_window' &&
+      record.payload.outcome === 'adopted'
+    ) {
+      const source = intact.find(
+        (item) =>
+          item.id === record.payload.sourceCaptureId &&
+          item.kind === 'capture' &&
+          item.author === 'browser' &&
+          item.payload.stable === true &&
+          item.seq < record.seq,
+      );
+      if (!source || record.sources.length !== 1 || record.sources[0] !== source.id) return [];
+      const following = intact.slice(index + 1);
+      const nextRead = following.findIndex((item) => item.kind === 'read_snapshot');
+      const interval = nextRead < 0 ? following : following.slice(0, nextRead);
+      const input = interval.find((item) => item.kind === 'action' && item.author === 'browser');
+      if (
+        !input ||
+        input.payload.method !== 'actual_keyboard_or_browser' ||
+        input.payload.outcome !== 'performed' ||
+        input.payload.sourceCaptureId !== source.id ||
+        input.sources.length !== 1 ||
+        input.sources[0] !== source.id ||
+        input.payload.urlBefore !== source.payload.url ||
+        input.payload.action?.kind !== 'press' ||
+        !['Enter', 'Space'].includes(input.payload.action.key)
+      )
+        return [];
+      kind = 'action';
+      action = 'Input result';
+      target = input.payload.action.key;
+      reason =
+        'The keyboard action opened the requested page in a new tab. Its contents still need checking.';
+    } else if (
+      record.kind === 'navigator_note' &&
       record.author === 'driver' &&
       record.payload.kind === 'progress' &&
       typeof record.payload.text === 'string'
