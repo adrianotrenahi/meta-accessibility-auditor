@@ -4,27 +4,38 @@ import type { JourneyDraftBinding, JourneyDraftView } from './journey-drafts.js'
 import { safeError } from './config.js';
 
 export function journeyPlanView(view: JourneyDraftView) {
+  const state =
+    view.run.state === 'prepared'
+      ? 'prepared'
+      : view.run.state === 'planning'
+        ? 'planning'
+        : view.run.startedAt
+          ? 'started'
+          : 'unavailable';
   return {
     id: view.run.id,
-    state:
-      view.run.state === 'prepared'
-        ? 'prepared'
-        : view.run.state === 'planning'
-          ? 'planning'
-          : 'unavailable',
-    ...(view.run.state === 'prepared' && view.plan
+    state,
+    ...(state === 'prepared' && view.plan
       ? {
           planId: view.plan.id,
           planHash: view.plan.hash,
           steps: view.plan.payload.steps,
         }
       : {}),
-    ...(view.run.state !== 'prepared' && view.run.state !== 'planning'
+    ...(state === 'started'
+      ? {
+          runState: view.run.state,
+          reason: `Start has already been requested for this plan. The saved run is currently ${view.run.state}. Open that run to review its progress; this read starts nothing.`,
+        }
+      : {}),
+    ...(state === 'unavailable'
       ? {
           reason:
             view.run.state === 'interrupted' && !view.draft.planningRequestId && !view.plan
               ? 'No generation was sent. Retry this same draft with a current bounded approval.'
-              : 'This draft is no longer waiting for Start. Its records and charges are retained; the same draft will not generate again.',
+              : view.run.state === 'stopped'
+                ? 'Planning was stopped. Its saved records and charges remain; this draft will not generate again.'
+                : 'This draft is no longer waiting for Start. Its records and charges are retained; the same draft will not generate again.',
         }
       : {}),
   };

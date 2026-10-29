@@ -112,6 +112,23 @@ export class Store {
       throw error;
     }
   }
+  /** Owner/brief identity for cleanup and an already-failed Start. This does not
+   * establish that a saved proposal is valid for preparation or execution. */
+  ownedJourneyDraftRun(value: JourneyDraftBinding): Run | null {
+    const binding = journeyDraftBindingSchema.parse(value);
+    const row = this.db
+      .prepare('SELECT owner_hash,brief_hash,run_id FROM journey_drafts WHERE draft_id=?')
+      .get(binding.draftId) as
+      { owner_hash: string; brief_hash: string; run_id: string | null } | undefined;
+    if (!row) return null;
+    if (row.owner_hash !== binding.ownerHash || row.brief_hash !== binding.briefHash)
+      throw Error('This draft belongs to a different owner, website or journey.');
+    if (!row.run_id) throw Error('This draft was discarded. A retry cannot recreate it.');
+    const run = this.run(row.run_id);
+    if (run.url !== binding.url || run.goal !== binding.goal)
+      throw Error('The saved draft does not match this website or journey.');
+    return run;
+  }
   journeyDraft(value: JourneyDraftBinding): JourneyDraftView | null {
     const binding = journeyDraftBindingSchema.parse(value);
     const row = this.db

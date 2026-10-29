@@ -29,6 +29,19 @@ of order are saved in a separate approved execution plan. The generated proposal
 and its completed response remain unchanged. A changed brief needs a new draft;
 a changed Start retry is refused. Existing direct host clients and retained older
 runs keep their former behavior.
+An owner-added instruction may contain only its identity and text, matching the
+existing editor. Missing intent or success metadata is not invented. Generated
+proposals still require both; an owner-written instruction without a separate
+condition must have its requested visible outcome before completion is recorded.
+Completion keeps accepted step identities verbatim.
+Reading a proposal after Start returns `started` and the actual saved run state,
+instead of labelling that used proposal a failed preparation. It starts no work.
+If Start fails after that saved request is accepted, the host records an ended
+partial attempt and returns its stable run identity. Its report and Discard stay
+available; the same Start never launches again. Only that attempt's browser may
+be stopped during cleanup. Owner-authenticated deletion does not require a damaged
+proposal or receipt to pass execution checks, while owner/brief checks, physical
+cleanup and charge preservation remain mandatory.
 
 The navigator receives the original shared records plus one current instruction
 and its observable success condition. A `step_done` answer names that instruction

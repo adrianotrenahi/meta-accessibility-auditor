@@ -9,7 +9,7 @@ import { probePublicWebsite } from '../src/public-network.js';
 import { publicDestination } from '../src/public-network.js';
 import { JourneyPlanner, journeyPlanView } from '../src/journey-planner.js';
 import { approvedJourneyPlanSchema } from '../src/journey-steps.js';
-import { approval } from '../src/config.js';
+import { approval, safeError } from '../src/config.js';
 import type { JourneyDraftBinding } from '../src/journey-drafts.js';
 
 const preparedPlanReference = z
@@ -109,14 +109,14 @@ export async function hostRequest(
         json(res, 200, { discarded: true });
         return;
       }
-      const draft = store.journeyDraft(binding);
-      if (!draft) {
+      const ownedRun = store.ownedJourneyDraftRun(binding);
+      if (!ownedRun) {
         json(res, 404, { error: 'Journey draft not found.' });
         return;
       }
       if (!kit.planner) throw Error('This local engine cannot confirm planning cleanup.');
-      await kit.planner.stop(draft.run.id);
-      await runner.discard(draft.run.id);
+      await kit.planner.stop(ownedRun.id);
+      await runner.discard(ownedRun.id);
       json(res, 200, { discarded: true });
       return;
     }
@@ -187,6 +187,39 @@ export async function hostRequest(
               (record) =>
                 record.kind === 'plan' && typeof record.payload.requestTargetHash === 'string',
             );
+          const failedStarts = records.filter(
+            (record) =>
+              record.kind === 'limit' &&
+              record.author === 'host' &&
+              record.payload.method === 'journey_start_failed',
+          );
+          if (failedStarts.length) {
+            const reference = preparedPlanReference.parse(body.journeyPlan);
+            const ownedRun = store.ownedJourneyDraftRun(
+              draftBinding(reference.draftId, reference.ownerHash, target.url, target.goal),
+            );
+            const failed = failedStarts[0]!;
+            if (
+              failedStarts.length !== 1 ||
+              !ownedRun ||
+              ownedRun.id !== prior ||
+              ['planning', 'prepared', 'running'].includes(run.state) ||
+              !recordIsIntact(failed) ||
+              failed.payload.requestId !== body.requestId.toLowerCase() ||
+              failed.payload.draftId !== reference.draftId.toLowerCase() ||
+              failed.payload.proposalId !== reference.planId ||
+              failed.payload.proposalHash !== reference.planHash ||
+              failed.payload.requestTargetHash !== digest(JSON.stringify(target))
+            ) {
+              json(res, 409, {
+                error:
+                  'This failed Start does not match the saved owner, journey and instructions, or its cleanup is unfinished. No restart was attempted.',
+              });
+              return;
+            }
+            json(res, 200, { id: prior });
+            return;
+          }
           const proposal = records.find(
             (record) =>
               record.kind === 'plan' && record.payload.proposalVersion === 'journey-proposal/1',
@@ -259,25 +292,61 @@ export async function hostRequest(
           proposalHash: activated.plan!.hash,
         };
       }
-      const run = await runner.start({
-        mode,
-        headless: true,
-        engine: 'chromium',
-        voiceOver: false,
-        goal: target?.goal ?? HOST_GOAL,
-        ...(target
-          ? {
-              url: target.url,
-              publicWebsite: true,
-              steps: target.steps,
-              requestTargetHash: digest(JSON.stringify(target)),
-            }
-          : {}),
-        manualCheckpoints: mode === 'offline',
-        requestId: body.requestId,
-        ...(prepared ? { prepared } : {}),
-      });
-      json(res, 201, { id: run.id });
+      try {
+        const run = await runner.start({
+          mode,
+          headless: true,
+          engine: 'chromium',
+          voiceOver: false,
+          goal: target?.goal ?? HOST_GOAL,
+          ...(target
+            ? {
+                url: target.url,
+                publicWebsite: true,
+                steps: target.steps,
+                requestTargetHash: digest(JSON.stringify(target)),
+              }
+            : {}),
+          manualCheckpoints: mode === 'offline',
+          requestId: body.requestId,
+          ...(prepared ? { prepared } : {}),
+        });
+        json(res, 201, { id: run.id });
+      } catch (error) {
+        if (!prepared || !target) throw error;
+        const failedId = prepared.run.id;
+        let cleanupDetail: string | undefined;
+        if (runner.active?.run.id === failedId) {
+          try {
+            await runner.stop(failedId);
+          } catch (cleanupError) {
+            cleanupDetail = safeError(cleanupError);
+          }
+        }
+        if (!store.hasRun(failedId)) {
+          json(res, 409, {
+            error: 'This Start was discarded while startup cleanup finished. It will not restart.',
+          });
+          return;
+        }
+        const reason =
+          'The prepared journey could not finish Start. Its saved plan, original records and charges are retained; this Start will not retry automatically.';
+        const reference = preparedPlanReference.parse(body.journeyPlan);
+        store.append(failedId, 'limit', 'host', {
+          method: 'journey_start_failed',
+          reason,
+          detail: safeError(error),
+          ...(cleanupDetail ? { cleanupDetail } : {}),
+          requestId: body.requestId.toLowerCase(),
+          draftId: reference.draftId.toLowerCase(),
+          proposalId: prepared.proposalId,
+          proposalHash: prepared.proposalHash,
+          requestTargetHash: digest(JSON.stringify(target)),
+        });
+        if (['running', 'stopped'].includes(store.run(failedId).state))
+          store.finish(failedId, 'partial', reason);
+        json(res, 201, { id: failedId });
+      }
       return;
     }
     const discardStart = url.pathname.match(/^\/api\/host\/requests\/([a-f0-9-]{36})\/discard$/i);

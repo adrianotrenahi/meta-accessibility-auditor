@@ -39,7 +39,7 @@ export const actionSchema = z.object({
     'focus_target',
     'step_done',
   ]),
-  stepId: z.string().trim().min(1).max(80).optional(),
+  stepId: z.string().min(1).max(80).optional(),
   captureId: z.uuid().optional(),
   key: z
     .enum([

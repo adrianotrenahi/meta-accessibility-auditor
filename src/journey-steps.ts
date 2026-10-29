@@ -29,11 +29,16 @@ export const journeyPlanSchema = z
       ),
   })
   .strict();
-export type JourneyStep = z.infer<typeof plannedStepSchema>;
+const approvedStepSchema = journeyStepSchema
+  .extend({
+    success: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+export type JourneyStep = z.infer<typeof approvedStepSchema>;
 export const approvedJourneyPlanSchema = z
   .object({
     steps: z
-      .array(plannedStepSchema)
+      .array(approvedStepSchema)
       .min(1)
       .max(12)
       .refine(
@@ -115,7 +120,7 @@ export function currentJourneyInstruction(journey: OrderedJourney) {
     currentStep: step ? { ...step, position: journey.currentIndex + 1 } : null,
     totalSteps: journey.steps.length,
     boundary:
-      'Work only on the current instruction. Completing it is not a criterion PASS. Stop before booking, purchase, login, account creation, personal details or payment.',
+      'Work only on the current instruction. An owner-written step may have no separate success condition: require its requested visible outcome, never invented metadata or guessed completion. Completing it is not a criterion PASS. Stop before booking, purchase, login, account creation, personal details or payment.',
   };
 }
 
