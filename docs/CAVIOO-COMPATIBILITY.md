@@ -171,3 +171,15 @@ connection requests reject paths/credentials while retaining valid custom web
 ports; already-checked IPv4 is preferred when both families exist. Transition
 and documentation IPv6 ranges are refused. A missing original plan refuses a
 retry as unverifiable without creating another run.
+
+Completed analysis attribution is independent of accepted findings. The optional
+`analysis` field uses `recorded-analysis/1` and exports only source identities,
+original order/hashes, role, exact request/read identities and supplied original
+capture identities. It requires both an intact completed provider response and a
+matching completed parsed-result request, with the same intact original read and
+image receipt. Saved examples, navigation responses, incomplete/invalid results
+and unknown requests cannot count as completed analysis. No provider output,
+prompt or private reasoning leaves the engine. Old exports remain valid; missing
+receipts mean completion is not established. Consumers must accept this optional
+field before using the newer exporter. Completion never settles criterion checks,
+accepts a finding or establishes a score by itself.
