@@ -24,6 +24,7 @@ export const TARGET_ROLES = [
   'spinbutton',
 ] as const;
 export const MAX_TARGET_KEYS = 24;
+export const MAX_FOCUS_STALLS = 3;
 class TraversalObservationChanged extends Error {}
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
@@ -181,6 +182,7 @@ export async function walkToKeyboardTarget(
   let cleanupHandle: ElementHandle | undefined;
   const focusHandles: ElementHandle[] = [];
   const focusFacts: { role: string; name: string }[] = [];
+  let stalls = 0;
   try {
     await readTarget(() => walk.verifyOriginalCapture(start));
     const epoch = await readTarget(() => walk.page.evaluate(() => performance.timeOrigin));
@@ -454,7 +456,25 @@ export async function walkToKeyboardTarget(
         walk.page.evaluateHandle(() => document.activeElement),
       );
       const focus = activeHandle.asElement();
-      if (focus) {
+      // A widget may hold focus for a Tab or two (eDreams' accessibility notice does).
+      // Staying put is a stall, not a cycle: it is counted, and only a return to an
+      // earlier, different control is a cycle. Three stalls in a row end the walk.
+      const previous = focusHandles.at(-1);
+      const stalled =
+        !!focus &&
+        !!previous &&
+        (await previous.evaluate((element, other) => element === other, focus).catch(() => false));
+      if (stalled) {
+        await focus!.dispose().catch(() => {});
+        if (++stalls >= MAX_FOCUS_STALLS)
+          return stop(
+            'cycle',
+            `Focus stayed on the same control for ${stalls} Tab presses in a row. The robot stopped this traversal; a fresh decision is needed.`,
+          );
+      } else stalls = 0;
+      if (stalled) {
+        // Held focus: no new visited control; the next key is still sent below.
+      } else if (focus) {
         focusHandles.push(focus);
         const facts = current.payload.focus ?? {};
         focusFacts.push({

@@ -1448,3 +1448,52 @@ test('A repeated name is refused when the listed control was replaced by a looka
     await x.close();
   }
 });
+
+// A widget that keeps focus for two Tab presses before letting it move on, like
+// eDreams' accessibility notice. Staying put is a stall, not a cycle.
+const holdsFocus = (presses: number) =>
+  `<div id="notice" tabindex="0">Please note: accessibility system</div><button>A</button><button>Target</button>` +
+  `<script>let held=0;document.querySelector('#notice').addEventListener('keydown',e=>{if(e.key==='Tab'&&!e.shiftKey&&held<${presses}){held++;e.preventDefault();}});</script>`;
+
+test('Focus held for two Tab presses is a stall, and the walk still reaches its target', async () => {
+  const x = await setup('chromium', holdsFocus(2));
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'reached');
+    assert.equal((await x.walk.focus()).name, 'Target');
+  } finally {
+    await x.close();
+  }
+});
+
+test('Focus held for three Tab presses in a row ends the walk as a stall', async () => {
+  const x = await setup('chromium', holdsFocus(10));
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'cycle');
+    const limit = x.app.store
+      .records(x.run.id)
+      .findLast(
+        (row) => row.kind === 'limit' && row.payload.method === 'keyboard_target_traversal',
+      );
+    assert.match(limit!.payload.reason, /stayed on the same control for 3 Tab presses/);
+  } finally {
+    await x.close();
+  }
+});
