@@ -14,6 +14,7 @@ import { sessionLock } from '../src/lock.js';
 import { assessmentForRun } from '../src/assessment.js';
 import { controlledHostMode } from './controlled-live.js';
 import { JourneyPlanner } from '../src/journey-planner.js';
+import { modelApprovalDenial } from '../src/model-approval.js';
 export const visibleKinds = new Set([
   'plan',
   'action',
@@ -206,6 +207,8 @@ export async function startServer(
       }
       json(res, 404, { error: 'Page not found.' });
     } catch (e) {
+      const denied = modelApprovalDenial(e);
+      if (denied) return json(res, denied.status, denied.body);
       json(res, 400, { error: safeError(e) });
     }
   });
