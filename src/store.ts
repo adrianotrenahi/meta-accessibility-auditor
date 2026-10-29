@@ -1,3 +1,4 @@
+import { RoleAllowanceLimit } from './role-allowance.js';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -507,16 +508,17 @@ export class Store {
         Math.min(LIMITS.runMicros, Math.floor(approval.maxRunUsd * 1e6))
       )
         throw Error('Run spending limit reached.');
-      if (phase.length >= LIMITS[role]) throw Error('Request count limit reached.');
+      if (phase.length >= LIMITS[role])
+        throw new RoleAllowanceLimit(role, 'Request count limit reached.');
       const charged = (r: any) => r.actual ?? r.reserved;
       const used = phase.reduce((n, r) => n + charged(r), 0);
       if (
         used + micros + (role === 'reviewer' && !final ? FINAL_REVIEW_RESERVE_MICROS : 0) >
         PHASE[role]
       )
-        throw Error('Phase spending limit reached.');
+        throw new RoleAllowanceLimit(role, 'Phase spending limit reached.');
       if (role === 'reviewer' && !final && phase.length >= 3)
-        throw Error('Final review slot is reserved.');
+        throw new RoleAllowanceLimit(role, 'Final review slot is reserved.');
       const protectedPhases = (Object.keys(PHASE) as Role[])
         .filter((p) => p !== role)
         .reduce(

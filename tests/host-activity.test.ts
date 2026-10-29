@@ -383,3 +383,58 @@ test('Unsupported note sources never establish a verified input relationship', (
     x.close();
   }
 });
+
+test('A live target path publishes each safe actual key before the next model read without leaking its original note', () => {
+  const x = fixture();
+  try {
+    const read = x.store.snapshot(x.run.id, 'driver').read;
+    const note = x.store.append(x.run.id, 'navigator_note', 'driver', {
+      kind: 'progress',
+      progressMode: 'keyboard_target',
+      text: 'PRIVATE_FUTURE_VALUE and DO_NOT_EXPORT_ORIGINAL_NOTE',
+    });
+    const first = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.deepEqual(
+      first.activity!.entries.map((e) => e.id),
+      [read.id, note.id],
+    );
+    assert.match(first.activity!.entries[1].reason, /real keyboard input/);
+    let previous = first;
+    for (const key of ['Tab', 'ArrowRight', 'Enter']) {
+      const input = x.store.append(x.run.id, 'action', 'browser', {
+        method: 'actual_keyboard_or_browser',
+        action: { kind: 'press', key, note: 'PRIVATE_KEY_NOTE' },
+        outcome: 'performed',
+      });
+      const next = exportHostSnapshot(x.store, x.run.id).snapshot;
+      const delta = next.activity!.entries.filter(
+        (e) => e.sequence > previous.activity!.entries.at(-1)!.sequence,
+      );
+      assert.deepEqual(
+        delta.map((e) => [e.id, e.action, e.target]),
+        [[input.id, 'Input result', key]],
+      );
+      assert.doesNotThrow(() => applyHostSnapshot(previous, next));
+      previous = next;
+    }
+    const beforeNextRead = previous.activity!.entries;
+    x.store.snapshot(x.run.id, 'driver');
+    const afterRead = exportHostSnapshot(x.store, x.run.id).snapshot;
+    assert.deepEqual(afterRead.activity!.entries.slice(0, beforeNextRead.length), beforeNextRead);
+    assert.doesNotThrow(() => applyHostSnapshot(previous, afterRead));
+    const visible = JSON.stringify(afterRead.activity);
+    for (const secret of [
+      'PRIVATE_FUTURE_VALUE',
+      'DO_NOT_EXPORT_ORIGINAL_NOTE',
+      'PRIVATE_KEY_NOTE',
+    ])
+      assert(!visible.includes(secret));
+    assert.equal(
+      x.store.record(x.run.id, note.id)!.payload.text,
+      'PRIVATE_FUTURE_VALUE and DO_NOT_EXPORT_ORIGINAL_NOTE',
+    );
+    assert.equal(x.store.usage().requests.length, 0);
+  } finally {
+    x.close();
+  }
+});

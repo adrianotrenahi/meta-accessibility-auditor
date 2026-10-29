@@ -44,7 +44,8 @@ export function exportHostActivity(records: RecordEntry[], runId: string, runnin
           item.payload.method === 'actual_keyboard_or_browser' &&
           record.sources.includes(item.payload.sourceCaptureId),
       );
-      if (record.payload.text !== initialCaptureNote) {
+      const keyboardTarget = record.payload.progressMode === 'keyboard_target';
+      if (record.payload.text !== initialCaptureNote && !keyboardTarget) {
         // Freeform notes can name future typed values even without a model
         // response. Close the whole input interval before publishing its text.
         if (nextRead < 0 && running) {
@@ -55,8 +56,9 @@ export function exportHostActivity(records: RecordEntry[], runId: string, runnin
       }
       kind = 'progress';
       action = 'Recorded progress';
-      reason =
-        record.payload.text === initialCaptureNote
+      reason = keyboardTarget
+        ? 'Moving toward the requested control with real keyboard input. Each sent key is recorded below; reaching the control is not yet established.'
+        : record.payload.text === initialCaptureNote
           ? initialCaptureNote
           : scrub(
               record.payload.text,

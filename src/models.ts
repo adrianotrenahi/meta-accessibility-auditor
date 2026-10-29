@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CAPS } from './types.js';
+import { TARGET_ROLES } from './keyboard-target.js';
 import { postMeta, MetaTransportError } from './meta-transport.js';
 import type { Role, Approval, RecordEntry } from './types.js';
 import { suppliedImageIds } from './image-receipt.js';
@@ -21,7 +22,7 @@ import {
 import { missingEvidenceSchema } from './evidence-checks.js';
 import { EvidenceRequestLimit } from './request-evidence.js';
 export const actionSchema = z.object({
-  kind: z.enum(['press', 'type', 'scroll', 'back', 'wait', 'voiceover', 'finish']),
+  kind: z.enum(['press', 'type', 'scroll', 'back', 'wait', 'voiceover', 'finish', 'focus_target']),
   key: z
     .enum([
       'Tab',
@@ -37,27 +38,77 @@ export const actionSchema = z.object({
       'ArrowRight',
     ])
     .optional(),
+  targetId: z
+    .string()
+    .regex(/^e\d+$/)
+    .optional(),
+  targetRole: z.enum(TARGET_ROLES).optional(),
+  targetName: z.string().trim().min(1).max(500).optional(),
+  traversalKey: z
+    .enum(['Tab', 'Shift+Tab', 'ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'])
+    .optional(),
+  activation: z.enum(['Enter', 'Space']).optional(),
+  waitMs: z.number().int().min(800).max(10000).optional(),
   text: z.string().max(200).optional(),
   direction: z.enum(['up', 'down']).optional(),
   note: z.string().max(500),
 });
 export type Action = z.infer<typeof actionSchema>;
 // Old requested/actual key records remain readable; fresh decisions request portable keys.
-export const navigationActionSchema = actionSchema.extend({
-  key: z
-    .enum([
-      'Tab',
-      'Shift+Tab',
-      'Enter',
-      'Space',
-      'Escape',
-      'ArrowDown',
-      'ArrowUp',
-      'ArrowLeft',
-      'ArrowRight',
-    ])
-    .optional(),
-});
+export const navigationActionSchema = actionSchema
+  .extend({
+    key: z
+      .enum([
+        'Tab',
+        'Shift+Tab',
+        'Enter',
+        'Space',
+        'Escape',
+        'ArrowDown',
+        'ArrowUp',
+        'ArrowLeft',
+        'ArrowRight',
+      ])
+      .optional(),
+  })
+  .superRefine((action, context) => {
+    if (action.kind !== 'wait' && action.waitMs !== undefined)
+      context.addIssue({
+        code: 'custom',
+        message: 'A loading wait belongs only to a wait action.',
+      });
+    if (action.kind !== 'focus_target') {
+      if (
+        [
+          action.targetId,
+          action.targetRole,
+          action.targetName,
+          action.traversalKey,
+          action.activation,
+        ].some((value) => value !== undefined)
+      )
+        context.addIssue({
+          code: 'custom',
+          message: 'Keyboard targets and their activation belong only to a focus_target action.',
+        });
+      return;
+    }
+    const byId = !!action.targetId;
+    const byName = !!action.targetRole && !!action.targetName;
+    if (
+      byId === byName ||
+      (byId && (action.targetRole || action.targetName)) ||
+      action.key ||
+      action.text ||
+      action.direction ||
+      action.waitMs
+    )
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Choose exactly one original target by ID or exact role/name. Only an explicit activation may activate it; traversal never types.',
+      });
+  });
 export const candidateSchema = z.object({
   issueKey: z.string().regex(/^[a-z][a-z0-9_]{2,79}$/),
   scope: z.enum(['element', 'view']),
@@ -123,6 +174,7 @@ const instructions = {
 const jobInstructions = {
   driver:
     instructions.driver +
+    ' Prefer focus_target to reach a named control through several real keyboard steps in one decision. Use its exact targetId from the supplied controls, or targetRole plus exact targetName from the current original accessible page. Use traversalKey Tab or Shift+Tab for ordinary controls. When the target belongs to a menubar, menu or tablist, Tab reaches its active entry and the local keyboard path uses real orientation-aware arrows within that same group; inactive items are not necessarily Tab-reachable. Do not Tab past an active menu item to seek another item in that same menu. For a calendar with a current date cell, use an arrow key to move within that same native grid; first bring the desired month into the first visible calendar if necessary. Dates may not be individually Tab-reachable. The robot uses real keys until that same unique control is focused and stops on a meaningful page change or cycle. Optional activation Enter or Space is an explicit request applied only after the target is reached and freshly checked against the original control, with the ordinary no-booking/payment/login guards. Without activation it only reaches focus; it never types during traversal. Previously unseen descriptions require a fresh decision before any inherited activation, and changed descriptions stop traversal. If the requested control is now focused, read the fresh original and choose a separate press only when the intent still holds. Use a new type action after reaching an input. Never repeat an exhausted or refused target unchanged. A wait action may use waitMs up to10000 while a real results page loads; loading alone is not task completion. Do not request focus_target again when the requested control is already focused. Single press remains available for one key or widget-specific arrow keys. ' +
     ' Missing-fact checks share the existing two native/focused slots. Do not repeat an exhausted or refused check or revisit an unavailable state to force a result.',
   analyst:
     instructions.analyst +
