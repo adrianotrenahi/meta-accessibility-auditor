@@ -27,6 +27,7 @@ import {
   currentJourneyInstruction,
 } from './journey-steps.js';
 import { PLANNER_INSTRUCTIONS } from './planner-instructions.js';
+import { requireCurrentModelApproval } from './model-approval.js';
 export const actionSchema = z.object({
   kind: z.enum([
     'press',
@@ -341,21 +342,7 @@ export class MetaModels {
         (schema as z.ZodType<unknown>) !== journeyPlanSchema)
     )
       throw Error('Planning accepts only its bounded brief and fixed plan result.');
-    const approved = this.getApproval();
-    if (
-      approved.approvedBy !== 'Adriano' ||
-      !Number.isFinite(Date.parse(approved.expiresAt)) ||
-      Date.parse(approved.expiresAt) <= Date.now() ||
-      !Number.isFinite(approved.maxUsd) ||
-      approved.maxUsd <= 0 ||
-      approved.maxUsd > 110 ||
-      !Number.isFinite(approved.maxRunUsd) ||
-      approved.maxRunUsd <= 0 ||
-      approved.maxRunUsd > 3
-    )
-      throw Error(
-        'A current bounded owner approval is required before preparing any model request.',
-      );
+    const approved = requireCurrentModelApproval(() => this.getApproval());
     if (!this.getKey()) throw Error('No Meta API key is available.');
     const cap = CAPS[role];
     const journey =
