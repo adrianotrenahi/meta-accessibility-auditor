@@ -2,6 +2,7 @@ import { digest, type Store } from './store.js';
 import { hostSnapshotSchema } from './host-contract.js';
 import { exportKeyboardEvidence } from './keyboard-evidence.js';
 import { exportHostActivity } from './host-activity.js';
+import { exportHostAnalysis } from './host-analysis.js';
 
 /** A whitelist projection: model prompts, raw candidates and private settings never leave here. */
 export function exportHostSnapshot(store: Store, runId: string) {
@@ -116,6 +117,7 @@ export function exportHostSnapshot(store: Store, runId: string) {
     run: { ...run, stopReason: run.stopReason ?? null },
     sequence: 0,
     activity: exportHostActivity(records, runId, run.state === 'running'),
+    analysis: exportHostAnalysis(records, runId, usage.requests),
     captures,
     findings,
     coverage: {

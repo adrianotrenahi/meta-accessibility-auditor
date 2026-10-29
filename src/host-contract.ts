@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { hostAnalysisSchema } from './host-analysis.js';
 
 const id = z.string().min(1).max(200);
 const webUrl = z
@@ -96,6 +97,7 @@ export const hostSnapshotSchema = z
       .strict(),
     sequence: z.number().int().nonnegative(),
     activity: hostActivitySchema.optional(),
+    analysis: hostAnalysisSchema.optional(),
     captures: z.array(
       z
         .object({
@@ -152,6 +154,23 @@ export const hostSnapshotSchema = z
   .superRefine((snapshot, ctx) => {
     if (snapshot.activity && snapshot.activity.runId !== snapshot.run.id)
       ctx.addIssue({ code: 'custom', message: 'Recorded activity belongs to a different run' });
+    if (
+      snapshot.analysis &&
+      (snapshot.analysis.runId !== snapshot.run.id ||
+        (snapshot.run.mode !== 'live' && snapshot.analysis.completed.length > 0) ||
+        snapshot.analysis.completed.some((row) =>
+          row.captureIds.some(
+            (id) =>
+              !snapshot.captures.some(
+                (capture) => capture.id === id && capture.sequence < row.readSnapshotSequence,
+              ),
+          ),
+        ))
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Completed analysis does not match this original run and its screens',
+      });
     const ids = new Set<string>();
     let previousSequence = 0;
     for (const capture of snapshot.captures) {
@@ -226,6 +245,11 @@ export function applyHostSnapshot(
     const retained = next.activity?.entries.find((entry) => entry.id === previous.id);
     if (retained && JSON.stringify(retained) !== JSON.stringify(previous))
       throw Error('A retained recorded activity entry cannot be rewritten.');
+  }
+  for (const previous of current.analysis?.completed ?? []) {
+    const retained = next.analysis?.completed.find((row) => row.id === previous.id);
+    if (retained && JSON.stringify(retained) !== JSON.stringify(previous))
+      throw Error('A retained completed analysis receipt cannot be rewritten.');
   }
   return next;
 }
