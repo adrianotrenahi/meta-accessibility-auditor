@@ -171,6 +171,30 @@ test('Missing-fact requests cannot carry arbitrary actions, text, destinations o
   assert.equal(missingEvidenceSchema.safeParse({ ...request, criterionId: 'C16' }).success, false);
 });
 
+test('Keyboard activation requests require an explicit supported key and focused control name', () => {
+  const request = {
+    method: 'keyboard_activation',
+    captureId: 'original',
+    criterionId: 'C05',
+    reason: 'Observe dismissal after the requested key.',
+    activationKey: 'Enter',
+    targetName: 'Dismiss offer',
+  };
+  assert(missingEvidenceSchema.safeParse(request).success);
+  assert(missingEvidenceSchema.safeParse({ ...request, activationKey: 'Space' }).success);
+  for (const extra of [
+    { activationKey: undefined },
+    { activationKey: 'Tab' },
+    { activationKey: 'Escape' },
+    { targetName: undefined },
+    { targetName: '' },
+    { method: 'keyboard_focus' },
+    { method: 'measurement' },
+    { method: 'voiceover' },
+  ])
+    assert.equal(missingEvidenceSchema.safeParse({ ...request, ...extra }).success, false);
+});
+
 test('Only the intact exact original and still-current page state allow a focused check', () => {
   const dir = mkdtempSync(join(tmpdir(), 'access-walk-focused-'));
   const store = new Store(dir);

@@ -6,15 +6,31 @@ import type { RecordEntry, ElementInfo } from './types.js';
 
 export const missingEvidenceSchema = z
   .object({
-    method: z.enum(['measurement', 'keyboard_focus', 'voiceover']),
+    method: z.enum(['measurement', 'keyboard_focus', 'keyboard_activation', 'voiceover']),
     captureId: z.string().min(1).max(200),
     criterionId: z
       .string()
       .regex(/^C(?:0[1-9]|1[0-5])$/)
       .nullable(),
     reason: z.string().min(3).max(700),
+    activationKey: z.enum(['Enter', 'Space']).optional(),
+    targetName: z.string().trim().min(1).max(500).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((request, context) => {
+    if (request.method === 'keyboard_activation') {
+      if (!request.activationKey || !request.targetName)
+        context.addIssue({
+          code: 'custom',
+          message:
+            'A keyboard activation needs its explicit key and the exact focused control name.',
+        });
+    } else if (request.activationKey !== undefined || request.targetName !== undefined)
+      context.addIssue({
+        code: 'custom',
+        message: 'Activation keys and control names belong only to a keyboard activation check.',
+      });
+  });
 export type MissingEvidenceRequest = z.infer<typeof missingEvidenceSchema>;
 export type FocusedMethod = MissingEvidenceRequest['method'];
 
@@ -117,6 +133,25 @@ export function focusedCheckEligibility(
     return refused(
       'The requested original state is no longer current; no revisit or input was attempted.',
     );
+  if (request.method === 'keyboard_activation') {
+    const focus = source.payload.focus;
+    if (
+      !focus ||
+      focus.name !== request.targetName ||
+      !(
+        (focus.tag === 'input' &&
+          ['button', 'submit', 'reset', 'image', 'checkbox', 'radio'].includes(focus.type)) ||
+        (!['input', 'textarea'].includes(focus.tag) &&
+          (['button', 'a', 'select'].includes(focus.tag) ||
+            ['button', 'link', 'checkbox', 'radio', 'menuitem', 'tab', 'option'].includes(
+              focus.role,
+            )))
+      )
+    )
+      return refused(
+        'The requested named control is not the focused control in the current original; no activation was attempted.',
+      );
+  }
   return {
     allowed: true,
     state: 'ready' as const,
