@@ -1,3 +1,5 @@
+import { metaOperationEvidence, type MetaOperationEvidence } from './meta-operation-evidence.js';
+
 /** Meta count requests may be repeated; a model generation may not have reached us.
  * Retrying generation is limited to proved connection-establishment failures,
  * before any HTTP response. No redirect may hide an earlier transmitted request.
@@ -11,7 +13,8 @@ export type MetaTransportDiagnostic = {
   code: string;
   status?: number;
   causeCodes?: string[];
-};
+  attemptElapsedMs?: number;
+} & Partial<MetaOperationEvidence>;
 const beforeConnection = new Set(['ENOTFOUND', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT']);
 const knownCodes = new Set([
   ...beforeConnection,
@@ -182,6 +185,7 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
   for (let attempt = 1; attempt <= maximumAttempts; attempt++) {
     signal.throwIfAborted();
     options.assertActive();
+    const attemptStarted = performance.now();
     let response: Response | undefined;
     let stage: MetaTransportDiagnostic['stage'] = 'requesting';
     let diagnostic: MetaTransportDiagnostic | undefined;
@@ -236,6 +240,7 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
           : (codes.find((code) => code !== 'OTHER') ??
             (error instanceof SyntaxError ? 'INVALID_JSON' : 'CONNECTION_UNKNOWN')),
         ...(mixedCauses ? { causeCodes: [...new Set(codes)].slice(0, 16) } : {}),
+        ...metaOperationEvidence(error, knownCodes),
       };
       const repeatableCountFailure =
         phase === 'input_count' &&
@@ -247,6 +252,7 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
         delay = shortDelay(attempt);
     }
     if (!diagnostic) throw Error('Meta request ended without a result.');
+    diagnostic.attemptElapsedMs = Math.max(0, Math.round(performance.now() - attemptStarted));
     if (delay === null || attempt === maximumAttempts)
       throw new MetaTransportError(diagnostic, generationNotSent, analysisMayContinue);
     signal.throwIfAborted();
