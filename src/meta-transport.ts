@@ -23,6 +23,8 @@ const knownCodes = new Set([
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_BODY_TIMEOUT',
   'ABORT_ERR',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
 ]);
 const retryCountStatus = new Set([408, 429, 500, 502, 503, 504]);
 const retryDelayLimit = 5000;
@@ -65,6 +67,52 @@ function isCancelled(error: unknown, signal: AbortSignal) {
     )
   );
 }
+/** Workflow continuation needs the actual known exception tree, never a saved
+ * MIXED/OTHER label. This does not permit any generation retry or release.
+ */
+function transientNetworkException(error: unknown) {
+  const ancestors = new Set<object>();
+  let remaining = 64;
+  const visit = (value: unknown, depth: number): boolean => {
+    if (
+      !(value instanceof Error) ||
+      value instanceof SyntaxError ||
+      depth > 4 ||
+      ancestors.has(value) ||
+      --remaining < 0
+    )
+      return false;
+    ancestors.add(value);
+    try {
+      const item = value as Error & { code?: unknown; errors?: unknown };
+      const nativeAbort =
+        value instanceof DOMException && ['AbortError', 'TimeoutError'].includes(value.name);
+      let classified = nativeAbort;
+      if (item.code !== undefined) {
+        if (typeof item.code === 'string' && knownCodes.has(item.code)) classified = true;
+        else if (!(nativeAbort && typeof item.code === 'number')) return false;
+      }
+      if (item.cause !== undefined) {
+        if (!visit(item.cause, depth + 1)) return false;
+        classified = true;
+      }
+      if (item.errors !== undefined) {
+        if (
+          !Array.isArray(item.errors) ||
+          !item.errors.length ||
+          item.errors.length > 8 ||
+          !item.errors.every((nested) => visit(nested, depth + 1))
+        )
+          return false;
+        classified = true;
+      }
+      return classified;
+    } finally {
+      ancestors.delete(value);
+    }
+  };
+  return visit(error, 0);
+}
 function shortDelay(attempt: number) {
   return (attempt === 1 ? 250 : 1000) + Math.floor(Math.random() * 100);
 }
@@ -81,6 +129,8 @@ export class MetaTransportError extends Error {
   constructor(
     public readonly diagnostic: MetaTransportDiagnostic,
     public readonly generationNotSent = false,
+    // Internal eligibility only: not copied to saved diagnostics or wire data.
+    public readonly analysisMayContinue = false,
   ) {
     const d = diagnostic;
     const reason =
@@ -137,6 +187,7 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
     let diagnostic: MetaTransportDiagnostic | undefined;
     let delay: number | null = null;
     let generationNotSent = false;
+    let analysisMayContinue = false;
     try {
       response = await options.fetcher('https://api.meta.ai/v1' + path, {
         method: 'POST',
@@ -147,6 +198,7 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
       });
       stage = 'http';
       if (!response.ok) {
+        analysisMayContinue = retryCountStatus.has(response.status);
         diagnostic = {
           version: 'meta-transport/1',
           phase,
@@ -164,6 +216,7 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
       }
     } catch (error) {
       if (signal.aborted) throw signal.reason;
+      analysisMayContinue = transientNetworkException(error);
       const cancelled = isCancelled(error, signal);
       const codes = connectionCodes(error);
       const provedBeforeConnection =
@@ -195,7 +248,7 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
     }
     if (!diagnostic) throw Error('Meta request ended without a result.');
     if (delay === null || attempt === maximumAttempts)
-      throw new MetaTransportError(diagnostic, generationNotSent);
+      throw new MetaTransportError(diagnostic, generationNotSent, analysisMayContinue);
     signal.throwIfAborted();
     options.assertActive();
     options.onRetry?.({
