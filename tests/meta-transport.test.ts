@@ -471,6 +471,8 @@ test('Actual Node refused connection reconnects once without sending a duplicate
     assert.equal(calls, 2);
     assert.equal(acceptedRequests, 1);
     assert.equal(x.events[0].code, 'ECONNREFUSED');
+    assert.deepEqual(x.events[0].causeOperations, [{ code: 'ECONNREFUSED', operation: 'connect' }]);
+    assert(Number.isInteger(x.events[0].attemptElapsedMs));
   } finally {
     if (server.listening) await close(server);
   }
