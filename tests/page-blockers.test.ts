@@ -192,3 +192,46 @@ test('Mid-journey, a popup the walk opened stays open while a consent banner is 
     assert(!tests.includes('escape'), 'No Escape is sent to the journey popup.');
   });
 });
+
+test('Mid-journey, a journey popup with a Decline button is never refused as a cookie banner', async () => {
+  await withWalk(async (walk, app, runId) => {
+    await walk.page.setContent(
+      '<html lang="en"><body><h1>Your trip</h1>' +
+        '<div role="dialog" aria-label="Add travel insurance?"><p>Protect your trip for EUR 12.</p>' +
+        '<button onclick="document.body.dataset.insurance=\'declined\'">Decline</button>' +
+        '<button>Add insurance</button></div></body></html>',
+    );
+    const start = await walk.captureSettled();
+    await clearPageBlockers(walk, app.store, runId, start, new AbortController().signal, {
+      arrival: false,
+    });
+    assert.equal(await walk.page.locator('body').getAttribute('data-insurance'), null);
+    assert.equal(await walk.page.locator('[role=dialog]').count(), 1);
+    assert.equal(
+      app.store.records(runId).filter((r: any) => r.payload.method === 'page_blocker/1').length,
+      0,
+      'No cookie-banner record names the journey popup.',
+    );
+  });
+});
+
+test('At arrival, a popup that ignores Escape is closed by its bare × button', async () => {
+  await withWalk(async (walk, app, runId) => {
+    await walk.page.setContent(
+      '<html lang="en"><body><h1>Home</h1><div id="promo" role="dialog" aria-label="Member deals">' +
+        '<p>Members save 10%.</p><button onclick="this.parentElement.remove()">×</button></div></body></html>',
+    );
+    const start = await walk.captureSettled();
+    await clearPageBlockers(walk, app.store, runId, start, new AbortController().signal, {
+      arrival: true,
+    });
+    assert.equal(await walk.page.locator('#promo').count(), 0);
+    const notes = app.store
+      .records(runId)
+      .filter((r: any) => r.payload.method === 'page_blocker/1')
+      .map((r: any) => r.payload);
+    assert.equal(notes[0].test, 'escape');
+    assert.equal(notes[0].closed, false);
+    assert.equal(notes.at(-1).cleared, true);
+  });
+});

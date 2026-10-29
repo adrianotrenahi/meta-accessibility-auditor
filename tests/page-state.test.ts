@@ -86,3 +86,9 @@ test('With nothing focused, rotating page copy is not a focus change', () => {
   // Records saved before page-state/1 keep their exact comparison.
   assert.equal(sameForInput({ stateStamp: 'old' }, state('Save on flights')), false);
 });
+
+test('An empty snapshot never counts as the same page', () => {
+  assert.equal(contentSettled('', page(['- heading "Flights"', '- button "Search"'])), false);
+  assert.equal(contentSettled(page(['- heading "Flights"']), ''), false);
+  assert.equal(contentSettled('', ''), true);
+});

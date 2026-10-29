@@ -20,7 +20,7 @@ const rejectLabel =
 const acceptLabel =
   /^\s*((yes|s[ií]),?\s+)?(i\s+)?(acepto|aceptar|accept|agree|allow|permitir|de\s+acuerdo|entendido|got\s+it|ok)\b/i;
 const closeLabel =
-  /^\s*(close|dismiss|no,?\s*thanks|not\s+now|maybe\s+later|skip|cerrar|ahora\s+no|no,?\s*gracias|omitir|ignorar|[×✕x])\b|\b(close|cerrar|dismiss|ignorar)\s+(dialog|di[aá]logo|popup|ventana|modal|banner)|ignorar informaci[oó]n/i;
+  /^\s*(close|dismiss|no,?\s*thanks|not\s+now|maybe\s+later|skip|cerrar|ahora\s+no|no,?\s*gracias|omitir|ignorar|x)\b|^\s*[×✕]|\b(close|cerrar|dismiss|ignorar)\s+(dialog|di[aá]logo|popup|ventana|modal|banner)|ignorar informaci[oó]n/i;
 
 export interface BlockerFound {
   kind: 'consent' | 'dialog';
@@ -123,7 +123,9 @@ async function locateBlocker(
       }
       const candidates = [
         ...vendor.flatMap((selector) => [...document.querySelectorAll(selector)]),
-        ...dialogs,
+        // Only popups that read as consent: mid-journey, an "Add insurance? Decline"
+        // popup is the navigator's choice, never a cookie banner to refuse.
+        ...dialogs.filter(consentLike),
         ...[...document.querySelectorAll('div,section,aside,form')].filter((element) => {
           const position = getComputedStyle(element).position;
           return (position === 'fixed' || position === 'sticky') && consentLike(element);

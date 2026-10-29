@@ -3,8 +3,10 @@ import { digest } from './store.js';
 
 /**
  * Real websites rotate promotions, tick counters and swap banner copy while
- * nobody touches them. Those changes must not stop a keyboard walk, but a
- * popup opening or closing, a new document, moved focus or scroll always do.
+ * nobody touches them. Those changes must not stop a keyboard walk, but a new
+ * document, moved focus or scroll always do, and so does a popup opening or
+ * closing when it is marked as one (dialog, alertdialog, aria-modal, or a known
+ * consent banner). An unmarked overlay is ordinary content to these checks.
  */
 export const CONTENT_DRIFT = { minimumLines: 12, share: 0.05 } as const;
 
@@ -30,6 +32,8 @@ export function ariaDifference(before: string, after: string) {
 export function contentSettled(before: unknown, after: unknown) {
   if (typeof before !== 'string' || typeof after !== 'string') return false;
   if (before === after) return true;
+  // A snapshot taken before the page rendered anything describes no page at all.
+  if (!before.trim() || !after.trim()) return false;
   const changed = ariaDifference(before, after);
   if (changed.some((line) => dialogLine.test(line))) return false;
   const lines = Math.max(before.split('\n').length, after.split('\n').length);
