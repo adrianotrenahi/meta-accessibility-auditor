@@ -1,4 +1,5 @@
 import { exportHostSamAssociation } from './host-sam.js';
+import { exportScreenState } from './screen-state.js';
 import { digest, type Store } from './store.js';
 import { hostSnapshotSchema } from './host-contract.js';
 import { exportKeyboardEvidence } from './keyboard-evidence.js';
@@ -23,8 +24,15 @@ export function exportHostSnapshot(store: Store, runId: string) {
         `Original screenshot ${record.id} is unavailable or failed its integrity check; findings using it are withheld.`,
       );
     }
+    const screenState = exportScreenState(record, originals);
     return {
       id: record.id,
+      ...(screenState
+        ? {
+            recordHash: record.hash,
+            screenState,
+          }
+        : {}),
       imageAvailable: !unavailable.has(record.id),
       sequence: record.seq,
       imageHash: c.imageHash,

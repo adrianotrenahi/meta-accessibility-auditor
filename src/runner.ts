@@ -503,7 +503,10 @@ export class Runner {
               signal,
               (before, key, guard) => this.targetKeyboardStep(run, walk, before, key, guard),
             );
-            current = traversed.current;
+            current =
+              traversed.current.kind === 'capture'
+                ? traversed.current
+                : await walk.captureSettled();
           } catch (error) {
             if (!(error instanceof ActionStateChanged)) throw error;
             this.store.append(
@@ -683,6 +686,20 @@ export class Runner {
     action: Action,
     expectedTarget?: () => Promise<boolean>,
   ) {
+    const focusMovement =
+      action.kind === 'press' &&
+      ['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.key ?? '');
+    if (focusMovement) {
+      try {
+        const performed = await walk.act(action, before, expectedTarget);
+        return { current: await walk.observeKeyboardMovement(before, performed), performed };
+      } catch (error) {
+        if (!(error instanceof ActionStateChanged)) throw error;
+        return { current: await walk.captureSettled() };
+      }
+    }
+    // Lightweight focus facts never stand in for a fresh activation image.
+    if (before.kind !== 'capture') before = await walk.captureSettled();
     let beforeContext: RecordEntry | undefined;
     try {
       beforeContext = await readJourneyContext(walk, before);
