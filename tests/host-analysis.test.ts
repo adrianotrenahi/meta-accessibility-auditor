@@ -2,7 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { exportHostAnalysis } from '../src/host-analysis.js';
 import { applyHostSnapshot, hostSnapshotSchema } from '../src/host-contract.js';
-import { digest } from '../src/store.js';
+import { digest, Store } from '../src/store.js';
+import { exportHostSnapshot } from '../src/host-export.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { RecordEntry } from '../src/types.js';
 
 function fixture() {
@@ -208,4 +212,68 @@ test('Host readers reject foreign/missing-original, duplicate, offline or rewrit
   changed.analysis!.completed[0].recordHash = 'b'.repeat(64);
   assert.throws(() => applyHostSnapshot(original, changed), /cannot be rewritten/);
   assert.equal(applyHostSnapshot(original, original), original);
+});
+
+test('A newer snapshot cannot silently lose a previously accepted completion receipt', () => {
+  const original = snapshot();
+  for (const omitField of [false, true]) {
+    const next = structuredClone(original);
+    next.sequence++;
+    if (omitField) delete next.analysis;
+    else next.analysis!.completed = [];
+    assert.throws(() => applyHostSnapshot(original, next), /cannot be rewritten|cannot be removed/);
+  }
+});
+
+test('The actual host export retains all capture rows, including unpublished unstable and unavailable originals', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'recorded-analysis-export-'));
+  const store = new Store(dir);
+  try {
+    const run = store.create(
+      'Controlled export fixture only',
+      'https://controlled.example/',
+      'live',
+    );
+    const asset = store.asset(run.id, 'original.png', Buffer.from('controlled original bytes'));
+    const payload = {
+      imageFile: asset.file,
+      imageHash: asset.hash,
+      width: 1440,
+      height: 900,
+      url: run.url,
+      title: 'Controlled export',
+      stable: true,
+      elements: [],
+    };
+    const capture = store.append(run.id, 'capture', 'browser', payload);
+    const { read } = store.snapshot(run.id, 'analyst');
+    store.append(run.id, 'model_response', 'analyst', {
+      status: 'completed',
+      requestId: 'controlled-request',
+      readSnapshotId: read.id,
+      readSnapshotHash: read.hash,
+      output: 'Saved controlled test value; no model call',
+    });
+    store.db
+      .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
+      .run('controlled-request', run.id, 'analyst', 10, 10, 'completed', run.createdAt);
+    const unavailable = store.append(run.id, 'capture', 'browser', {
+      ...payload,
+      stable: false,
+      imageFile: 'missing.png',
+      imageHash: 'b'.repeat(64),
+    });
+    const exported = exportHostSnapshot(store, run.id).snapshot;
+    assert.equal(exported.findings.length, 0);
+    assert.deepEqual(
+      exported.captures.map((row) => row.id),
+      [capture.id, unavailable.id],
+    );
+    assert.equal(exported.captures[1].stable, false);
+    assert.equal(exported.captures[1].imageAvailable, false);
+    assert.deepEqual(exported.analysis!.completed[0].captureIds, [capture.id]);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

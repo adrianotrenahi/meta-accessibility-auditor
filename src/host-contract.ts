@@ -248,8 +248,8 @@ export function applyHostSnapshot(
   }
   for (const previous of current.analysis?.completed ?? []) {
     const retained = next.analysis?.completed.find((row) => row.id === previous.id);
-    if (retained && JSON.stringify(retained) !== JSON.stringify(previous))
-      throw Error('A retained completed analysis receipt cannot be rewritten.');
+    if (!retained || JSON.stringify(retained) !== JSON.stringify(previous))
+      throw Error('A retained completed analysis receipt cannot be rewritten or removed.');
   }
   return next;
 }
