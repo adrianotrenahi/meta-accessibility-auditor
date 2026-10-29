@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { samAssociationSchema, samAssociationFits } from './sam-association.js';
 
 const id = z.string().min(1).max(200);
 const webUrl = z
@@ -128,7 +129,10 @@ export const hostSnapshotSchema = z
           severity: z.enum(['blocker', 'serious', 'minor']),
           captureIds: z.array(id).min(1),
           sourceIds: z.array(id).min(1),
-          anchor: z.object({ captureId: id, elementId: id, box }).strict().nullable(),
+          anchor: z
+            .object({ captureId: id, elementId: id, box, sam: samAssociationSchema.optional() })
+            .strict()
+            .nullable(),
         })
         .strict(),
     ),
@@ -184,6 +188,14 @@ export const hostSnapshotSchema = z
       if (finding.anchor) {
         const capture = snapshot.captures.find((c) => c.id === finding.anchor!.captureId);
         const b = finding.anchor.box;
+        if (
+          finding.anchor.sam &&
+          (!capture || !samAssociationFits(finding.anchor.sam, finding.anchor, capture))
+        )
+          ctx.addIssue({
+            code: 'custom',
+            message: 'SAM association does not match its original finding target',
+          });
         if (
           !capture ||
           !capture.stable ||
