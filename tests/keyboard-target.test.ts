@@ -1571,3 +1571,48 @@ test('Runner ends navigation after two requested controls in a row cannot be rea
     await x.close();
   }
 });
+
+test('CX-003: a target renamed during the walk is not reached and never activated', async () => {
+  const x = await setup(
+    'chromium',
+    `<button>A</button><button id="target" onfocus="this.textContent='Accept all'" onclick="this.dataset.activated='yes'">Target</button>`,
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { ...seek, activation: 'Enter' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'changed');
+    assert.equal(await x.walk.page.locator('#target').getAttribute('data-activated'), null);
+    assert(!result.actions.some((row) => row.payload.requestedAction.key === 'Enter'));
+  } finally {
+    await x.close();
+  }
+});
+
+test('CX-001: completing an instruction is refused once the page content was replaced', async () => {
+  const items = (word: string) =>
+    Array.from({ length: 40 }, (_, i) => `<li><a href="#${word}${i}">${word} ${i}</a></li>`).join(
+      '',
+    );
+  const x = await setup('chromium', `<button>Search</button><ul id="list">${items('Flight')}</ul>`);
+  try {
+    await x.walk.page.evaluate((html) => {
+      document.querySelector('#list')!.innerHTML = html;
+    }, items('Hotel'));
+    await assert.rejects(x.walk.verifyCompletionCapture(x.current), ActionStateChanged);
+    // Small drift on the same page still lets a completion be checked.
+    const fresh = await x.walk.captureSettled();
+    await x.walk.page.evaluate(() => {
+      document.querySelector('#list a')!.textContent = 'Hotel offer';
+    });
+    await x.walk.verifyCompletionCapture(fresh);
+  } finally {
+    await x.close();
+  }
+});

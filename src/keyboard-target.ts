@@ -187,6 +187,8 @@ export async function walkToKeyboardTarget(
     await readTarget(() => walk.verifyOriginalCapture(start));
     const epoch = await readTarget(() => walk.page.evaluate(() => performance.timeOrigin));
     let target: Locator | undefined;
+    // The role and exact name the decision chose; rechecked when the walk arrives.
+    let chosenMeaning: Locator | undefined;
     let listedHandle: ElementHandle<HTMLElement | SVGElement> | null = null;
     if (decision.targetId) {
       const matches = start.payload.elements.filter(
@@ -204,6 +206,7 @@ export async function walkToKeyboardTarget(
           'This target has no unique supported keyboard name. No input was sent.',
         );
       const semantic = walk.page.getByRole(info.role, { name: info.name, exact: true });
+      chosenMeaning = semantic;
       if (typeof start.payload.stampToken === 'string') {
         // The exact element this original listed, even when its name is repeated
         // (eDreams shows two "Where from?" fields). It must still be on the page and
@@ -261,6 +264,7 @@ export async function walkToKeyboardTarget(
           'A keyboard target needs an exact name and role from the current page. No input was sent.',
         );
       target = walk.page.getByRole(decision.targetRole, { name: decision.targetName, exact: true });
+      chosenMeaning = target;
     }
     if (
       (target && (await readTarget(() => target!.count())) !== 1) ||
@@ -411,6 +415,16 @@ export async function walkToKeyboardTarget(
           'The original keyboard target changed during traversal. A fresh decision is needed; no target was activated.',
         );
       if (await focused()) {
+        // A focus handler may rename the control during the walk ("Reject" becoming
+        // "Accept"); arriving at the same element is not arriving at the chosen control.
+        const stillChosen = await readTarget(() =>
+          chosenMeaning!.evaluateAll((elements, other) => elements.includes(other), handle),
+        ).catch(() => false);
+        if (!stillChosen)
+          return stop(
+            'changed',
+            "The chosen control's name or role changed during the walk. No activation was sent; a fresh decision is needed.",
+          );
         if (decision.activation) {
           if (
             !arrow &&

@@ -110,10 +110,12 @@ export function exportHostActivity(records: RecordEntry[], runId: string, runnin
                 ? `${what}: Tab reached "${p.control?.name}" after ${presses}.`
                 : `${what}: Tab did not reach "${p.control?.name}" in ${presses}.`) +
               (p.choice === 'accept_only_offered'
-                ? ' No one-click refusal was offered, so the robot accepted to continue.'
+                ? ' No one-click refusal was offered, so the robot will try accepting to continue.'
                 : '')
             : p.test === 'activate'
-              ? `${what}: ${p.cleared ? 'dismissed' : 'still shown after activation'}.`
+              ? p.choice === 'accept_only_offered'
+                ? `${what}: ${p.cleared ? 'accepted to continue; dismissed' : 'accepted; still shown'}.`
+                : `${what}: ${p.cleared ? 'dismissed' : 'still shown after activation'}.`
               : typeof p.reason === 'string'
                 ? `${what}: ${p.reason}`
                 : undefined;

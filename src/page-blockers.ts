@@ -53,9 +53,20 @@ async function locateBlocker(
           style.opacity !== '0'
         );
       };
-      const label = (element: Element) =>
-        (
+      // aria-labelledby, aria-label, an input button's value, its text, then title.
+      const label = (element: Element) => {
+        const labelledBy = (element.getAttribute('aria-labelledby') ?? '')
+          .split(/\s+/)
+          .map((id) => (id ? document.getElementById(id)?.textContent : '') ?? '')
+          .join(' ');
+        const input =
+          element instanceof HTMLInputElement && ['button', 'submit'].includes(element.type)
+            ? element.value
+            : '';
+        return (
+          labelledBy.trim() ||
           element.getAttribute('aria-label') ||
+          input ||
           (element as HTMLElement).innerText ||
           element.getAttribute('title') ||
           ''
@@ -63,6 +74,7 @@ async function locateBlocker(
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 120);
+      };
       const controls = (container: Element) =>
         [
           ...container.querySelectorAll(
@@ -294,7 +306,13 @@ export async function clearPageBlockers(
       }
       await press('Enter', async () => (await focusIs(walk, key)).control);
       const cleared = !(await stillOpen(walk, key));
-      note({ blocker: blocker.kind, name: blocker.name, test: 'activate', cleared });
+      note({
+        blocker: blocker.kind,
+        name: blocker.name,
+        choice: blocker.choice,
+        test: 'activate',
+        cleared,
+      });
       if (!cleared) break;
       dismissed = true;
     }

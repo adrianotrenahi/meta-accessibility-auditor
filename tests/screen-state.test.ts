@@ -458,3 +458,18 @@ test('State grouping refuses foreign, later, changed or unsupported original lin
   assert.equal(verifiedScreenState(evidence, [evidence]), undefined);
   assert.equal(verifiedScreenState(evidence, [primary, primary, evidence]), undefined);
 });
+
+test('CX-002: a facts-only Tab records how far the page drifted from its earlier picture', async () => {
+  const x = await setup(
+    'chromium',
+    '<style>@keyframes s{to{transform:rotate(1turn)}}.s{width:9px;height:9px;animation:s 1s infinite}</style><div class="s"></div>' +
+      '<p id="note">Offer A</p><button onfocus="document.querySelector(\'#note\').textContent=\'Offer B\'">A</button><button id="target">Target</button>',
+  );
+  try {
+    const next = await x.step(x.current, { kind: 'press', key: 'Tab', note: 'Tab' });
+    assert.equal(next.current.kind, 'observation');
+    assert.equal(next.current.payload.contentDrift.changedLines, 2);
+  } finally {
+    await x.close();
+  }
+});

@@ -628,8 +628,9 @@ export class BrowserWalk {
     // A complete rendered fingerprint keeps the final say: any visible change after
     // the key takes a real original. Most commercial pages animate something, so
     // that fingerprint is often unavailable; then the original's document, address,
-    // scroll and dialogs must match and its accessibility snapshot must be identical.
-    // Drift is tolerated before a key, never as a consequence of one.
+    // scroll and dialogs must match, and the accessibility snapshot may differ only
+    // within the bounded drift (page-state/1, owner decision 29 October). A larger
+    // change takes a real original; the drift that remains is recorded below.
     const sameScreen = !!fingerprint && !!previous && fingerprint === previous;
     const samePage =
       (!fingerprint || !previous) &&
@@ -673,6 +674,13 @@ export class BrowserWalk {
           : {
               pageStamp: pageStamp(after),
               comparison: 'page-state-and-bounded-content-drift',
+              ...(after.aria !== original.payload.aria
+                ? {
+                    contentDrift: {
+                      changedLines: ariaDifference(original.payload.aria, after.aria).length,
+                    },
+                  }
+                : {}),
             }),
       },
       [source.id, performed.id],
@@ -733,6 +741,16 @@ export class BrowserWalk {
       throw new ActionStateChanged(
         'Page state changed; capture a fresh observation before acting.',
       );
+  }
+  /** Completing an instruction claims what its original shows, so a page whose
+   * content was replaced since (same address, scroll, popups and focus) refuses it.
+   * A page already known to keep changing is not refused for that drift alone. */
+  async verifyCompletionCapture(source: RecordEntry) {
+    await this.verifyOriginalCapture(source);
+    if (source.payload.contentDrift?.settled === false) return;
+    const state = await this.observedState();
+    if (!contentSettled(source.payload.aria, state.aria))
+      throw new ActionStateChanged('The page content changed; capture a fresh observation first.');
   }
   async act(action: Action, source: RecordEntry, expectedTarget?: () => Promise<boolean>) {
     if (source.kind === 'observation' && source.payload.method === 'keyboard_focus/1') {

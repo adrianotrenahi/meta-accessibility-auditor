@@ -609,7 +609,7 @@ export class Runner {
             continue;
           }
           try {
-            await walk.verifyOriginalCapture(current);
+            await walk.verifyCompletionCapture(current);
           } catch (error) {
             if (!(error instanceof ActionStateChanged)) throw error;
             this.store.append(

@@ -251,3 +251,45 @@ test('A visible search form after many hidden menu links is still listed for the
     assert.equal(field.id, 'e80', 'The id keeps the control position on the page.');
   });
 });
+
+test('CX-004: refusals named by an input value or aria-labelledby are found before acceptance', async () => {
+  for (const refusal of [
+    '<input type="button" data-choice="rejected" value="Reject all">',
+    '<span id="no">Reject all</span><button data-choice="rejected" aria-labelledby="no">×</button>',
+  ])
+    await withWalk(async (walk, app, runId) => {
+      await walk.page.setContent(
+        '<html lang="en"><body><h1>Home</h1><div id="onetrust-banner-sdk" style="position:fixed;bottom:0" aria-label="Cookie banner"><p>Cookies</p>' +
+          `<button data-choice="accepted">Accept all</button>${refusal}</div>` +
+          "<script>for(const b of document.querySelectorAll('[data-choice]'))b.onclick=()=>{document.body.dataset.consent=b.dataset.choice;document.querySelector('#onetrust-banner-sdk').remove()};</script></body></html>",
+      );
+      const start = await walk.captureSettled();
+      await clearPageBlockers(walk, app.store, runId, start, new AbortController().signal, {
+        arrival: true,
+      });
+      assert.equal(await walk.page.locator('body').getAttribute('data-consent'), 'rejected');
+      const reach = app.store
+        .records(runId)
+        .find((r: any) => r.payload.method === 'page_blocker/1' && r.payload.test === 'tab_reach');
+      assert.equal(reach.payload.choice, 'refuse');
+    });
+});
+
+test('CX-005: the feed never says cookies were accepted when the press was refused', async () => {
+  await withWalk(async (walk, app, runId) => {
+    await walk.page.setContent(
+      '<html lang="en"><body><h1>Home</h1><div id="onetrust-banner-sdk" style="position:fixed;bottom:0" aria-label="Cookie banner"><p>Cookies</p>' +
+        '<button onclick="document.body.dataset.consent=1">Accept and sign in</button></div></body></html>',
+    );
+    const start = await walk.captureSettled();
+    await clearPageBlockers(walk, app.store, runId, start, new AbortController().signal, {
+      arrival: true,
+    });
+    assert.equal(await walk.page.locator('body').getAttribute('data-consent'), null);
+    const feed = exportHostActivity(app.store.records(runId), runId, false).entries.map(
+      (entry) => entry.reason,
+    );
+    assert(feed.some((line) => /will try accepting/.test(line)));
+    assert(!feed.some((line) => /accepted/.test(line)), JSON.stringify(feed));
+  });
+});
