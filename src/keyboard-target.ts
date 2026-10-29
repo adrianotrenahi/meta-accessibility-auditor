@@ -325,7 +325,30 @@ export async function walkToKeyboardTarget(
     if (!(await focused())) {
       const prior = await memory.check(walk.page, handle);
       active();
-      if (prior.state === 'unknown') return stop('unavailable', prior.reason);
+      if (prior.state === 'unknown') {
+        const evidence = prior.evidence;
+        const first =
+          evidence &&
+          store
+            .records(runId)
+            .find(
+              (record) =>
+                record.kind === 'limit' && record.payload.cycleEvidence?.id === evidence.id,
+            );
+        return stop(
+          'unavailable',
+          prior.reason,
+          evidence
+            ? {
+                previousCycleId: first?.id ?? null,
+                cycleSourceId: evidence.sourceId,
+                cycleSourceKind: evidence.sourceKind,
+                cycleEvidence: evidence,
+              }
+            : {},
+          first ? [first.id] : evidence ? [evidence.sourceId] : [],
+        );
+      }
       if (prior.state === 'blocked') {
         const first = store
           .records(runId)

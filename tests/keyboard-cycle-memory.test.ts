@@ -14,7 +14,7 @@ import {
 import { Runner } from '../src/runner.js';
 import { VoiceOverProbe } from '../src/voiceover.js';
 import type { Action } from '../src/models.js';
-import type { RecordEntry } from '../src/types.js';
+import { LIMITS, type RecordEntry } from '../src/types.js';
 import type { Page, ElementHandle } from 'playwright';
 
 test('Page closure during context revalidation cannot return an allowed traversal', async () => {
@@ -30,6 +30,41 @@ test('Page closure during context revalidation cannot return an allowed traversa
   const memory = new KeyboardCycleMemory();
   try {
     assert.equal((await memory.check(page, {} as ElementHandle)).state, 'unknown');
+  } finally {
+    await memory.close();
+  }
+});
+
+test('A failed-read fence survives another page and clears only for its own new document', async () => {
+  let epoch = 1000;
+  const page = (read: () => number) =>
+    ({ isClosed: () => false, once() {}, evaluate: async () => read() }) as unknown as Page;
+  const first = page(() => epoch),
+    other = page(() => 2000);
+  const unread = {
+    evaluateHandle: async () => {
+      throw Error('Controlled unreadable target');
+    },
+  } as unknown as ElementHandle;
+  const memory = new KeyboardCycleMemory();
+  try {
+    assert.equal(
+      await memory.remember({
+        page: first,
+        target: unread,
+        participants: [{ handle: unread, role: 'button', name: 'Synthetic control' }],
+        sourceId: 'synthetic-source',
+        sourceKind: 'capture',
+        actionIds: [],
+        redact: (value) => value,
+      }),
+      undefined,
+    );
+    assert.equal((await memory.check(first, unread)).state, 'unknown');
+    assert.equal((await memory.check(other, unread)).state, 'allow');
+    assert.equal((await memory.check(first, unread)).state, 'unknown');
+    epoch++;
+    assert.equal((await memory.check(first, unread)).state, 'allow');
   } finally {
     await memory.close();
   }
@@ -252,6 +287,244 @@ test('The same target node can be retried after an observed focusability change'
   }
 });
 
+for (const context of ['mixed dialogs', 'over-sized dialog'] as const)
+  test(`An unsupported ${context} cycle refuses unchanged input but permits a real dismissal`, async () => {
+    const x = await fixture();
+    try {
+      if (context === 'mixed dialogs')
+        await x.walk.page.locator('#signin').evaluate((element) => document.body.append(element));
+      else
+        await x.walk.page.locator('#offer').evaluate((element) => {
+          for (let i = 0; i < 61; i++) {
+            const button = document.createElement('button');
+            button.textContent = `Additional control ${i}`;
+            element.append(button);
+          }
+        });
+      await x.fresh();
+      const first = await x.macro();
+      assert.equal(first.outcome, 'cycle');
+      assert.equal(first.actions.length, 2);
+      const originalCycle = x.app.store
+        .records(x.run.id)
+        .filter((record) => record.kind === 'limit')
+        .at(-1)!;
+      await x.walk.page.locator('#clock').evaluate((element) => {
+        element.textContent = 'Clock2';
+      });
+      await x.fresh();
+      const actions = x.walk.actions,
+        pictures = x.pictures();
+      const unchanged = await x.macro({
+        ...seek,
+        traversalKey: 'Shift+Tab',
+        note: 'Reworded same target.',
+      });
+      assert.equal(unchanged.outcome, 'unavailable');
+      assert.equal(unchanged.actions.length, 0);
+      assert.equal(x.walk.actions, actions);
+      assert.equal(x.pictures(), pictures);
+      const refusal = x.app.store
+        .records(x.run.id)
+        .filter((record) => record.kind === 'limit')
+        .at(-1)!;
+      assert.equal(refusal.payload.previousCycleId, originalCycle.id);
+      assert(refusal.sources.includes(originalCycle.id));
+      await x.press('Enter');
+      assert.equal(await x.walk.page.locator('#offer').count(), 0);
+      const afterDismissal = await x.macro();
+      assert.equal(afterDismissal.outcome, 'reached');
+      assert(afterDismissal.actions.length > 0);
+      assert.equal((await x.walk.focus()).name, seek.targetName);
+    } finally {
+      await x.close();
+    }
+  });
+
+test('A new document releases a known unsupported context and its retained references', async () => {
+  const x = await fixture();
+  try {
+    await x.walk.page.locator('#signin').evaluate((element) => document.body.append(element));
+    await x.fresh();
+    assert.equal((await x.macro()).outcome, 'cycle');
+    const memory = keyboardCycleMemory(x.walk) as any;
+    const retained = [...memory.entries[0].owned];
+    await x.walk.page.goto(x.run.url);
+    await x.walk.page.setContent(html);
+    await x.fresh();
+    const retry = await x.macro();
+    assert.equal(retry.outcome, 'cycle');
+    assert.equal(retry.actions.length, 2);
+    for (const handle of retained as any[]) await assert.rejects(handle.evaluate(() => true));
+    assert.equal(memory.entries.length, 1);
+    assert.equal(memory.entries[0].revalidation, 'complete');
+  } finally {
+    await x.close();
+  }
+});
+
+test('A failed minimum context read permits recovery only after a verified new document', async (t) => {
+  const x = await fixture();
+  try {
+    const memory = keyboardCycleMemory(x.walk) as any;
+    const failedRead = t.mock.method(memory, 'scope', async () => {
+      throw Error('Controlled unreadable minimum context');
+    });
+    assert.equal((await x.macro()).outcome, 'cycle');
+    failedRead.mock.restore();
+    await x.fresh();
+    const unchanged = await x.macro();
+    assert.equal(unchanged.outcome, 'unavailable');
+    assert.equal(unchanged.actions.length, 0);
+    await x.walk.page.goto(x.run.url);
+    await x.walk.page.setContent(html);
+    await x.fresh();
+    const actions = x.walk.actions;
+    const unknown = await x.macro();
+    assert.equal(unknown.outcome, 'cycle');
+    assert.equal(unknown.actions.length, 2);
+    assert.equal(x.walk.actions, actions + 2);
+  } finally {
+    await x.close();
+  }
+});
+
+test('An unknown document epoch during retention remains globally unknown after navigation', async (t) => {
+  const x = await fixture();
+  try {
+    const memory = keyboardCycleMemory(x.walk) as any;
+    const original = memory.remember.bind(memory);
+    const failure = t.mock.method(memory, 'remember', async (input: any) => {
+      const failedEpoch = t.mock.method(input.page, 'evaluate', async () => {
+        throw Error('Controlled unreadable epoch');
+      });
+      try {
+        return await original(input);
+      } finally {
+        failedEpoch.mock.restore();
+      }
+    });
+    assert.equal((await x.macro()).outcome, 'cycle');
+    failure.mock.restore();
+    await x.walk.page.goto(x.run.url);
+    await x.walk.page.setContent(html);
+    await x.fresh();
+    const actions = x.walk.actions;
+    const unknown = await x.macro();
+    assert.equal(unknown.outcome, 'unavailable');
+    assert.equal(unknown.actions.length, 0);
+    assert.equal(x.walk.actions, actions);
+  } finally {
+    await x.close();
+  }
+});
+
+test('A positively read participant becoming disabled during retention allows a fresh decision', async (t) => {
+  const x = await fixture();
+  try {
+    const memory = keyboardCycleMemory(x.walk) as any;
+    const original = memory.member.bind(memory);
+    let changed = false;
+    const mutation = t.mock.method(memory, 'member', async (...args: any[]) => {
+      if (!args[3] && !changed) {
+        changed = true;
+        await x.walk.page.locator('#signin').evaluate((element) => {
+          (element as HTMLButtonElement).disabled = true;
+        });
+      }
+      return original(...args);
+    });
+    assert.equal((await x.macro()).outcome, 'cycle');
+    mutation.mock.restore();
+    await x.fresh();
+    await x.press('Escape');
+    assert.equal((await x.macro()).outcome, 'reached');
+  } finally {
+    await x.close();
+  }
+});
+
+test('A positively read dialog closing during retention allows a fresh decision', async (t) => {
+  const x = await fixture();
+  try {
+    const memory = keyboardCycleMemory(x.walk) as any;
+    const original = memory.scope.bind(memory);
+    let changed = false;
+    const mutation = t.mock.method(memory, 'scope', async (...args: any[]) => {
+      if (!changed) {
+        changed = true;
+        await x.walk.page.locator('#offer').evaluate((element) => {
+          (element.querySelector('#close') as HTMLButtonElement).click();
+        });
+      }
+      return original(...args);
+    });
+    assert.equal((await x.macro()).outcome, 'cycle');
+    mutation.mock.restore();
+    await x.fresh();
+    assert.equal(await x.walk.page.locator('#offer').count(), 0);
+    assert.equal((await x.macro()).outcome, 'reached');
+  } finally {
+    await x.close();
+  }
+});
+
+test('A failed unsupported-context cleanup cannot admit a fresh traversal', async (t) => {
+  const x = await fixture();
+  try {
+    await x.walk.page.locator('#signin').evaluate((element) => document.body.append(element));
+    await x.fresh();
+    await x.macro();
+    const memory = keyboardCycleMemory(x.walk) as any;
+    const retained = [...memory.entries[0].owned] as any[];
+    const failedCleanup = t.mock.method(retained[0], 'dispose', async () => {
+      throw Error('Controlled failed cleanup');
+    });
+    await x.press('Enter');
+    const actions = x.walk.actions;
+    const unknown = await x.macro();
+    assert.equal(unknown.outcome, 'unavailable');
+    assert.equal(unknown.actions.length, 0);
+    assert.equal(x.walk.actions, actions);
+    failedCleanup.mock.restore();
+    await x.walk.page.goto(x.run.url);
+    await x.walk.page.setContent(html);
+    await x.fresh();
+    const later = await x.macro();
+    assert.equal(later.outcome, 'unavailable');
+    assert.equal(later.actions.length, 0);
+  } finally {
+    await x.close();
+  }
+});
+
+test('A native radio checked-property change releases the now-reachable target', async () => {
+  const x = await fixture();
+  try {
+    await x.walk.page.setContent(
+      '<!doctype html><button id="before">Before</button><label><input id="first" type="radio" name="choice" checked aria-label="First">First</label><label><input id="target" type="radio" name="choice" aria-label="Target">Target</label><button id="after">After</button><script>document.getElementById("before").focus();</script>',
+    );
+    await x.fresh();
+    const decision: Action = { ...seek, targetRole: 'radio', targetName: 'Target' };
+    const first = await x.macro(decision);
+    assert.equal(first.outcome, 'cycle');
+    const before = await x.walk.page.locator('body').innerHTML();
+    assert.equal((await x.walk.focus()).name, 'Before');
+    await x.walk.page.locator('#target').evaluate((element) => {
+      (element as HTMLInputElement).checked = true;
+    });
+    assert.equal(await x.walk.page.locator('body').innerHTML(), before);
+    assert.equal((await x.walk.focus()).name, 'Before');
+    await x.fresh();
+    const changed = await x.macro(decision);
+    assert.equal(changed.outcome, 'reached');
+    assert.equal(changed.actions.length, 1);
+    assert.equal((await x.walk.focus()).name, 'Target');
+  } finally {
+    await x.close();
+  }
+});
+
 test('Cycle names omit actual typed values and link queries', async () => {
   const x = await fixture();
   try {
@@ -381,7 +654,15 @@ test('Retained handle capacity refuses overflow and releases every owned referen
     const retained = memory.entries.flatMap((entry: any) => [...entry.owned]);
     assert.equal(await memory.remember(input), undefined);
     assert.equal(memory.entries.length, MAX_CYCLE_MEMORIES);
-    assert.equal((await memory.check(x.walk.page, target)).state, 'unknown');
+    assert.equal(MAX_CYCLE_MEMORIES, LIMITS.driver);
+    assert.equal((await memory.check(x.walk.page, target)).state, 'blocked');
+    const unrelated = await x.walk.page.locator('#outside').elementHandle();
+    assert(unrelated);
+    const limit = await memory.check(x.walk.page, unrelated);
+    assert.equal(limit.state, 'unknown');
+    assert.match(limit.reason, /memory is full/);
+    assert.equal(memory.uncertain, false);
+    await unrelated.dispose();
     await memory.close();
     assert.equal(memory.entries.length, 0);
     for (const handle of retained) await assert.rejects(handle.evaluate(() => true));

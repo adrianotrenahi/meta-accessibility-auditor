@@ -1,8 +1,9 @@
 import type { ElementHandle, Page, JSHandle } from 'playwright';
 import { createHash, randomUUID } from 'node:crypto';
 import { safeError } from './config.js';
+import { LIMITS } from './types.js';
 
-export const MAX_CYCLE_MEMORIES = 20;
+export const MAX_CYCLE_MEMORIES = LIMITS.driver;
 export const MAX_CYCLE_MEMBERS = 60;
 const dialog = 'dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"]';
 const controls =
@@ -11,7 +12,12 @@ const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(valu
 const same = (a: ElementHandle, b: ElementHandle) =>
   a.evaluate((element, other) => element === other, b);
 type Member = { handle: ElementHandle; state: string };
-type Scope = { handle: ElementHandle; state: string; members: Member[] } | null;
+type Scope = {
+  handle: ElementHandle;
+  state: string;
+  snapshot: 'complete' | 'identity-only' | 'overflow';
+  members: Member[];
+} | null;
 export type CycleEvidence = {
   version: 'keyboard-cycle/1';
   id: string;
@@ -26,8 +32,9 @@ type Entry = {
   epoch: number;
   target: Member;
   participants: Member[];
-  blocker: Scope;
+  participantScopes: Scope[];
   targetScope: Scope;
+  revalidation: 'complete' | 'unsupported-context';
   owned: Set<JSHandle>;
   redact: (value: string) => string;
   evidence: CycleEvidence;
@@ -35,7 +42,8 @@ type Entry = {
 type Decision =
   | { state: 'allow' }
   | { state: 'blocked'; evidence: CycleEvidence }
-  | { state: 'unknown'; reason: string };
+  | { state: 'unknown'; reason: string; evidence?: CycleEvidence };
+class ObservedContextChanged extends Error {}
 
 /** Actual node identity survives a new capture or model decision. This memory
  * permits no input, and is never evidence of a website keyboard barrier. */
@@ -46,6 +54,7 @@ export class KeyboardCycleMemory {
   private closed = false;
   private closing?: Promise<void>;
   private uncertain = false;
+  private unreadDocuments = new Map<Page, number>();
   private pending = new Set<Promise<unknown>>();
   get isClosed() {
     return this.closed;
@@ -63,6 +72,7 @@ export class KeyboardCycleMemory {
       this.watched.add(page);
       page.once('close', () => {
         this.closedPages.add(page);
+        this.unreadDocuments.delete(page);
         const work = this.remove(this.entries.filter((entry) => entry.page === page));
         this.pending.add(work);
         void work.finally(() => this.pending.delete(work));
@@ -100,6 +110,14 @@ export class KeyboardCycleMemory {
         open: element.tagName === 'DIALOG' ? (element as HTMLDialogElement).open : null,
         expanded: element.getAttribute('aria-expanded'),
         checked: element.getAttribute('aria-checked'),
+        nativeChecked:
+          element instanceof HTMLInputElement && ['checkbox', 'radio'].includes(element.type)
+            ? element.checked
+            : null,
+        nativeIndeterminate:
+          element instanceof HTMLInputElement && element.type === 'checkbox'
+            ? element.indeterminate
+            : null,
         selected: element.getAttribute('aria-selected'),
         label: element.getAttribute('aria-label') ?? '',
         text:
@@ -134,13 +152,36 @@ export class KeyboardCycleMemory {
     const copy = await this.clone(handle, owned);
     const facts = await this.state(copy, redact);
     if (!(target ? facts.connected : facts.usable))
-      throw Error('An observed keyboard node is no longer available.');
+      throw new ObservedContextChanged('An observed keyboard node is no longer available.');
     return { handle: copy, state: facts.state };
+  }
+  private async children(parent: ElementHandle, owned: Set<JSHandle>) {
+    const list = await parent.evaluateHandle(
+      (element, { selector, limit }) => {
+        if (!(element instanceof Element)) throw Error('The dialog is not an element.');
+        const nodes = element.querySelectorAll(selector);
+        return Array.from({ length: Math.min(nodes.length, limit + 1) }, (_, i) => nodes[i]!);
+      },
+      { selector: controls, limit: MAX_CYCLE_MEMBERS },
+    );
+    owned.add(list);
+    const properties = await list.getProperties();
+    const children: ElementHandle[] = [];
+    for (const [key, value] of properties) {
+      owned.add(value);
+      if (/^\d+$/.test(key)) {
+        const element = value.asElement();
+        if (!element) throw Error('A dialog control could not be read.');
+        children.push(element);
+      }
+    }
+    return children;
   }
   private async scope(
     handle: ElementHandle,
     owned: Set<JSHandle>,
     redact: (value: string) => string,
+    readMembers = true,
   ): Promise<Scope> {
     const raw = await handle.evaluateHandle(
       (element, selector) => (element as Element).closest(selector),
@@ -150,17 +191,22 @@ export class KeyboardCycleMemory {
     const parent = raw.asElement();
     if (!parent) return null;
     const facts = await this.state(parent, redact);
-    if (!facts.connected) throw Error('The observed dialog is no longer available.');
+    if (!facts.connected)
+      throw new ObservedContextChanged('The observed dialog is no longer available.');
+    // An unsupported full context still has actual node/state evidence. Keep
+    // that local refusal until a positive relevant change, rather than making
+    // this entire walk permanently uncertain.
+    if (!readMembers)
+      return { handle: parent, state: facts.state, snapshot: 'identity-only', members: [] };
     const members: Member[] = [];
-    const children = await parent.$$(controls);
-    for (const child of children) owned.add(child);
+    const children = await this.children(parent, owned);
     if (children.length > MAX_CYCLE_MEMBERS)
-      throw Error('The observed dialog exceeds the bounded context read.');
+      return { handle: parent, state: facts.state, snapshot: 'overflow', members: [] };
     for (const child of children) {
       const value = await this.state(child, redact);
       if (value.usable) members.push({ handle: child, state: value.state });
     }
-    return { handle: parent, state: facts.state, members };
+    return { handle: parent, state: facts.state, snapshot: 'complete', members };
   }
   private async scopeUnchanged(
     scope: Scope,
@@ -175,10 +221,12 @@ export class KeyboardCycleMemory {
     if (!matches) return false;
     if (!scope || !readMembers) return true;
     if ((await this.state(scope.handle, redact)).state !== scope.state) return false;
-    const children = await scope.handle.$$(controls);
+    if (scope.snapshot === 'identity-only') return true;
+    const temporary = new Set<JSHandle>();
     try {
-      if (children.length > MAX_CYCLE_MEMBERS)
-        throw Error('The dialog context is unavailable within its bound.');
+      const children = await this.children(scope.handle, temporary);
+      if (scope.snapshot === 'overflow') return children.length > MAX_CYCLE_MEMBERS;
+      if (children.length > MAX_CYCLE_MEMBERS) return false;
       const visible: Member[] = [];
       for (const child of children) {
         const state = await this.state(child, redact);
@@ -193,10 +241,7 @@ export class KeyboardCycleMemory {
           return false;
       return true;
     } finally {
-      const disposed = await Promise.allSettled(
-        children.map((child) => Promise.resolve().then(() => child.dispose())),
-      );
-      if (disposed.some((value) => value.status === 'rejected')) this.uncertain = true;
+      await this.dispose(temporary);
     }
   }
   private async dispose(owned: Set<JSHandle>) {
@@ -222,6 +267,14 @@ export class KeyboardCycleMemory {
       };
     try {
       const epoch = await page.evaluate(() => performance.timeOrigin);
+      const unreadEpoch = this.unreadDocuments.get(page);
+      if (unreadEpoch !== undefined && unreadEpoch !== epoch) this.unreadDocuments.delete(page);
+      if (this.unreadDocuments.has(page))
+        return {
+          state: 'unknown',
+          reason:
+            'A minimum focus-cycle read failed in this document. A new capture alone cannot clear it; no traversal input was sent.',
+        };
       await this.remove(
         this.entries.filter((entry) => entry.page !== page || entry.epoch !== epoch),
       );
@@ -235,22 +288,23 @@ export class KeyboardCycleMemory {
         let unchanged = (await this.state(target, entry.redact)).state === entry.target.state;
         unchanged =
           (await this.scopeUnchanged(entry.targetScope, target, entry.redact)) && unchanged;
-        // The shared dialog is read once; each participant still checks its
-        // own actual node and nearest-dialog identity below.
-        if (entry.blocker)
-          unchanged =
-            (await this.scopeUnchanged(
-              entry.blocker,
-              entry.participants[0]!.handle,
-              entry.redact,
-            )) && unchanged;
-        for (const participant of entry.participants) {
+        // Each distinct observed scope is read once. Unsupported contexts
+        // retain only their complete bounded node/state observations.
+        const readScopes = new Set<Scope>();
+        for (let i = 0; i < entry.participants.length; i++) {
+          const participant = entry.participants[i]!,
+            scope = entry.participantScopes[i]!;
           unchanged =
             (await this.state(participant.handle, entry.redact)).state === participant.state &&
             unchanged;
           unchanged =
-            (await this.scopeUnchanged(entry.blocker, participant.handle, entry.redact, false)) &&
-            unchanged;
+            (await this.scopeUnchanged(
+              scope,
+              participant.handle,
+              entry.redact,
+              !readScopes.has(scope),
+            )) && unchanged;
+          readScopes.add(scope);
         }
         const activeHandle = await page.evaluateHandle(() => document.activeElement);
         try {
@@ -273,19 +327,27 @@ export class KeyboardCycleMemory {
         }
         if (this.closed || this.closedPages.has(page) || page.isClosed() || this.uncertain)
           throw Error('The cycle read ended without a current context.');
-        if (unchanged) return { state: 'blocked', evidence: entry.evidence };
+        if (unchanged)
+          return entry.revalidation === 'complete'
+            ? { state: 'blocked', evidence: entry.evidence }
+            : {
+                state: 'unknown',
+                reason:
+                  'The earlier focus cycle has an unsupported bounded dialog context. Its observed target, controls and dialog states remain unchanged; no traversal input was sent.',
+                evidence: entry.evidence,
+              };
         await this.remove([entry]);
         if (this.uncertain) throw Error('The changed cycle could not be released.');
         return { state: 'allow' };
       }
-      if (
-        this.closed ||
-        this.closedPages.has(page) ||
-        page.isClosed() ||
-        this.uncertain ||
-        this.entries.length >= MAX_CYCLE_MEMORIES
-      )
+      if (this.closed || this.closedPages.has(page) || page.isClosed() || this.uncertain)
         throw Error('The bounded focus-cycle memory is unavailable.');
+      if (this.entries.length + this.unreadDocuments.size >= MAX_CYCLE_MEMORIES)
+        return {
+          state: 'unknown',
+          reason:
+            'The bounded focus-cycle memory is full. Earlier target histories are retained; no further traversal input was sent.',
+        };
       return { state: 'allow' };
     } catch {
       return {
@@ -316,31 +378,41 @@ export class KeyboardCycleMemory {
     redact: (value: string) => string;
   }): Promise<CycleEvidence | undefined> {
     const owned = new Set<JSHandle>();
+    if (this.entries.length + this.unreadDocuments.size >= MAX_CYCLE_MEMORIES) return undefined;
+    let epoch: number | undefined;
     try {
       if (
         !this.watch(input.page) ||
         this.uncertain ||
-        this.entries.length >= MAX_CYCLE_MEMORIES ||
         !input.participants.length ||
         input.participants.length > 24
       )
         throw Error('The cycle cannot be retained safely.');
-      const epoch = await input.page.evaluate(() => performance.timeOrigin);
+      epoch = await input.page.evaluate(() => performance.timeOrigin);
       const target = await this.member(input.target, owned, input.redact, true);
       const participants: Member[] = [];
       for (const participant of input.participants)
         participants.push(await this.member(participant.handle, owned, input.redact));
       const blocker = await this.scope(participants[0]!.handle, owned, input.redact);
-      for (const participant of participants)
-        if (
-          !(await participant.handle.evaluate(
-            (element, { selector, expected }) =>
-              (element as Element).closest(selector) === expected,
-            { selector: dialog, expected: blocker?.handle ?? null },
-          ))
-        )
-          throw Error('The cycle did not establish one shared context.');
+      const participantScopes: Scope[] = [blocker];
+      let shared = true;
+      for (const participant of participants.slice(1)) {
+        const matches = await participant.handle.evaluate(
+          (element, { selector, expected }) => (element as Element).closest(selector) === expected,
+          { selector: dialog, expected: blocker?.handle ?? null },
+        );
+        participantScopes.push(
+          matches ? blocker : await this.scope(participant.handle, owned, input.redact, false),
+        );
+        shared = matches && shared;
+      }
       const targetScope = await this.scope(target.handle, owned, input.redact);
+      const revalidation =
+        shared &&
+        (!blocker || blocker.snapshot === 'complete') &&
+        (!targetScope || targetScope.snapshot === 'complete')
+          ? 'complete'
+          : 'unsupported-context';
       const evidence: CycleEvidence = {
         version: 'keyboard-cycle/1',
         id: randomUUID(),
@@ -352,13 +424,14 @@ export class KeyboardCycleMemory {
           name: this.label(participant.name, input.redact),
         })),
         context: {
-          kind: blocker ? 'observed-dialog' : 'no-shared-dialog',
-          targetOutside: blocker
-            ? !(await blocker.handle.evaluate(
-                (element, target) => element.contains(target),
-                target.handle,
-              ))
-            : null,
+          kind: shared && blocker ? 'observed-dialog' : 'no-shared-dialog',
+          targetOutside:
+            shared && blocker
+              ? !(await blocker.handle.evaluate(
+                  (element, target) => element.contains(target),
+                  target.handle,
+                ))
+              : null,
         },
       };
       if (
@@ -367,28 +440,39 @@ export class KeyboardCycleMemory {
         input.page.isClosed() ||
         (await input.page.evaluate(() => performance.timeOrigin)) !== epoch
       )
-        throw Error('The cycle changed while it was retained.');
+        throw new ObservedContextChanged('The cycle changed while it was retained.');
       this.entries.push({
         page: input.page,
         epoch,
         target,
         participants,
-        blocker,
+        participantScopes,
         targetScope,
+        revalidation,
         owned,
         redact: input.redact,
         evidence,
       });
       return evidence;
-    } catch {
-      this.uncertain = true;
+    } catch (error) {
       await this.dispose(owned);
+      if (
+        !this.closed &&
+        !this.closedPages.has(input.page) &&
+        !input.page.isClosed() &&
+        !this.uncertain &&
+        !(error instanceof ObservedContextChanged)
+      ) {
+        if (epoch !== undefined) this.unreadDocuments.set(input.page, epoch);
+        else this.uncertain = true;
+      }
       return undefined;
     }
   }
   close() {
     if (!this.closing) {
       this.closed = true;
+      this.unreadDocuments.clear();
       this.closing = (async () => {
         await this.remove([...this.entries]);
         await Promise.allSettled([...this.pending]);
