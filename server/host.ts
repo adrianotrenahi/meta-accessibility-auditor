@@ -1,11 +1,33 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
-import { digest, type Store } from '../src/store.js';
+import { digest, recordIsIntact, type Store } from '../src/store.js';
 import type { Runner } from '../src/runner.js';
 import { exportHostSnapshot } from '../src/host-export.js';
 import { assessmentForRun } from '../src/assessment.js';
 import { publicTarget, type PublicTarget } from '../src/public-target.js';
 import { probePublicWebsite } from '../src/public-network.js';
+import { publicDestination } from '../src/public-network.js';
+import { JourneyPlanner, journeyPlanView } from '../src/journey-planner.js';
+import { approvedJourneyPlanSchema } from '../src/journey-steps.js';
+import { approval } from '../src/config.js';
+import type { JourneyDraftBinding } from '../src/journey-drafts.js';
+
+const preparedPlanReference = z
+  .object({
+    draftId: z.uuid(),
+    ownerHash: z.string().regex(/^[a-f0-9]{64}$/),
+    planId: z.uuid(),
+    planHash: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+function draftBinding(
+  draftId: string,
+  ownerHash: string,
+  url: string,
+  goal: string,
+): JourneyDraftBinding {
+  return { draftId, ownerHash, url, goal, briefHash: digest(JSON.stringify({ url, goal })) };
+}
 
 export const HOST_GOAL = 'Add the canvas bag to the basket, stopping before any order.';
 /** Generic local host surface. It knows no private application components. */
@@ -20,6 +42,8 @@ export async function hostRequest(
     runner: Runner;
     mode?: 'offline' | 'live';
     publicWebsites?: boolean;
+    planner?: JourneyPlanner;
+    getApproval?: typeof approval;
     json: (res: ServerResponse, status: number, value: unknown) => void;
   },
 ) {
@@ -61,6 +85,67 @@ export async function hostRequest(
       }
     }
     const body = raw ? JSON.parse(raw) : {};
+    if (url.pathname === '/api/host/journey-plans/discard' && publicWebsites) {
+      const request = z
+        .object({
+          draftId: z.uuid(),
+          ownerHash: z.string().regex(/^[a-f0-9]{64}$/),
+          url: z.string().url().max(2048),
+          goal: z.string().trim().min(1).max(1500),
+        })
+        .strict()
+        .parse(body);
+      // Deletion is entirely local. A changed domain or unavailable network
+      // cannot prevent an owner from removing an exact saved brief.
+      const target = new URL(request.url);
+      if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password)
+        throw Error('Discard needs the original web address without embedded credentials.');
+      const binding = draftBinding(request.draftId, request.ownerHash, target.href, request.goal);
+      const pendingCleanup = store.journeyDraftDiscardRun(binding);
+      if (pendingCleanup) await runner.discard(pendingCleanup);
+      if (store.journeyDraftDiscarded(binding)) {
+        if (store.journeyDraftDiscardRun(binding))
+          throw Error('The saved draft cleanup is not yet confirmed. Retry discard.');
+        json(res, 200, { discarded: true });
+        return;
+      }
+      const draft = store.journeyDraft(binding);
+      if (!draft) {
+        json(res, 404, { error: 'Journey draft not found.' });
+        return;
+      }
+      if (!kit.planner) throw Error('This local engine cannot confirm planning cleanup.');
+      await kit.planner.stop(draft.run.id);
+      await runner.discard(draft.run.id);
+      json(res, 200, { discarded: true });
+      return;
+    }
+    if (url.pathname === '/api/host/journey-plans' && publicWebsites) {
+      if (mode !== 'live')
+        throw Error('Paid journey planning is unavailable in this offline host.');
+      if (!kit.planner) throw Error('This local engine does not support journey planning.');
+      const request = z
+        .object({
+          draftId: z.uuid(),
+          ownerHash: z.string().regex(/^[a-f0-9]{64}$/),
+          url: z.string().url().max(2048),
+          goal: z.string().trim().min(1).max(1500),
+        })
+        .strict()
+        .parse(body);
+      const canonical = new URL(request.url);
+      const binding = draftBinding(
+        request.draftId,
+        request.ownerHash,
+        canonical.href,
+        request.goal,
+      );
+      // An existing proposal is a local read, even if the site's DNS later changes.
+      if (!store.journeyDraft(binding)) await publicDestination(canonical.href);
+      const prepared = await kit.planner.prepare(binding);
+      json(res, 200, journeyPlanView(prepared));
+      return;
+    }
     if (url.pathname === '/api/host/target-check' && publicWebsites) {
       const request = z
         .object({ url: z.string().url().max(2048) })
@@ -73,7 +158,12 @@ export async function hostRequest(
       let target: PublicTarget | undefined;
       if (publicWebsites) {
         const request = z
-          .object({ mode: z.literal('live'), requestId: z.uuid(), target: z.unknown() })
+          .object({
+            mode: z.literal('live'),
+            requestId: z.uuid(),
+            target: z.unknown(),
+            journeyPlan: preparedPlanReference.optional(),
+          })
           .strict()
           .parse(body);
         target = await publicTarget(request.target);
@@ -92,11 +182,35 @@ export async function hostRequest(
       if (prior) {
         if (target && store.hasRun(prior)) {
           const run = store.run(prior),
-            plan = store.records(prior).find((record) => record.kind === 'plan');
+            records = store.records(prior),
+            plan = records.find(
+              (record) =>
+                record.kind === 'plan' && typeof record.payload.requestTargetHash === 'string',
+            );
+          const proposal = records.find(
+            (record) =>
+              record.kind === 'plan' && record.payload.proposalVersion === 'journey-proposal/1',
+          );
+          if (proposal) {
+            const reference = preparedPlanReference.parse(body.journeyPlan);
+            const draft = store.journeyDraft(
+              draftBinding(reference.draftId, reference.ownerHash, target.url, target.goal),
+            );
+            if (
+              !draft ||
+              draft.run.id !== prior ||
+              draft.plan?.id !== reference.planId ||
+              draft.plan.hash !== reference.planHash ||
+              !recordIsIntact(proposal)
+            )
+              throw Error('This repeated Start does not match its exact owner-bound proposal.');
+          }
           if (
             run.url !== target.url ||
             run.goal !== target.goal ||
-            plan?.payload.requestTargetHash !== digest(JSON.stringify(target))
+            !plan ||
+            !recordIsIntact(plan) ||
+            plan.payload.requestTargetHash !== digest(JSON.stringify(target))
           ) {
             json(res, 409, {
               error: !plan?.payload.requestTargetHash
@@ -115,6 +229,36 @@ export async function hostRequest(
         );
         return;
       }
+      if (kit.planner?.isClosed)
+        throw Error('The local planner is closing. No browser was started.');
+      if (kit.planner?.isPreparing)
+        throw Error('A journey plan is still being prepared. No browser was started.');
+      let prepared:
+        | { run: import('../src/types.js').Run; proposalId: string; proposalHash: string }
+        | undefined;
+      if (publicWebsites && target && body.journeyPlan) {
+        const reference = preparedPlanReference.parse(body.journeyPlan);
+        approvedJourneyPlanSchema.parse({ steps: target.steps });
+        if (runner.active) throw Error('Another run is using the browser.');
+        const activated = store.activateJourneyDraft(
+          draftBinding(reference.draftId, reference.ownerHash, target.url, target.goal),
+          {
+            requestId: body.requestId,
+            planId: reference.planId,
+            planHash: reference.planHash,
+            approval: (kit.getApproval ?? approval)(),
+          },
+        );
+        if (!activated.activated) {
+          json(res, 200, { id: activated.run.id });
+          return;
+        }
+        prepared = {
+          run: activated.run,
+          proposalId: activated.plan!.id,
+          proposalHash: activated.plan!.hash,
+        };
+      }
       const run = await runner.start({
         mode,
         headless: true,
@@ -131,6 +275,7 @@ export async function hostRequest(
           : {}),
         manualCheckpoints: mode === 'offline',
         requestId: body.requestId,
+        ...(prepared ? { prepared } : {}),
       });
       json(res, 201, { id: run.id });
       return;
@@ -139,7 +284,10 @@ export async function hostRequest(
     if (discardStart) {
       z.object({}).strict().parse(body);
       const id = store.discardHostStart(discardStart[1]);
-      if (id) await runner.discard(id);
+      if (id) {
+        await kit.planner?.stop(id);
+        await runner.discard(id);
+      }
       json(res, 200, { discarded: true });
       return;
     }
@@ -152,6 +300,7 @@ export async function hostRequest(
         z.object({ sequence: z.number().int().positive() }).strict().parse(body);
       else z.object({}).strict().parse(body);
       if (action === 'discard') {
+        await kit.planner?.stop(id);
         await runner.discard(id);
         json(res, 200, { discarded: true });
         return;
@@ -172,7 +321,10 @@ export async function hostRequest(
           return;
         }
         runner.advance(id);
-      } else if (runner.active?.run.id === id) await runner.stop(id);
+      } else {
+        await kit.planner?.stop(id);
+        if (runner.active?.run.id === id) await runner.stop(id);
+      }
       json(res, 200, { accepted: true });
       return;
     }
@@ -193,6 +345,10 @@ export async function hostRequest(
   if (assessment && req.method === 'GET') {
     if (!store.hasRun(assessment[1])) {
       json(res, 404, { error: 'Run not found.' });
+      return;
+    }
+    if (['planning', 'prepared'].includes(store.run(assessment[1]).state)) {
+      json(res, 409, { error: 'This proposal has not started a browser journey.' });
       return;
     }
     json(res, 200, assessmentForRun(store, assessment[1]));
@@ -250,6 +406,10 @@ export async function hostRequest(
     const [, id, hash] = read;
     if (!store.hasRun(id)) {
       json(res, 404, { error: 'Run not found.' });
+      return;
+    }
+    if (['planning', 'prepared'].includes(store.run(id).state)) {
+      json(res, 409, { error: 'This proposal has not started a browser journey.' });
       return;
     }
     if (hash) {

@@ -19,7 +19,8 @@ export type RecordKind =
   | 'focused_check'
   | 'limit'
   | 'model_response';
-export type RunState = 'running' | 'complete' | 'partial' | 'stopped' | 'interrupted';
+export type RunState =
+  'planning' | 'prepared' | 'running' | 'complete' | 'partial' | 'stopped' | 'interrupted';
 export interface Run {
   id: string;
   goal: string;
@@ -27,6 +28,7 @@ export interface Run {
   mode: 'offline' | 'live';
   state: RunState;
   createdAt: string;
+  startedAt?: string;
   stopReason?: string;
 }
 export interface RecordEntry {

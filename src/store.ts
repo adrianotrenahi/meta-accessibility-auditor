@@ -9,6 +9,14 @@ import { groupPublished } from './finding-key.js';
 import { presentRecordPayload } from './presentation.js';
 import { readHashMatches, suppliedImageIds, type ImageReceipt } from './image-receipt.js';
 import { candidateOriginalEvidence } from './candidate-target.js';
+import {
+  journeyDraftBindingSchema,
+  readPlanningSteps,
+  type JourneyDraftBinding,
+  type JourneyDraftView,
+  type ModelRequestPurpose,
+} from './journey-drafts.js';
+import { journeyPlanSchema } from './journey-steps.js';
 export const digest = (value: string | Uint8Array) =>
   createHash('sha256').update(value).digest('hex');
 export const recordIsIntact = (record: RecordEntry) =>
@@ -32,15 +40,19 @@ export class Store {
       CREATE TABLE IF NOT EXISTS host_discarded_starts(request_id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS discard_cleanup(run_id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS discarded_usage(id TEXT PRIMARY KEY,role TEXT NOT NULL,reserved INTEGER NOT NULL,actual INTEGER,status TEXT NOT NULL,created TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS host_versions(run_id TEXT PRIMARY KEY REFERENCES runs(id), hash TEXT NOT NULL, version INTEGER NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS host_versions(run_id TEXT PRIMARY KEY REFERENCES runs(id), hash TEXT NOT NULL, version INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS journey_drafts(draft_id TEXT PRIMARY KEY,owner_hash TEXT NOT NULL,brief_hash TEXT NOT NULL,run_id TEXT UNIQUE REFERENCES runs(id) ON DELETE SET NULL,planning_request_id TEXT REFERENCES requests(id) ON DELETE SET NULL,plan_id TEXT REFERENCES records(id) ON DELETE SET NULL,plan_hash TEXT);
+      CREATE TABLE IF NOT EXISTS journey_draft_discards(draft_id TEXT PRIMARY KEY REFERENCES journey_drafts(draft_id),run_id TEXT NOT NULL);`);
   }
   recoverInterrupted() {
     for (const run of this.runs())
-      if (run.state === 'running')
+      if (run.state === 'running' || run.state === 'planning')
         this.finish(
           run.id,
           'interrupted',
-          'Application restarted; review saved evidence before starting a new run.',
+          run.state === 'planning'
+            ? 'Application restarted during planning. No automatic regeneration occurred; any uncertain generation charge remains reserved.'
+            : 'Application restarted; review saved evidence before starting a new run.',
         );
     this.db.prepare("UPDATE requests SET status='unknown' WHERE status='sending'").run();
   }
@@ -65,6 +77,278 @@ export class Store {
       if (requestId) this.db.prepare('INSERT INTO host_starts VALUES(?,?)').run(requestId, run.id);
       this.db.exec('COMMIT');
       return run;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  /** One durable claim before any awaited planning work; retries only read it. */
+  claimJourneyDraft(value: JourneyDraftBinding): JourneyDraftView {
+    const binding = journeyDraftBindingSchema.parse(value);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const prior = this.journeyDraft(binding);
+      if (prior) {
+        this.db.exec('COMMIT');
+        return prior;
+      }
+      const run: Run = {
+        id: randomUUID(),
+        url: binding.url,
+        goal: binding.goal,
+        mode: 'live',
+        state: 'planning',
+        createdAt: new Date().toISOString(),
+      };
+      this.db.prepare('INSERT INTO runs VALUES(?,?)').run(run.id, JSON.stringify(run));
+      this.db
+        .prepare('INSERT INTO journey_drafts VALUES(?,?,?,?,NULL,NULL,NULL)')
+        .run(binding.draftId, binding.ownerHash, binding.briefHash, run.id);
+      const result = this.journeyDraft(binding)!;
+      this.db.exec('COMMIT');
+      return { ...result, created: true };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  journeyDraft(value: JourneyDraftBinding): JourneyDraftView | null {
+    const binding = journeyDraftBindingSchema.parse(value);
+    const row = this.db
+      .prepare('SELECT * FROM journey_drafts WHERE draft_id=?')
+      .get(binding.draftId) as any;
+    if (!row) return null;
+    if (row.owner_hash !== binding.ownerHash || row.brief_hash !== binding.briefHash)
+      throw Error('This draft belongs to a different owner, website or journey.');
+    if (!row.run_id) throw Error('This draft was discarded. A retry cannot recreate it.');
+    const run = this.run(row.run_id);
+    if (run.url !== binding.url || run.goal !== binding.goal)
+      throw Error('The saved draft does not match this website or journey.');
+    const plan = row.plan_id ? this.record(run.id, row.plan_id) : null;
+    if (
+      (row.plan_id &&
+        (!plan ||
+          !recordIsIntact(plan) ||
+          plan.hash !== row.plan_hash ||
+          plan.kind !== 'plan' ||
+          plan.author !== 'driver' ||
+          plan.payload.draftId !== binding.draftId ||
+          plan.payload.briefHash !== binding.briefHash ||
+          plan.payload.planningRequestId !== row.planning_request_id)) ||
+      (run.state === 'prepared' && !plan)
+    )
+      throw Error('The exact saved plan is unavailable. This draft will not generate again.');
+    if (plan) {
+      journeyPlanSchema.parse({ steps: plan.payload.steps });
+      const request = this.usage(run.id).requests.find(
+        (item) =>
+          item.id === row.planning_request_id &&
+          item.role === 'driver' &&
+          item.status === 'completed' &&
+          Number.isSafeInteger(item.actual) &&
+          item.actual >= 0,
+      );
+      const response = this.records(run.id).find(
+        (record) =>
+          plan.sources.includes(record.id) &&
+          record.kind === 'model_response' &&
+          record.author === 'driver' &&
+          record.payload.requestId === row.planning_request_id &&
+          record.payload.status === 'completed' &&
+          recordIsIntact(record),
+      );
+      if (!request || !response)
+        throw Error(
+          'The saved plan has no exact completed planning receipt. This draft will not generate again.',
+        );
+      if (JSON.stringify(readPlanningSteps(response)) !== JSON.stringify(plan.payload.steps))
+        throw Error('The saved instructions do not match their recorded planning response.');
+    }
+    return {
+      created: false,
+      run,
+      plan: plan ?? null,
+      draft: {
+        draftId: row.draft_id,
+        ownerHash: row.owner_hash,
+        briefHash: row.brief_hash,
+        runId: run.id,
+        planningRequestId: row.planning_request_id,
+        planId: row.plan_id,
+        planHash: row.plan_hash,
+      },
+    };
+  }
+  /** An explicit retry may recover a failed count, never a sent or uncertain
+   * generation. Keep the same run, failed observations and spending history. */
+  retryUnsentJourneyDraft(value: JourneyDraftBinding): JourneyDraftView {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const view = this.journeyDraft(value);
+      if (
+        !view ||
+        view.run.state !== 'interrupted' ||
+        view.plan ||
+        view.draft.planningRequestId ||
+        this.usage(view.run.id).requests.length !== 0
+      )
+        throw Error('Only an interrupted draft with no generation attempt may retry preparation.');
+      const run = { ...view.run, state: 'planning' as const };
+      delete run.stopReason;
+      this.db.prepare('UPDATE runs SET body=? WHERE id=?').run(JSON.stringify(run), run.id);
+      const result = this.journeyDraft(value)!;
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  /** A confirmed local discard keeps only its exact owned retry tombstone. */
+  journeyDraftDiscarded(value: JourneyDraftBinding): boolean {
+    const binding = journeyDraftBindingSchema.parse(value);
+    const row = this.db
+      .prepare('SELECT owner_hash,brief_hash,run_id FROM journey_drafts WHERE draft_id=?')
+      .get(binding.draftId) as
+      { owner_hash: string; brief_hash: string; run_id: string | null } | undefined;
+    if (!row) return false;
+    if (row.owner_hash !== binding.ownerHash || row.brief_hash !== binding.briefHash)
+      throw Error('This draft belongs to a different owner, website or journey.');
+    return row.run_id === null;
+  }
+  /** Opaque cleanup identity only; no discarded brief or evidence is retained. */
+  journeyDraftDiscardRun(value: JourneyDraftBinding): string | null {
+    const binding = journeyDraftBindingSchema.parse(value);
+    if (!this.journeyDraftDiscarded(binding)) return null;
+    const row = this.db
+      .prepare('SELECT run_id FROM journey_draft_discards WHERE draft_id=?')
+      .get(binding.draftId) as { run_id: string } | undefined;
+    return row?.run_id ?? null;
+  }
+  /** The response and its charge already exist; this cannot fabricate a paid attempt. */
+  prepareJourneyDraft(
+    value: JourneyDraftBinding,
+    payload: Record<string, unknown>,
+    sources: string[] = [],
+  ): JourneyDraftView {
+    const binding = journeyDraftBindingSchema.parse(value);
+    const planned = journeyPlanSchema.parse({ steps: payload.steps });
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const view = this.journeyDraft(binding);
+      if (!view || !['planning', 'prepared'].includes(view.run.state))
+        throw Error('This draft is not available for preparation.');
+      const request = this.usage(view.run.id).requests.find(
+        (item) =>
+          item.id === view.draft.planningRequestId &&
+          item.role === 'driver' &&
+          item.status === 'completed' &&
+          Number.isSafeInteger(item.actual) &&
+          item.actual >= 0,
+      );
+      const response =
+        request &&
+        this.records(view.run.id).find(
+          (record) =>
+            record.kind === 'model_response' &&
+            record.author === 'driver' &&
+            record.payload.requestId === request.id &&
+            record.payload.status === 'completed' &&
+            recordIsIntact(record),
+        );
+      if (!request || !response)
+        throw Error('A completed, recorded planning response and its charge are required.');
+      if (JSON.stringify(readPlanningSteps(response)) !== JSON.stringify(planned.steps))
+        throw Error('The prepared instructions must match the recorded planning response.');
+      const body = {
+        ...payload,
+        steps: planned.steps,
+        draftId: binding.draftId,
+        briefHash: binding.briefHash,
+        planningRequestId: request.id,
+      };
+      const links = [...new Set([response.id, ...sources])];
+      if (view.plan) {
+        const { _sourcesHash: _sources, ...original } = view.plan.payload;
+        if (
+          JSON.stringify(body) !== JSON.stringify(original) ||
+          JSON.stringify(links) !== JSON.stringify(view.plan.sources)
+        )
+          throw Error('The prepared plan cannot be replaced by a different result.');
+        this.db.exec('COMMIT');
+        return view;
+      }
+      const plan = this.append(view.run.id, 'plan', 'driver', body, links);
+      this.db
+        .prepare('UPDATE journey_drafts SET plan_id=?,plan_hash=? WHERE draft_id=?')
+        .run(plan.id, plan.hash, binding.draftId);
+      this.db
+        .prepare('UPDATE runs SET body=? WHERE id=?')
+        .run(JSON.stringify({ ...view.run, state: 'prepared' }), view.run.id);
+      const result = this.journeyDraft(binding)!;
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  /** Start consumes the saved preparation, never a new run or spending ledger. */
+  activateJourneyDraft(
+    value: JourneyDraftBinding,
+    options: {
+      requestId: string;
+      planId: string;
+      planHash: string;
+      approval: Approval;
+    },
+  ): JourneyDraftView & { activated: boolean } {
+    const binding = journeyDraftBindingSchema.parse(value);
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(options.requestId))
+      throw Error('A saved Start request identity is required.');
+    const requestId = options.requestId.toLowerCase();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const view = this.journeyDraft(binding);
+      if (
+        !view ||
+        !view.plan ||
+        options.planId !== view.plan.id ||
+        options.planHash !== view.plan.hash
+      )
+        throw Error('Start must name the exact prepared plan.');
+      if (this.hostStartDiscarded(requestId)) throw Error('This Start was discarded.');
+      const prior = this.hostStart(requestId);
+      if (prior) {
+        if (prior !== view.run.id) throw Error('This Start belongs to a different run.');
+        this.db.exec('COMMIT');
+        return { ...view, activated: false };
+      }
+      if (view.run.state !== 'prepared') throw Error('This draft is not waiting for Start.');
+      this.assertApproval(options.approval);
+      const total = this.usage(),
+        runUsage = this.usage(view.run.id);
+      if (total.requests.some((request) => request.status === 'sending'))
+        throw Error('An active paid request must finish before this preparation can start.');
+      if (
+        total.spent + total.reserved >=
+          Math.min(LIMITS.routineMicros, Math.floor(options.approval.maxUsd * 1e6)) ||
+        runUsage.spent + runUsage.reserved >=
+          Math.min(LIMITS.runMicros, Math.floor(options.approval.maxRunUsd * 1e6))
+      )
+        throw Error('The remaining spending allowance is exhausted.');
+      this.db.prepare('INSERT INTO host_starts VALUES(?,?)').run(requestId, view.run.id);
+      this.db.prepare('UPDATE runs SET body=? WHERE id=?').run(
+        JSON.stringify({
+          ...view.run,
+          state: 'running',
+          startedAt: new Date().toISOString(),
+        }),
+        view.run.id,
+      );
+      const result = this.journeyDraft(binding)!;
+      this.db.exec('COMMIT');
+      return { ...result, activated: true };
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
@@ -110,10 +394,18 @@ export class Store {
       if (this.discardPending(id)) this.cleanupDiscard(id);
       return;
     }
-    if (this.run(id).state === 'running') throw Error('Stop the run before discarding evidence.');
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      if (['running', 'planning'].includes(this.run(id).state))
+        throw Error('Stop the run or planning before discarding evidence.');
+      if (this.usage(id).requests.some((request) => request.status === 'sending'))
+        throw Error('Wait for the active paid request to settle before discarding evidence.');
       this.db.prepare('INSERT OR IGNORE INTO discard_cleanup VALUES(?)').run(id);
+      this.db
+        .prepare(
+          'INSERT OR IGNORE INTO journey_draft_discards SELECT draft_id,run_id FROM journey_drafts WHERE run_id=?',
+        )
+        .run(id);
       this.db
         .prepare(
           'INSERT OR IGNORE INTO host_discarded_starts SELECT request_id FROM host_starts WHERE run_id=?',
@@ -127,6 +419,7 @@ export class Store {
       this.db.prepare('DELETE FROM requests WHERE run_id=?').run(id);
       this.db.prepare('DELETE FROM host_versions WHERE run_id=?').run(id);
       this.db.prepare('DELETE FROM records WHERE run_id=?').run(id);
+      this.db.prepare('UPDATE journey_drafts SET plan_hash=NULL WHERE run_id=?').run(id);
       this.db.prepare('DELETE FROM runs WHERE id=?').run(id);
       this.db.exec('COMMIT');
     } catch (error) {
@@ -137,11 +430,26 @@ export class Store {
   }
   private cleanupDiscard(id: string) {
     rmSync(join(this.dir, id), { recursive: true, force: true });
-    this.db.prepare('DELETE FROM host_starts WHERE run_id=?').run(id);
-    this.db.prepare('DELETE FROM discard_cleanup WHERE run_id=?').run(id);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM host_starts WHERE run_id=?').run(id);
+      this.db.prepare('DELETE FROM journey_draft_discards WHERE run_id=?').run(id);
+      this.db.prepare('DELETE FROM discard_cleanup WHERE run_id=?').run(id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   finish(id: string, state: RunState, reason?: string) {
     const r = this.run(id);
+    if (
+      state === 'planning' ||
+      state === 'prepared' ||
+      state === 'running' ||
+      (state === 'complete' && ['planning', 'prepared'].includes(r.state))
+    )
+      throw Error('Planning must use its saved preparation and Start transitions.');
     r.state = state;
     r.stopReason = reason;
     this.db.prepare('UPDATE runs SET body=? WHERE id=?').run(JSON.stringify(r), id);
@@ -475,9 +783,7 @@ export class Store {
       requests: rows,
     };
   }
-  reserve(runId: string, role: Role, micros: number, approval: Approval, final = false) {
-    if (!Number.isSafeInteger(micros) || micros <= 0)
-      throw Error('Request charge cannot be bounded.');
+  private assertApproval(approval: Approval) {
     if (
       approval.approvedBy !== 'Adriano' ||
       !Number.isFinite(Date.parse(approval.expiresAt)) ||
@@ -490,9 +796,28 @@ export class Store {
       approval.maxRunUsd <= 0
     )
       throw Error('A valid, bounded owner spending approval is required.');
+  }
+  reserve(
+    runId: string,
+    role: Role,
+    micros: number,
+    approval: Approval,
+    final = false,
+    purpose: ModelRequestPurpose = 'execution',
+  ) {
+    if (!Number.isSafeInteger(micros) || micros <= 0)
+      throw Error('Request charge cannot be bounded.');
+    this.assertApproval(approval);
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      if (this.run(runId).state !== 'running') throw Error('Run is stopped.');
+      const state = this.run(runId).state;
+      const draft = this.db
+        .prepare('SELECT * FROM journey_drafts WHERE run_id=?')
+        .get(runId) as any;
+      if (purpose === 'planning') {
+        if (role !== 'driver' || state !== 'planning' || !draft || draft.planning_request_id)
+          throw Error('This draft cannot send another planning generation.');
+      } else if (purpose !== 'execution' || state !== 'running') throw Error('Run is stopped.');
       const total = this.usage(),
         run = this.usage(runId),
         phase = run.requests.filter((r) => r.role === role);
@@ -537,6 +862,10 @@ export class Store {
       this.db
         .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
         .run(id, runId, role, micros, null, 'sending', new Date().toISOString());
+      if (purpose === 'planning')
+        this.db
+          .prepare('UPDATE journey_drafts SET planning_request_id=? WHERE run_id=?')
+          .run(id, runId);
       this.db.exec('COMMIT');
       return id;
     } catch (e) {

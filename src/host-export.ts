@@ -5,9 +5,15 @@ import { hostSnapshotSchema } from './host-contract.js';
 import { exportKeyboardEvidence } from './keyboard-evidence.js';
 import { exportHostActivity } from './host-activity.js';
 import { exportHostAnalysis } from './host-analysis.js';
+import { exportHostJourney } from './host-journey.js';
 
 /** A whitelist projection: model prompts, raw candidates and private settings never leave here. */
 export function exportHostSnapshot(store: Store, runId: string) {
+  const run = store.run(runId);
+  if (run.state === 'planning' || run.state === 'prepared')
+    throw Error(
+      'This proposal has not started a browser journey. Read its planning status instead.',
+    );
   const records = store.records(runId);
   const originals = records.filter((record) => record.kind === 'capture');
   const assets = new Map<string, Buffer>();
@@ -131,15 +137,29 @@ export function exportHostSnapshot(store: Store, runId: string) {
       },
     ];
   });
-  const run = store.run(runId),
-    usage = store.usage(runId);
+  const usage = store.usage(runId);
+  let journey: ReturnType<typeof exportHostJourney>;
+  try {
+    journey = exportHostJourney(records, runId);
+  } catch {
+    limits.push('Ordered journey progress could not be verified; its steps remain unconfirmed.');
+  }
   const snapshot = hostSnapshotSchema.parse({
     protocol: 'access-walk/host-v1',
     provenance: 'saved-engine-records',
-    run: { ...run, stopReason: run.stopReason ?? null },
+    run: {
+      id: run.id,
+      goal: run.goal,
+      url: run.url,
+      state: run.state,
+      mode: run.mode,
+      createdAt: run.startedAt ?? run.createdAt,
+      stopReason: run.stopReason ?? null,
+    },
     sequence: 0,
     activity: exportHostActivity(records, runId, run.state === 'running'),
     analysis: exportHostAnalysis(records, runId, usage.requests),
+    ...(journey ? { journey } : {}),
     captures,
     findings,
     coverage: {

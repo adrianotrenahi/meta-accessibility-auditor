@@ -21,8 +21,26 @@ import {
 } from './visual-inspection.js';
 import { missingEvidenceSchema } from './evidence-checks.js';
 import { EvidenceRequestLimit } from './request-evidence.js';
+import {
+  journeyPlanSchema,
+  readOrderedJourney,
+  currentJourneyInstruction,
+} from './journey-steps.js';
+import { PLANNER_INSTRUCTIONS } from './planner-instructions.js';
 export const actionSchema = z.object({
-  kind: z.enum(['press', 'type', 'scroll', 'back', 'wait', 'voiceover', 'finish', 'focus_target']),
+  kind: z.enum([
+    'press',
+    'type',
+    'scroll',
+    'back',
+    'wait',
+    'voiceover',
+    'finish',
+    'focus_target',
+    'step_done',
+  ]),
+  stepId: z.string().trim().min(1).max(80).optional(),
+  captureId: z.uuid().optional(),
   key: z
     .enum([
       'Tab',
@@ -72,6 +90,30 @@ export const navigationActionSchema = actionSchema
       .optional(),
   })
   .superRefine((action, context) => {
+    if (action.kind === 'step_done') {
+      if (
+        !action.stepId ||
+        !action.captureId ||
+        action.key ||
+        action.text ||
+        action.direction ||
+        action.targetId ||
+        action.targetRole ||
+        action.targetName ||
+        action.traversalKey ||
+        action.activation ||
+        action.waitMs !== undefined
+      )
+        context.addIssue({
+          code: 'custom',
+          message:
+            'Instruction completion needs its exact step and original capture, with no browser input.',
+        });
+    } else if (action.stepId !== undefined || action.captureId !== undefined)
+      context.addIssue({
+        code: 'custom',
+        message: 'Instruction evidence belongs only to an explicit step completion.',
+      });
     if (action.kind !== 'wait' && action.waitMs !== undefined)
       context.addIssue({
         code: 'custom',
@@ -212,11 +254,35 @@ export class MetaModels {
     private getApproval: () => Approval = approval,
     private getKey: () => string | undefined = key,
   ) {}
+  async plan(runId: string, signal = AbortSignal.timeout(60_000)) {
+    const run = this.store.run(runId);
+    return this.reason(
+      runId,
+      'driver',
+      [
+        {
+          kind: 'unvisited_journey_brief',
+          url: run.url,
+          goal: run.goal,
+          currentDate: new Date().toISOString().slice(0, 10),
+          observationStatus:
+            'No website has been visited. These are requested actions, not observed facts.',
+        },
+      ],
+      [],
+      journeyPlanSchema,
+      false,
+      signal,
+      undefined,
+      'planning',
+    );
+  }
   private async post(
     runId: string,
     path: '/responses/input_tokens' | '/responses',
     body: any,
     signal: AbortSignal,
+    purpose: 'execution' | 'planning' = 'execution',
   ) {
     const apiKey = this.getKey();
     if (!apiKey) throw Error('Add a Meta API key to the private .env before paid testing.');
@@ -228,7 +294,7 @@ export class MetaModels {
         signal,
         fetcher: this.fetcher,
         assertActive: () => {
-          if (this.store.run(runId).state !== 'running')
+          if (this.store.run(runId).state !== (purpose === 'planning' ? 'planning' : 'running'))
             throw Error('The run has stopped; no model request will be sent.');
         },
         onRetry: (diagnostic) => {
@@ -262,12 +328,40 @@ export class MetaModels {
     final = false,
     signal = AbortSignal.timeout(60_000),
     read?: RecordEntry,
+    purpose: 'execution' | 'planning' = 'execution',
   ): Promise<T> {
-    if (this.store.run(runId).state !== 'running')
+    if (this.store.run(runId).state !== (purpose === 'planning' ? 'planning' : 'running'))
       throw Error('The run has stopped; no model request will be sent.');
+    if (
+      purpose === 'planning' &&
+      (role !== 'driver' ||
+        images.length !== 0 ||
+        read ||
+        final ||
+        (schema as z.ZodType<unknown>) !== journeyPlanSchema)
+    )
+      throw Error('Planning accepts only its bounded brief and fixed plan result.');
     const approved = this.getApproval();
+    if (
+      approved.approvedBy !== 'Adriano' ||
+      !Number.isFinite(Date.parse(approved.expiresAt)) ||
+      Date.parse(approved.expiresAt) <= Date.now() ||
+      !Number.isFinite(approved.maxUsd) ||
+      approved.maxUsd <= 0 ||
+      approved.maxUsd > 110 ||
+      !Number.isFinite(approved.maxRunUsd) ||
+      approved.maxRunUsd <= 0 ||
+      approved.maxRunUsd > 3
+    )
+      throw Error(
+        'A current bounded owner approval is required before preparing any model request.',
+      );
     if (!this.getKey()) throw Error('No Meta API key is available.');
     const cap = CAPS[role];
+    const journey =
+      role === 'driver' && purpose === 'execution'
+        ? readOrderedJourney(this.store.records(runId))
+        : null;
     if (read) {
       const storedRead = this.store.record(runId, read.id);
       if (
@@ -304,7 +398,13 @@ export class MetaModels {
     const body: any = {
       model: 'muse-spark-1.3',
       store: false,
-      instructions: jobInstructions[role],
+      instructions:
+        purpose === 'planning'
+          ? PLANNER_INSTRUCTIONS
+          : jobInstructions[role] +
+            (journey
+              ? ' This run has an ordered, approved journey. Work only on its supplied currentStep and success condition. Other steps provide context, not permission to skip ahead. When the current condition is actually shown by the current stable original, return step_done with that exact stepId and current captureId, without a browser action. This records navigator progress only and never settles accessibility criteria. Do not use finish while an instruction remains. If blocked, record the actual limit without inventing completion.'
+              : ''),
       reasoning: { effort: cap.effort },
       max_output_tokens: cap.output,
       parallel_tool_calls: false,
@@ -313,6 +413,19 @@ export class MetaModels {
           role: 'user',
           content: [
             { type: 'input_text', text: JSON.stringify(records) },
+            ...(journey
+              ? [
+                  {
+                    type: 'input_text',
+                    text: JSON.stringify({
+                      contextKind: 'approved_current_instruction',
+                      ...currentJourneyInstruction(journey),
+                      evidenceStatus:
+                        'Plan and navigator progress are context; only the supplied originals establish website facts.',
+                    }),
+                  },
+                ]
+              : []),
             ...(read
               ? [
                   {
@@ -345,26 +458,33 @@ export class MetaModels {
     };
     // Analysis/review are returned data, not tool loops. Constrained output leaves
     // no invitation to spend the result allowance on a separate progress message.
-    if (role !== 'driver') {
+    if (role !== 'driver' || purpose === 'planning') {
       delete body.tools;
       delete body.tool_choice;
       delete body.parallel_tool_calls;
       body.text = {
         format: { type: 'json_schema', name: `${role}_result`, schema: z.toJSONSchema(schema) },
       };
-      body.instructions =
-        body.instructions.replaceAll('Use return_result.', '') +
-        ' Distinguish the supplied-image receipt from original record availability: records-only baseline captures were not visually supplied. Never assess their criterion scope, visual appearance or element targets. Review feedback is an interpretation to reconsider against originals, never factual evidence. Do not repeat an unchanged existing finding; a requested rewrite needs a distinct corrected body using the same issueKey and a new exact independent review. ' +
-        ' Return only the schema-constrained JSON result, without progress messages or narrative outside it. Keep reasons concise; leave unavailable checks explicitly unknown. ';
+      if (purpose !== 'planning')
+        body.instructions =
+          body.instructions.replaceAll('Use return_result.', '') +
+          ' Distinguish the supplied-image receipt from original record availability: records-only baseline captures were not visually supplied. Never assess their criterion scope, visual appearance or element targets. Review feedback is an interpretation to reconsider against originals, never factual evidence. Do not repeat an unchanged existing finding; a requested rewrite needs a distinct corrected body using the same issueKey and a new exact independent review. ' +
+          ' Return only the schema-constrained JSON result, without progress messages or narrative outside it. Keep reasons concise; leave unavailable checks explicitly unknown. ';
     }
-    const { input_tokens: count } = await this.post(runId, '/responses/input_tokens', body, signal);
+    const { input_tokens: count } = await this.post(
+      runId,
+      '/responses/input_tokens',
+      body,
+      signal,
+      purpose,
+    );
     if (!Number.isInteger(count) || count < 0)
       throw Error('The provider did not return a valid evidence input count.');
     if (count > cap.input) throw new EvidenceRequestLimit(role, 'input');
     const reserved = Math.ceil(count * 1.25 + cap.output * 4.25); // integer millionths of a dollar
-    const id = this.store.reserve(runId, role, reserved, approved, final);
+    const id = this.store.reserve(runId, role, reserved, approved, final, purpose);
     try {
-      const response = await this.post(runId, '/responses', body, signal);
+      const response = await this.post(runId, '/responses', body, signal, purpose);
       const u = response.usage;
       if (
         !Number.isInteger(u?.input_tokens) ||
@@ -377,6 +497,7 @@ export class MetaModels {
       this.store.settle(id, actual, response.status === 'completed' ? 'received' : 'incomplete');
       this.store.append(runId, 'model_response', role, {
         requestId: id,
+        requestPurpose: purpose,
         model: body.model,
         instructionHash: digest(body.instructions),
         status: response.status,
@@ -404,7 +525,8 @@ export class MetaModels {
       const tool = response.output?.find(
         (x: any) => x.type === 'function_call' && x.name === 'return_result',
       );
-      const raw = role === 'driver' ? tool?.arguments : outputText(response);
+      const raw =
+        role === 'driver' && purpose === 'execution' ? tool?.arguments : outputText(response);
       if (!raw) throw Error('The model did not return a valid result.');
       const result = schema.parse(JSON.parse(raw));
       this.store.settle(id, actual, 'completed');
