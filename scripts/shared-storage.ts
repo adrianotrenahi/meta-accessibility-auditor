@@ -12,7 +12,7 @@ if (command !== 'pull' || index < 0 || !process.argv[index + 1])
 const config = sharedConfig();
 if (!config)
   throw Error(
-    'Shared storage is not set up: add its five settings to .env (see docs/SHARED-STORAGE.md).',
+    'Shared storage is not set up: add its five settings to .env or ~/.access-walk/storage.env (see docs/SHARED-STORAGE.md).',
   );
 const dir = resolve(process.argv[index + 1]);
 // A running engine owns its folder; pulling into it at the same time could block its saves.

@@ -393,6 +393,11 @@ test("Storage settings in the folder's .env sit beside the other keys and are us
     `META_API_KEY=model-key\n${lines('from-dotenv').replace(/^/gm, 'export ')}\n`,
   );
   assert.equal(sharedConfig({}, shared, dotenv)!.r2.bucket, 'from-dotenv');
+  // A file named on purpose wins over a filled .env.
+  assert.equal(
+    sharedConfig({ ACCESS_WALK_STORAGE_FILE: shared }, shared, dotenv)!.r2.bucket,
+    'from-shared-file',
+  );
   // A half-filled .env is reported by name, never patched from the other file.
   writeFileSync(dotenv, 'ACCESS_WALK_R2_BUCKET=from-dotenv\n');
   assert.throws(

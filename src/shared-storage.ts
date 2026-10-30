@@ -46,7 +46,9 @@ export function sharedConfig(
   dotenv = resolve(root, '.env'),
 ): SharedConfig | null {
   const local = readSettings(dotenv);
-  const fromDotenv = Object.values(NAMES).some((name) => local[name]);
+  // A file named on purpose (ACCESS_WALK_STORAGE_FILE) always wins over the default .env.
+  const fromDotenv =
+    !env.ACCESS_WALK_STORAGE_FILE && Object.values(NAMES).some((name) => local[name]);
   const saved = fromDotenv ? local : readSettings(file);
   const source = fromDotenv ? dotenv : file;
   const value = (name: string) => env[name] || saved[name] || '';
