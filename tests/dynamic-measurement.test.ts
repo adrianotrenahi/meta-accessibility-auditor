@@ -58,9 +58,15 @@ test(
       const first = await walk.start(run.url);
       await walk.act({ kind: 'press', key: 'Tab', note: 'One actual controlled input.' }, first);
       const stale = await walk.capture();
-      // Deliberately update the controlled fixture after its original capture was saved.
+      // Deliberately update the controlled fixture after its original capture was saved:
+      // a popup opening makes it a different screen, not ordinary copy drift.
       await walk.page.locator('h1').evaluate((heading) => {
         heading.textContent = 'Updated controlled product';
+        const notice = document.createElement('div');
+        notice.setAttribute('role', 'dialog');
+        notice.setAttribute('aria-label', 'Controlled notice');
+        notice.textContent = 'Controlled notice';
+        document.body.append(notice);
       });
       let measurements = 0;
       const originalMeasurements = walk.measurements.bind(walk);
@@ -126,9 +132,15 @@ test(
     try {
       const original = await walk.start(run.url);
       let reads = 0;
-      // Deterministic state-boundary change while the real axe/browser measurement executes.
+      // Deterministic state-boundary change while the real axe/browser measurement executes:
+      // the exact stamp moves and a popup is open, so bounded drift cannot accept it.
       walk.observationStamp = async () =>
         ++reads === 1 ? original.payload.stateStamp : 'c'.repeat(64);
+      const realState = walk.scanState.bind(walk);
+      walk.scanState = async () => ({
+        ...(await realState()),
+        dialogs: [{ role: 'dialog', name: 'Controlled notice' }],
+      });
       const measured = await (app.runner as any).automaticMeasurement(
         run,
         walk,
@@ -174,6 +186,74 @@ test(
     }
   },
 );
+
+test(
+  'Copy that rotates after the original still gets a scan, naming the lines that differ',
+  { timeout: 90000 },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'access-walk-drifting-scan-'));
+    const app = await startServer(0, dir, false);
+    const run = app.store.create(
+      'Controlled rotating copy',
+      app.origin + '/shop/?case=broken',
+      'offline',
+    );
+    const walk = new BrowserWalk(app.store, run.id, app.origin, true, 'chromium');
+    try {
+      const original = await walk.start(run.url);
+      assert.equal(typeof original.payload.pageStamp, 'string');
+      // A promotion rotating its copy: same document, address, scroll and popups.
+      await walk.page.locator('h1').evaluate((heading) => {
+        heading.textContent = 'Rotated controlled promotion';
+      });
+      const measured = await (app.runner as any).automaticMeasurement(
+        run,
+        walk,
+        original,
+        new AbortController().signal,
+      );
+      assert.equal(measured.current.id, original.id, 'No refresh is needed');
+      const scan = measured.scan!;
+      assert.equal(scan.payload.stable, true);
+      assert.equal(scan.payload.comparison, 'page-state-and-bounded-content-drift');
+      assert.equal(scan.payload.contentDrift.changedLines, scan.payload.contentDrift.lines.length);
+      assert(scan.payload.contentDrift.lines.some((l: string) => l.includes('Rotated controlled')));
+      assert.deepEqual(scan.sources, [original.id]);
+      assert.equal(
+        app.store
+          .records(run.id)
+          .filter((r) => r.kind === 'limit' && r.payload.method === 'automatic_accessibility_scan')
+          .length,
+        0,
+      );
+    } finally {
+      await walk.close();
+      await app.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test('An original saved before page-state/1 keeps the exact stamp and is never re-read', async () => {
+  const x = fixture();
+  try {
+    const source = x.capture();
+    const walk = new BrowserWalk(x.store, x.run.id, 'http://127.0.0.1:4317', true, 'chromium');
+    walk.observationStamp = async () => 'c'.repeat(64);
+    walk.scanState = async () => {
+      throw Error('An exact-only original must not reach the bounded comparison');
+    };
+    await assert.rejects(
+      walk.measurements(source),
+      (error) =>
+        error instanceof MeasurementStateChanged &&
+        error.stage === 'before' &&
+        error.captureId === source.id,
+    );
+  } finally {
+    x.close();
+  }
+});
 
 test('An intact unstable original is a typed observation limit before any state read', async () => {
   const x = fixture();

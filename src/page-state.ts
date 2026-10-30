@@ -58,8 +58,8 @@ function focusKey(focus: unknown) {
  * Whether a saved observation still describes the page closely enough to send
  * the next key: same document, address, scroll, open popups and focus. Copy
  * elsewhere on the page (promotions, counters) does not matter to a key; the
- * chosen control is checked separately. Scans and journey evidence keep the
- * exact state stamp. Records saved before page-state/1 keep exact comparison.
+ * chosen control is checked separately. Scans use sameForScan; journey evidence
+ * keeps the exact state stamp. Records saved before page-state/1 keep exact comparison.
  */
 export function sameForInput(
   saved: {
@@ -81,6 +81,23 @@ export function sameForInput(
 }
 
 /** Visible modal surfaces and consent banners. Their arrival or removal is always a new screen. */
+/**
+ * Whether an automatic scan still measures the screen its original shows: same
+ * document, address, scroll and open popups, with the accessibility snapshot
+ * differing only within the bounded drift. Focus does not matter to a scan.
+ * Returns the differing snapshot lines (empty when identical), or null when the
+ * page is a different screen. Records saved before page-state/1 never qualify;
+ * their exact state stamp decides alone.
+ */
+export function sameForScan(
+  saved: { pageStamp?: unknown; aria?: unknown },
+  state: Record<string, unknown>,
+): string[] | null {
+  if (typeof saved.pageStamp !== 'string' || typeof saved.aria !== 'string') return null;
+  if (saved.pageStamp !== pageStamp(state) || !contentSettled(saved.aria, state.aria)) return null;
+  return ariaDifference(saved.aria, state.aria as string);
+}
+
 export async function openDialogs(page: Page) {
   return page.evaluate(() => {
     const selectors =

@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ariaDifference, contentSettled, pageStamp, sameForInput } from '../src/page-state.js';
+import {
+  ariaDifference,
+  contentSettled,
+  pageStamp,
+  sameForInput,
+  sameForScan,
+} from '../src/page-state.js';
 
 const page = (lines: string[]) => lines.join('\n');
 const ordinary = Array.from({ length: 236 }, (_, index) => `- link "Destination ${index}"`);
@@ -102,4 +108,40 @@ test("eDreams' measured carousel drift (23 differing lines of 286) is settled; r
   assert.equal(contentSettled(page(home), page(drifted)), true);
   const results = Array.from({ length: 200 }, (_, index) => `- link "Flight option ${index}"`);
   assert.equal(contentSettled(page(home), page([...home.slice(0, 100), ...results])), false);
+});
+
+test('A scan accepts rotating copy on the same screen and names the differing lines', () => {
+  const state = {
+    documentEpoch: 1,
+    url: 'https://example.test/',
+    aria: page([...ordinary, '- text: Save up to €100s on flights']),
+    focus: { tag: 'body' },
+    focusHelp: null,
+    scroll: { x: 0, y: 0 },
+    dialogs: [],
+  };
+  const saved = { pageStamp: pageStamp(state), aria: state.aria };
+  assert.deepEqual(sameForScan(saved, state), []);
+  // Focus moving does not matter to a scan.
+  assert.deepEqual(sameForScan(saved, { ...state, focus: { tag: 'a', name: 'Flights' } }), []);
+  const rotated = { ...state, aria: page([...ordinary, '- text: Save up to €270 on hotels']) };
+  assert.deepEqual(sameForScan(saved, rotated)?.sort(), [
+    '- text: Save up to €100s on flights',
+    '- text: Save up to €270 on hotels',
+  ]);
+  // A different screen never qualifies.
+  assert.equal(sameForScan(saved, { ...state, scroll: { x: 0, y: 400 } }), null);
+  assert.equal(sameForScan(saved, { ...state, url: 'https://example.test/results' }), null);
+  assert.equal(
+    sameForScan(saved, { ...state, dialogs: [{ role: 'dialog', name: 'Sign in' }] }),
+    null,
+  );
+  assert.equal(
+    sameForScan(saved, { ...state, aria: page([...ordinary, '- dialog "Sign in"']) }),
+    null,
+  );
+  const replaced = Array.from({ length: 236 }, (_, index) => `- link "Result ${index}"`);
+  assert.equal(sameForScan(saved, { ...state, aria: page(replaced) }), null);
+  // Records saved before page-state/1 have no page stamp: the exact stamp decides alone.
+  assert.equal(sameForScan({ aria: state.aria }, state), null);
 });
