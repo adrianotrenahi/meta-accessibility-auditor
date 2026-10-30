@@ -19,7 +19,8 @@ export type RecordKind =
   | 'focused_check'
   | 'limit'
   | 'model_response';
-export type RunState = 'running' | 'complete' | 'partial' | 'stopped' | 'interrupted';
+export type RunState =
+  'planning' | 'prepared' | 'running' | 'complete' | 'partial' | 'stopped' | 'interrupted';
 export interface Run {
   id: string;
   goal: string;
@@ -27,6 +28,7 @@ export interface Run {
   mode: 'offline' | 'live';
   state: RunState;
   createdAt: string;
+  startedAt?: string;
   stopReason?: string;
 }
 export interface RecordEntry {
@@ -57,6 +59,13 @@ export interface ElementInfo {
 export interface Capture {
   screenState?: import('./screen-state-contract.js').ScreenState;
   stateStamp: string;
+  /** The same page apart from keyboard focus; absent on records saved before page-state/1. */
+  pageStamp?: string;
+  dialogs?: { role: string; name: string }[];
+  /** Accessibility-snapshot lines that changed while this original was captured. */
+  contentDrift?: { changedLines: number; settled?: boolean };
+  /** Identifies this original's page-side list of exact controls (page-state/1). */
+  stampToken?: string;
   stable: boolean;
   url: string;
   title: string;

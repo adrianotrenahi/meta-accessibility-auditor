@@ -1,4 +1,5 @@
 import type { ElementHandle, Locator } from 'playwright';
+import { contentSettled, dialogLines, moneyLines } from './page-state.js';
 import { stripRecordedFocusHelp, recordedFocusHelpRows } from './focus-help.js';
 import { nativeTraversalKey, sameNativeArrowGroup } from './native-keyboard.js';
 import { recordIsIntact, type Store } from './store.js';
@@ -6,6 +7,7 @@ import type { BrowserWalk } from './browser.js';
 import { documentWasReplaced } from './page-observation.js';
 import type { RecordEntry } from './types.js';
 import type { Action } from './models.js';
+import { keyboardCycleMemory, type CycleEvidence } from './keyboard-cycle-memory.js';
 
 export const TARGET_ROLES = [
   'gridcell',
@@ -22,6 +24,7 @@ export const TARGET_ROLES = [
   'spinbutton',
 ] as const;
 export const MAX_TARGET_KEYS = 24;
+export const MAX_FOCUS_STALLS = 3;
 class TraversalObservationChanged extends Error {}
 const controls =
   'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]';
@@ -124,7 +127,12 @@ export async function walkToKeyboardTarget(
 ) {
   let current = start;
   const actions: RecordEntry[] = [];
-  const stop = (outcome: 'unavailable' | 'changed' | 'cycle' | 'limit', reason: string) => {
+  const stop = (
+    outcome: 'unavailable' | 'changed' | 'cycle' | 'limit',
+    reason: string,
+    details: Record<string, unknown> = {},
+    sources: string[] = [],
+  ) => {
     store.append(
       runId,
       'limit',
@@ -139,8 +147,9 @@ export async function walkToKeyboardTarget(
           name: decision.targetName ?? null,
         },
         performedKeys: actions.length,
+        ...details,
       },
-      [current.id],
+      [...new Set([current.id, ...sources])],
     );
     return { current, actions, outcome };
   };
@@ -172,10 +181,15 @@ export async function walkToKeyboardTarget(
   };
   let cleanupHandle: ElementHandle | undefined;
   const focusHandles: ElementHandle[] = [];
+  const focusFacts: { role: string; name: string }[] = [];
+  let stalls = 0;
   try {
     await readTarget(() => walk.verifyOriginalCapture(start));
     const epoch = await readTarget(() => walk.page.evaluate(() => performance.timeOrigin));
-    let target: Locator;
+    let target: Locator | undefined;
+    // The role and exact name the decision chose; rechecked when the walk arrives.
+    let chosenMeaning: Locator | undefined;
+    let listedHandle: ElementHandle<HTMLElement | SVGElement> | null = null;
     if (decision.targetId) {
       const matches = start.payload.elements.filter(
         (element: any) => element.id === decision.targetId,
@@ -191,31 +205,53 @@ export async function walkToKeyboardTarget(
           'unavailable',
           'This target has no unique supported keyboard name. No input was sent.',
         );
-      // A unique actual semantic match prevents source-order changes from retargeting a key walk.
-      target = walk.page.getByRole(info.role, { name: info.name, exact: true });
-      const indexed = walk.page.locator(controls).nth(Number(decision.targetId.slice(1)));
-      if (
-        (await readTarget(() => target.count())) !== 1 ||
-        (await readTarget(() => indexed.count())) !== 1
-      )
-        return stop(
-          'unavailable',
-          'The original keyboard target is missing or ambiguous. No input was sent.',
-        );
-      const indexedHandle = await readTarget(() => indexed.elementHandle());
-      try {
+      const semantic = walk.page.getByRole(info.role, { name: info.name, exact: true });
+      chosenMeaning = semantic;
+      if (typeof start.payload.stampToken === 'string') {
+        // The exact element this original listed, even when its name is repeated
+        // (eDreams shows two "Where from?" fields). It must still be on the page and
+        // still carry the name the decision read: a promotion button can keep its
+        // element while its meaning changes.
+        listedHandle = await readTarget(() => walk.listedControl(start, decision.targetId!));
         if (
-          !indexedHandle ||
+          !listedHandle ||
           !(await readTarget(() =>
-            target.evaluate((element, other) => element === other, indexedHandle),
+            semantic.evaluateAll((elements, other) => elements.includes(other), listedHandle!),
           ))
+        ) {
+          await listedHandle?.dispose().catch(() => {});
+          return stop(
+            'unavailable',
+            'The chosen control is no longer on the page with the name the decision read. No input was sent.',
+          );
+        }
+      } else {
+        // Originals saved before page-state/1 keep the unique semantic match.
+        target = semantic;
+        const indexed = walk.page.locator(controls).nth(Number(decision.targetId.slice(1)));
+        if (
+          (await readTarget(() => target!.count())) !== 1 ||
+          (await readTarget(() => indexed.count())) !== 1
         )
           return stop(
             'unavailable',
             'The original keyboard target is missing or ambiguous. No input was sent.',
           );
-      } finally {
-        await indexedHandle?.dispose().catch(() => {});
+        const indexedHandle = await readTarget(() => indexed.elementHandle());
+        try {
+          if (
+            !indexedHandle ||
+            !(await readTarget(() =>
+              target!.evaluate((element, other) => element === other, indexedHandle),
+            ))
+          )
+            return stop(
+              'unavailable',
+              'The original keyboard target is missing or ambiguous. No input was sent.',
+            );
+        } finally {
+          await indexedHandle?.dispose().catch(() => {});
+        }
       }
     } else {
       if (
@@ -228,17 +264,20 @@ export async function walkToKeyboardTarget(
           'A keyboard target needs an exact name and role from the current page. No input was sent.',
         );
       target = walk.page.getByRole(decision.targetRole, { name: decision.targetName, exact: true });
+      chosenMeaning = target;
     }
     if (
-      (await readTarget(() => target.count())) !== 1 ||
-      !(await readTarget(() => target.isVisible())) ||
-      !(await readTarget(() => target.isEnabled()))
-    )
+      (target && (await readTarget(() => target!.count())) !== 1) ||
+      !(await readTarget(() => (listedHandle ?? target!).isVisible())) ||
+      !(await readTarget(() => (listedHandle ?? target!).isEnabled()))
+    ) {
+      await listedHandle?.dispose().catch(() => {});
       return stop(
         'unavailable',
         'The requested keyboard control is missing, ambiguous or unavailable. No input was sent.',
       );
-    const handle = await readTarget(() => target.elementHandle());
+    }
+    const handle = listedHandle ?? (await readTarget(() => target!.elementHandle()));
     if (!handle)
       return stop('unavailable', 'The requested keyboard target disappeared. No input was sent.');
     cleanupHandle = handle;
@@ -311,6 +350,59 @@ export async function walkToKeyboardTarget(
         'A previously recorded description changed during traversal. Its full original remains saved; a fresh decision is needed before further input.',
       );
     const shape = shapeOf(start);
+    const memory = keyboardCycleMemory(walk);
+    if (memory.isClosed)
+      return stop('unavailable', 'Focus-cycle memory is closed. No traversal input was sent.');
+    if (!(await focused())) {
+      const prior = await memory.check(walk.page, handle);
+      active();
+      if (prior.state === 'unknown') {
+        const evidence = prior.evidence;
+        const first =
+          evidence &&
+          store
+            .records(runId)
+            .find(
+              (record) =>
+                record.kind === 'limit' && record.payload.cycleEvidence?.id === evidence.id,
+            );
+        return stop(
+          'unavailable',
+          prior.reason,
+          evidence
+            ? {
+                previousCycleId: first?.id ?? null,
+                cycleSourceId: evidence.sourceId,
+                cycleSourceKind: evidence.sourceKind,
+                cycleEvidence: evidence,
+              }
+            : {},
+          first ? [first.id] : evidence ? [evidence.sourceId] : [],
+        );
+      }
+      if (prior.state === 'blocked') {
+        const first = store
+          .records(runId)
+          .find(
+            (record) =>
+              record.kind === 'limit' && record.payload.cycleEvidence?.id === prior.evidence.id,
+          );
+        const names = prior.evidence.participants
+          .map((participant) => `${participant.role}: ${participant.name}`)
+          .join('; ');
+        return stop(
+          'cycle',
+          `This target was already not reached: focus cycled among ${names}${prior.evidence.context.kind === 'observed-dialog' ? ' in an observed dialog' : ''}. The relevant controls are unchanged; choose a different action or wait for a relevant state change. No new input was sent and no website keyboard barrier is inferred.`,
+          {
+            previousCycleId: first?.id ?? null,
+            cycleSourceId: prior.evidence.sourceId,
+            cycleSourceKind: prior.evidence.sourceKind,
+            cycleEvidence: prior.evidence,
+          },
+          first ? [first.id] : [prior.evidence.sourceId],
+        );
+      }
+    }
     for (let i = 0; i <= MAX_TARGET_KEYS; i++) {
       active();
       if (
@@ -323,7 +415,26 @@ export async function walkToKeyboardTarget(
           'The original keyboard target changed during traversal. A fresh decision is needed; no target was activated.',
         );
       if (await focused()) {
+        // A focus handler may rename the control during the walk ("Reject" becoming
+        // "Accept"); arriving at the same element is not arriving at the chosen control.
+        const stillChosen = await readTarget(() =>
+          chosenMeaning!.evaluateAll((elements, other) => elements.includes(other), handle),
+        ).catch(() => false);
+        if (!stillChosen)
+          return stop(
+            'changed',
+            "The chosen control's name or role changed during the walk. No activation was sent; a fresh decision is needed.",
+          );
         if (decision.activation) {
+          if (
+            !arrow &&
+            !rovingTarget &&
+            moneyLines(comparisonAria(current)) !== moneyLines(comparisonAria(start))
+          )
+            return stop(
+              'changed',
+              'The requested control is now focused, but a price on the page changed during the walk. A fresh decision is needed before activation. No target activation was sent.',
+            );
           if (newlyObservedDescription)
             return stop(
               'changed',
@@ -359,8 +470,31 @@ export async function walkToKeyboardTarget(
         walk.page.evaluateHandle(() => document.activeElement),
       );
       const focus = activeHandle.asElement();
-      if (focus) {
+      // A widget may hold focus for a Tab or two (eDreams' accessibility notice does).
+      // Staying put is a stall, not a cycle: it is counted, and only a return to an
+      // earlier, different control is a cycle. Three stalls in a row end the walk.
+      const previous = focusHandles.at(-1);
+      const stalled =
+        !!focus &&
+        !!previous &&
+        (await previous.evaluate((element, other) => element === other, focus).catch(() => false));
+      if (stalled) {
+        await focus!.dispose().catch(() => {});
+        if (++stalls >= MAX_FOCUS_STALLS)
+          return stop(
+            'cycle',
+            `Focus stayed on the same control for ${stalls} Tab presses in a row. The robot stopped this traversal; a fresh decision is needed.`,
+          );
+      } else stalls = 0;
+      if (stalled) {
+        // Held focus: no new visited control; the next key is still sent below.
+      } else if (focus) {
         focusHandles.push(focus);
+        const facts = current.payload.focus ?? {};
+        focusFacts.push({
+          role: facts.role || (facts.tag === 'a' ? 'link' : facts.tag || 'control'),
+          name: facts.name ?? '',
+        });
         // The document's placeholder is not a visited control. A first Tab after
         // a popup closes can leave body focused before the next real Tab enters
         // the page. All keys/content changes and the ordinary bound still apply.
@@ -379,10 +513,80 @@ export async function walkToKeyboardTarget(
                 ),
             );
         if (seen.some(Boolean)) {
-          return stop(
+          const begin = seen.findIndex(Boolean);
+          const typed = store
+            .records(runId)
+            .filter(
+              (record) =>
+                record.kind === 'action' &&
+                record.payload.action?.kind === 'type' &&
+                typeof record.payload.action.text === 'string',
+            )
+            .map((record) => record.payload.action.text as string)
+            .filter(Boolean);
+          const redact = (value: string) => {
+            for (const input of typed) value = value.split(input).join('[redacted input]');
+            return value;
+          };
+          const sourceKind =
+            current.kind === 'capture' ||
+            (current.kind === 'observation' && current.payload.method === 'keyboard_focus/1')
+              ? current.kind
+              : null;
+          if (!sourceKind)
+            return stop(
+              'changed',
+              'The cycle has no current original or keyboard-focus observation. Its inputs remain saved; no further input was sent.',
+            );
+          const evidence: CycleEvidence | undefined = await memory.remember({
+            page: walk.page,
+            target: handle,
+            participants: focusHandles
+              .slice(begin, -1)
+              .map((handle, index) => ({ handle, ...focusFacts[begin + index]! })),
+            sourceId: current.id,
+            sourceKind,
+            actionIds: actions.map((record) => record.id),
+            redact,
+          });
+          active();
+          const result = stop(
             'cycle',
             'Keyboard focus returned to a previously visited control. The robot stopped this traversal; no website keyboard barrier is inferred.',
+            { ...(evidence ? { cycleEvidence: evidence } : { cycleMemory: 'unavailable' }) },
+            [start.id, ...actions.map((record) => record.id)],
           );
+          // Measured evidence for the analyst: real Tab presses went round the page
+          // and never focused a control that was visible and enabled when the walk
+          // began. The analyst may report it under C05; the reviewer still decides.
+          if (!arrow && !rovingTarget && actions.length > 0 && (await connected()))
+            store.append(
+              runId,
+              'observation',
+              'browser',
+              {
+                method: 'keyboard_reach/1',
+                reached: false,
+                fullCycle: true,
+                target: {
+                  captureId: start.id,
+                  id: decision.targetId ?? null,
+                  role: decision.targetRole ?? null,
+                  name: redact(targetName),
+                  visibleAndEnabledAtStart: true,
+                },
+                keysPressed: actions.length,
+                key: requestedKey,
+                focusOrder: focusFacts.map((fact) => ({
+                  role: fact.role,
+                  name: redact(fact.name),
+                })),
+                limit:
+                  'Measured with real key presses in this browser. It is not a screen-reader test.',
+              },
+              [...new Set([start.id, current.id, ...actions.map((record) => record.id)])],
+            );
+          return result;
         }
       } else await activeHandle.dispose();
       active();
@@ -455,7 +659,13 @@ export async function walkToKeyboardTarget(
         !next.performed ||
         current.payload.url !== start.payload.url ||
         (await readTarget(() => walk.page.evaluate(() => performance.timeOrigin))) !== epoch ||
-        shapeOf(current) !== shape
+        // Arrow walks in grids and menus keep their exact shape. A plain Tab walk stops
+        // for a popup or a large change, not for copy rotating elsewhere on the page;
+        // prices are checked before any activation instead.
+        (arrow || rovingTarget
+          ? shapeOf(current) !== shape
+          : dialogLines(shapeOf(current)) !== dialogLines(shape) ||
+            !contentSettled(shape, shapeOf(current)))
       )
         return stop(
           'changed',

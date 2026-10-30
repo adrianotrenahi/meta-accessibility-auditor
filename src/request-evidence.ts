@@ -195,6 +195,13 @@ export function requestEvidence(
       (r) => r.kind === 'capture' && r.payload.url !== current.payload.url,
     );
     if (otherView) roots.push(otherView.id);
+    // A keyboard barrier measured a few steps back is still the journey's evidence.
+    roots.push(
+      ...records
+        .filter((r) => r.kind === 'observation' && r.payload.method === 'keyboard_reach/1')
+        .slice(-2)
+        .map((r) => r.id),
+    );
   }
   let originals = originalClosure(records, roots);
   if (role !== 'driver') {

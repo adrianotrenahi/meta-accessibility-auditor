@@ -2,6 +2,7 @@ import { samAssociationSchema, samAssociationFits } from './sam-association.js';
 import { z } from 'zod';
 import { hostAnalysisSchema } from './host-analysis.js';
 import { normalizeScreenStateCaptures } from './screen-state-contract.js';
+import { hostJourneySchema, journeyProgressFits } from './host-journey.js';
 
 const id = z.string().min(1).max(200);
 const webUrl = z
@@ -100,6 +101,7 @@ export const hostSnapshotSchema = z
     sequence: z.number().int().nonnegative(),
     activity: hostActivitySchema.optional(),
     analysis: hostAnalysisSchema.optional(),
+    journey: z.unknown().optional(),
     captures: z.array(
       z
         .object({
@@ -160,6 +162,16 @@ export const hostSnapshotSchema = z
   .strict()
   .transform((snapshot) => {
     const states = normalizeScreenStateCaptures(snapshot.captures);
+    const { journey: rawJourney, ...core } = snapshot;
+    const parsedJourney = hostJourneySchema.safeParse(rawJourney);
+    const journey =
+      parsedJourney.success && journeyProgressFits(parsedJourney.data, snapshot)
+        ? parsedJourney.data
+        : undefined;
+    const progressLimits =
+      rawJourney !== undefined && !journey
+        ? ['Ordered journey progress could not be verified; its steps remain unconfirmed.']
+        : [];
     let withheld = false;
     const findings = snapshot.findings.map((finding) => {
       if (!finding.anchor) return { ...finding, anchor: null };
@@ -177,14 +189,16 @@ export const hostSnapshotSchema = z
       return { ...finding, anchor: retainedAnchor };
     });
     return {
-      ...snapshot,
+      ...core,
+      ...(journey ? { journey } : {}),
       captures: states.captures,
       findings,
       limits:
-        withheld || states.withheld
+        withheld || states.withheld || progressLimits.length
           ? [
               ...new Set([
                 ...snapshot.limits,
+                ...progressLimits,
                 ...(withheld
                   ? [
                       'An optional SAM association could not be verified; the independently supported finding is retained without SAM.',
