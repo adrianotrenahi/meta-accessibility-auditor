@@ -15,6 +15,12 @@ import { assessmentForRun } from '../src/assessment.js';
 import { controlledHostMode } from './controlled-live.js';
 import { JourneyPlanner } from '../src/journey-planner.js';
 import { modelApprovalDenial } from '../src/model-approval.js';
+import {
+  SharedMirror,
+  sharedConfig,
+  sharedRemote,
+  type SharedConfig,
+} from '../src/shared-storage.js';
 export const visibleKinds = new Set([
   'plan',
   'action',
@@ -28,7 +34,12 @@ export async function startServer(
   port = 4317,
   dir = dataDir,
   frontend = true,
-  options: { controlledLiveProof?: boolean; publicWebsites?: boolean } = {},
+  options: {
+    controlledLiveProof?: boolean;
+    publicWebsites?: boolean;
+    /** Only the real entry points pass this; tests and proofs never share. */
+    shared?: SharedConfig | null;
+  } = {},
 ) {
   if (options.publicWebsites && (!options.controlledLiveProof || frontend))
     throw Error('Public website runs require the separately configured local live host.');
@@ -48,6 +59,7 @@ export async function startServer(
     throw e;
   }
   let origin = `http://127.0.0.1:${port}`;
+  let mirror: SharedMirror | undefined;
   const runner = new Runner(store, origin),
     token = randomBytes(24).toString('hex');
   const planner = new JourneyPlanner(store, undefined, () => !!runner.active);
@@ -224,6 +236,13 @@ export async function startServer(
     origin = `http://127.0.0.1:${port}`;
     runner.origin = origin;
     store.recoverInterrupted();
+    if (options.shared) {
+      mirror = new SharedMirror(store, sharedRemote(options.shared), {
+        discard: (id) => runner.discard(id),
+        log: (line) => console.error(line),
+      });
+      mirror.start();
+    }
   } catch (e) {
     release();
     store.close();
@@ -242,13 +261,16 @@ export async function startServer(
         server.close(() => resolve());
         server.closeAllConnections();
       });
+      await mirror?.close();
       store.close();
       release();
     },
   };
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const app = await startServer(Number(process.env.PORT ?? 4317));
+  const app = await startServer(Number(process.env.PORT ?? 4317), dataDir, true, {
+    shared: sharedConfig(),
+  });
   console.log(`Access Walk is available at ${app.origin}. Paid calls are disabled.`);
   for (const signal of ['SIGINT', 'SIGTERM'] as const)
     process.once(signal, () => {

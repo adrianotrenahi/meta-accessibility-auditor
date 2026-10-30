@@ -26,12 +26,15 @@
     "serve:host": "node --import tsx scripts/serve-host.ts",
     "proof:host-controls": "node --import tsx scripts/host-controls-proof.ts",
     "proof:sam-masks": "node --import tsx scripts/sam-mask-proof.ts",
-    "proof:blockers": "node --import tsx scripts/blocker-proof.ts"
+    "proof:blockers": "node --import tsx scripts/blocker-proof.ts",
+    "storage": "node --import tsx scripts/shared-storage.ts"
   },
   "dependencies": {
     "@axe-core/playwright": "4.14.0",
     "@guidepup/guidepup": "0.38.0",
     "@meta-sam/parser": "0.1.0",
+    "@neondatabase/serverless": "1.2.0",
+    "aws4fetch": "1.0.20",
     "playwright": "1.64.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",

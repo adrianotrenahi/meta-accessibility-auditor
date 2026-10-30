@@ -126,7 +126,8 @@ start only the fixed Desktop keyboard example and require a stable request UUID.
 Repeated starts reuse the same run; a discarded start cannot be resurrected.
 Read snapshots and original PNGs through the run's host routes, advance only a
 matching saved revision, or use separate Stop and Discard actions. Stop retains
-evidence; confirmed discard waits for cleanup and removes the run and originals.
+evidence; confirmed discard waits for cleanup and removes the run from every list,
+keeping its originals in `.discarded/` for investigation (owner decision, 30 October).
 Minimal incurred/uncertain cost records remain so deletion cannot reset the
 project spending limit. No action enables paid inference.
 
