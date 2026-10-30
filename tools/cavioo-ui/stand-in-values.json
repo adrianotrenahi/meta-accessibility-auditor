@@ -1,0 +1,32 @@
+{
+  "apps/web/src/lib/workspaces.client.ts": {
+    "useWorkspaces": "(() => { const w = {id:\"testing-account\",name:\"Testing Account\",named:false,logo:null,role:\"OWNER\",home:true,runsAudits:true,active:true}; return { workspaces: [w], loading: false, error: null, active: w, activeAccount: w }; })",
+    "switchWorkspace": "(async () => false)",
+    "refreshWorkspaces": "(async () => {})",
+    "useFollowWorkspace": "(() => {})",
+    "resetWorkspacesForTests": "(() => {})"
+  },
+  "apps/web/src/lib/comments.ts": {
+    "COMMENT_MAX_LENGTH": "50000",
+    "commentTooLongMessage": "(() => \"\")",
+    "parseMentions": "(() => [])",
+    "segmentBody": "((body) => [{ kind: \"text\", text: String(body ?? \"\") }])",
+    "detectMentionQuery": "(() => null)",
+    "sanitizeMentionName": "((name) => String(name ?? \"\"))"
+  },
+  "apps/web/src/lib/freeTrialReport.ts": {
+    "freeTrialFromJob": "(() => null)",
+    "trialPageName": "(() => null)",
+    "summaryRefusedForTrial": "(() => false)"
+  },
+  "apps/web/src/lib/trialBannerState.ts": {
+    "trialBannerState": "(() => ({ kind: \"none\" }))"
+  },
+  "apps/web/src/lib/pdfExportReady.ts": {
+    "pdfExportReady": "(() => false)"
+  },
+  "packages/shared/src/utils/auditScore.ts": {
+    "restatementStepIds": "(() => new Map())",
+    "severityBreakdown": "((findings) => { const counts = { CRITICAL: 0, MAJOR: 0, MODERATE: 0, MINOR: 0, COSMETIC: 0 }; for (const f of findings ?? []) { const s = String(f?.severity ?? \"\").toUpperCase(); if (!f?.duplicateOfId && s in counts) counts[s]++; } return counts; })"
+  }
+}

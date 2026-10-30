@@ -1,10 +1,10 @@
 # Working on Access Walk
 
-This is a fresh hackathon audit engine that must plug into Cavioo's existing funnel, live browser view, finding bubbles and screen-by-screen report. The public engine must remain runnable without Cavioo. Existing Cavioo components are reused inside the private Cavioo app; do not copy that private source, prompts, production data or credentials into this public repository.
+This is a fresh hackathon audit engine that must plug into Cavioo's existing funnel, live browser view, finding bubbles and screen-by-screen report. The public engine must remain runnable without Cavioo. Cavioo's screens are prior work and reach this repository only as a pre-built, fingerprint-checked package downloaded at start (`host/cavioo-ui.lock.json`, `docs/CAVIOO-SCREENS.md`). Owner decision, 30 October: never copy Cavioo source, prompts, criteria wording, scoring, fix advice, production data or credentials into this public repository; rebuild the package with `tools/cavioo-ui/build.mjs` and run `tools/cavioo-ui/leak-check.mjs` before publishing it. The audits page server (`host/`) and its Meta helpers (`host/ui/`) are hackathon work and live here as source.
 
 Standalone proofs must not call Cavioo production services or endpoints. Keep the concrete private-component mapping in the private integration plan; public documentation can describe the roles to connect.
 
-- Required product direction: preserve Cavioo's existing layout, components, design tokens, labels and interaction patterns. Use the actual components in the Cavioo host, rather than drawing replacements. The current standalone green interface is an engineering test harness, not the approved product design. Follow docs/CAVIOO-COMPATIBILITY.md before further interface work.
+- Required product direction: preserve Cavioo's existing layout, components, design tokens, labels and interaction patterns. Use the actual components in the Cavioo host, rather than drawing replacements. `npm run audits` serves Cavioo's actual screens from the package, signed in as Testing Account; the standalone green interface (`npm run dev`) remains an engineering test harness, not the approved product design. Follow docs/CAVIOO-COMPATIBILITY.md before further interface work.
 - The owner resumed Cavioo compatibility work on 27 October. Start with saved-record compatibility proofs in the private host. Documentation or replay alone does not prove production integration or a live browser stream.
 
 - Explain changes in plain English, with a concrete example.

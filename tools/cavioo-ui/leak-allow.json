@@ -1,0 +1,10 @@
+{
+  "The site refused access to this page": "A screen status message shown to every Cavioo user, not criterion wording.",
+  "Visual Hierarchy/Scannability": "A finding category name the screens display, not criterion wording.",
+  "rgb(var(--fg-muted-strong))": "A colour setting.",
+  "Features you asked us to test": "A report heading shown to every Cavioo user.",
+  "rubricVersionsComparable": "An export name, not wording.",
+  "comes with the full audit": "Free-trial copy inside the report screens; the trial banners themselves are trimmed.",
+  "your free audit hasn't been used": "Free-trial copy inside the report screens; the trial banners themselves are trimmed.",
+  "requiresValidationObserved": "A field name the screens look up by, not wording."
+}
