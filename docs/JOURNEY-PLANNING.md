@@ -53,7 +53,8 @@ follow completed tasks and the end of the walk, rather than interrupting every
 three decisions while a dialog is being handled.
 
 A checkpoint on the exact screenshot that was already scanned or checked, with no
-new screenshot, input or observation since, reuses that scan and records a
+new screenshot, input or observation since (apart from the check's own settled
+reading of that screenshot's journey context), reuses that scan and records a
 `repeat_checkpoint/1` coverage note instead of sending the same screenshot to the
 analyst and reviewer again (owner, 30 October). Two instructions finished on one
 Booking.com home page otherwise spent the analyst's whole allowance on the same

@@ -967,6 +967,7 @@ export class Runner {
   ): Promise<{ current: RecordEntry; scan?: RecordEntry }> {
     // Measure only once the page has stopped reloading; if it reloads mid-scan anyway,
     // wait, observe the new page and measure again (owner, 30 Oct). A scan sends no input.
+    if (signal.aborted) throw Error('The run stopped before the automatic measurement.');
     const repeated = earlierScan(this.store.records(run.id), current);
     if (repeated) return { current, scan: repeated };
     let observeAgain = false;
@@ -1067,6 +1068,8 @@ export class Runner {
     if (this.stopForDeniedPage(run, walk, current)) return current;
     const checked = earlierCheck(this.store.records(run.id), current);
     if (checked) {
+      signal.throwIfAborted();
+      if (this.store.run(run.id).state !== 'running') throw Error('The run has stopped.');
       this.store.append(
         run.id,
         'coverage',
