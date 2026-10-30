@@ -381,6 +381,7 @@ test('An incomplete analysis cannot abort an otherwise safe continuing walk or i
       act: async (_action: any, source: RecordEntry) =>
         x.store.append(x.run.id, 'action', 'browser', { performed: true }, [source.id]),
       captureSettled: async () => x.capture(captures++),
+      waitForReloadsToStop: async () => true,
       measurements: async (source: RecordEntry) =>
         x.store.append(x.run.id, 'observation', 'browser', { measured: true }, [source.id]),
     };

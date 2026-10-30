@@ -4,7 +4,17 @@ import { disposeKeyboardCycles } from './keyboard-cycle-memory.js';
 import { publicEntryLimit, PUBLIC_TRAFFIC_CHALLENGE } from './public-target.js';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
-import { BrowserWalk, MeasurementStateChanged, ActionStateChanged } from './browser.js';
+import {
+  ARRIVAL_QUIET_MS,
+  BrowserWalk,
+  MeasurementStateChanged,
+  ActionStateChanged,
+} from './browser.js';
+import { documentWasReplaced } from './page-observation.js';
+/** Attempts across page reloads before a scan stays unknown (owner, 30 Oct). */
+const MEASUREMENT_ATTEMPTS = 3;
+/** Attempts across page reloads before banner clearing gives up. */
+const BLOCKER_ATTEMPTS = 3;
 import { VoiceOverProbe } from './voiceover.js';
 import { Store, digest, recordIsIntact } from './store.js';
 import {
@@ -291,7 +301,7 @@ export class Runner {
       if (this.stopForDeniedPage(run, walk, current, true)) return;
       // Instrumented walks without a live page have nothing to clear.
       if (run.mode === 'live' && walk.page) {
-        current = await clearPageBlockers(walk, this.store, run.id, current, controller.signal, {
+        current = await this.clearBlockersAcrossReloads(run, walk, current, controller.signal, {
           arrival: true,
         });
         if (this.stopForDeniedPage(run, walk, current, true)) return;
@@ -774,7 +784,7 @@ export class Runner {
           // A new page often brings its own consent banner. Cleared only after this
           // input's own before/after comparison, so the dismissal is never credited to it.
           if (current.payload.url !== before.payload.url && walk.page) {
-            current = await clearPageBlockers(walk, this.store, run.id, current, signal, {
+            current = await this.clearBlockersAcrossReloads(run, walk, current, signal, {
               arrival: false,
             });
             if (this.stopForDeniedPage(run, walk, current)) return;
@@ -953,33 +963,86 @@ export class Runner {
     current: RecordEntry,
     signal: AbortSignal,
   ): Promise<{ current: RecordEntry; scan?: RecordEntry }> {
-    if (signal.aborted) throw Error('The run stopped before the automatic measurement.');
-    try {
-      const scan = await walk.measurements(current);
-      if (signal.aborted) throw Error('The run stopped during the automatic measurement.');
-      return { current, scan };
-    } catch (error) {
-      if (!(error instanceof MeasurementStateChanged) || signal.aborted) throw error;
-      this.store.append(
-        run.id,
-        'limit',
-        'browser',
-        {
-          method: 'automatic_accessibility_scan',
-          state: error.stage === 'before' ? 'NOT_TESTED' : 'INCONCLUSIVE',
-          reason:
-            'The page changed before its automatic measurement could settle. This check remains unknown; navigation resumes from a bounded observation refresh without repeating input or the scan.',
-          sourceCaptureId: error.captureId,
-          unavailableObservationId: error.observationId ?? null,
-        },
-        [current.id, ...(error.observationId ? [error.observationId] : [])],
-      );
-      // At most three observation reads, with no new input or scan; each original remains saved.
-      const refreshed = await walk.captureSettled();
-      if (signal.aborted) throw Error('The run stopped during the automatic observation refresh.');
-      walk.assertActive();
-      declareCriterionScopes(this.store, run.id);
-      return { current: refreshed };
+    // Measure only once the page has stopped reloading; if it reloads mid-scan anyway,
+    // wait, observe the new page and measure again (owner, 30 Oct). A scan sends no input.
+    let observeAgain = false;
+    for (let attempt = 1; ; attempt++) {
+      if (signal.aborted) throw Error('The run stopped before the automatic measurement.');
+      const last = attempt >= MEASUREMENT_ATTEMPTS;
+      try {
+        await walk.waitForReloadsToStop();
+        if (observeAgain) current = await this.observeAgain(run, walk, signal);
+        const scan = await walk.measurements(current);
+        if (signal.aborted) throw Error('The run stopped during the automatic measurement.');
+        return { current, scan };
+      } catch (error) {
+        const changed = error instanceof MeasurementStateChanged;
+        if ((!changed && !documentWasReplaced(error)) || signal.aborted) throw error;
+        this.store.append(
+          run.id,
+          'limit',
+          'browser',
+          {
+            method: 'automatic_accessibility_scan',
+            state: changed && error.stage === 'before' ? 'NOT_TESTED' : 'INCONCLUSIVE',
+            reason: last
+              ? `The page changed during automatic measurement ${attempt} of ${MEASUREMENT_ATTEMPTS}. This check remains unknown; navigation resumes from a bounded observation refresh without repeating input.`
+              : `The page changed during automatic measurement ${attempt} of ${MEASUREMENT_ATTEMPTS}. This attempt is unknown; the robot waits for the page to settle, observes it again and measures again, without repeating input.`,
+            attempt,
+            sourceCaptureId: changed ? error.captureId : current.id,
+            unavailableObservationId: (changed && error.observationId) || null,
+          },
+          [current.id, ...(changed && error.observationId ? [error.observationId] : [])],
+        );
+        observeAgain = true;
+        if (last) {
+          await walk.waitForReloadsToStop();
+          return { current: await this.observeAgain(run, walk, signal) };
+        }
+      }
+    }
+  }
+  /** A fresh original of the page as it is now, with no input; each original remains saved. */
+  private async observeAgain(run: Run, walk: BrowserWalk, signal: AbortSignal) {
+    const refreshed = await walk.captureSettled();
+    if (signal.aborted) throw Error('The run stopped during the automatic observation refresh.');
+    walk.assertActive();
+    declareCriterionScopes(this.store, run.id);
+    return refreshed;
+  }
+  /** Clears banners and popups; if the page reloads meanwhile (a robot check, a
+   * redirect), waits, observes the new page and clears again, at most three times. */
+  private async clearBlockersAcrossReloads(
+    run: Run,
+    walk: BrowserWalk,
+    current: RecordEntry,
+    signal: AbortSignal,
+    options: { arrival: boolean },
+  ): Promise<RecordEntry> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        if (attempt > 1) {
+          await walk.waitForReloadsToStop(options.arrival ? ARRIVAL_QUIET_MS : undefined);
+          current = await this.observeAgain(run, walk, signal);
+        }
+        return await clearPageBlockers(walk, this.store, run.id, current, signal, options);
+      } catch (error) {
+        if (!documentWasReplaced(error) || attempt >= BLOCKER_ATTEMPTS || signal.aborted)
+          throw error;
+        this.store.append(
+          run.id,
+          'limit',
+          'browser',
+          {
+            method: 'page_blocker/1',
+            state: 'PAGE_RELOADED',
+            attempt,
+            reason: `The page loaded a new document while banners and popups were being cleared (attempt ${attempt} of ${BLOCKER_ATTEMPTS}). The robot waits for it to settle and clears again on the new page.`,
+            sourceCaptureId: current.id,
+          },
+          [current.id],
+        );
+      }
     }
   }
   private async analyseCheckpoint(

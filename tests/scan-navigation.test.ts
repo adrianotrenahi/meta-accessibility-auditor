@@ -64,8 +64,10 @@ test(
       assert(actualFailure instanceof Error);
       assert.match(actualFailure.message, /Execution context was destroyed/);
       assert.equal(interruptedReads, 1);
-      assert.equal(scanAttempts, 1, 'The interrupted scan is not repeated');
-      assert.equal(measured.scan, undefined);
+      // Owner rule, 30 Oct: wait for the new page and measure again, without input.
+      assert.equal(scanAttempts, 2, 'The interrupted scan is measured again on the new page');
+      assert.ok(measured.scan);
+      assert.equal(measured.scan.sources[0], measured.current.id);
       assert.notEqual(measured.current.id, original.id);
       assert.equal(measured.current.payload.url, nextUrl);
       assert.equal(measured.current.payload.stable, true);
@@ -80,12 +82,17 @@ test(
       assert.deepEqual(limit.sources, [original.id]);
       assert.equal(
         records.filter((record) =>
-          ['observation', 'action', 'candidate', 'review', 'criterion_proposal'].includes(
-            record.kind,
-          ),
+          ['action', 'candidate', 'review', 'criterion_proposal'].includes(record.kind),
         ).length,
         0,
       );
+      const scans = records.filter((record) => record.kind === 'observation');
+      assert.equal(
+        scans.length,
+        1,
+        'only the new page is measured; the interrupted read saved nothing',
+      );
+      assert.deepEqual(scans[0].sources, [measured.current.id]);
       assert.equal(walk.actions, beforeActions, 'Recovery adds no action to the initial page open');
       assert.equal(app.store.usage(run.id).requests.length, 0);
       const report = evaluateCriteria(records, run.id, { imageAvailable: () => true });

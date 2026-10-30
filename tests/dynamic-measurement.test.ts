@@ -43,7 +43,7 @@ function fixture() {
 }
 
 test(
-  'A changed real page is refreshed once without scanning stale evidence or repeating its input',
+  'A changed real page is observed again and measured again, never scanning stale evidence or repeating input',
   { timeout: 90000 },
   async () => {
     const dir = mkdtempSync(join(tmpdir(), 'access-walk-dynamic-browser-'));
@@ -81,21 +81,20 @@ test(
         stale,
         new AbortController().signal,
       );
-      assert.equal(measurements, 1, 'No measurement retry is made');
+      assert.equal(measurements, 2, 'The scan is retried once, on the fresh observation');
       assert.notEqual(measured.current.id, stale.id);
       assert.equal(measured.current.payload.stable, true);
       assert(measured.current.payload.text.includes('Updated controlled product'));
-      assert.equal(measured.scan, undefined);
+      assert.ok(measured.scan);
+      assert.equal(measured.scan.sources[0], measured.current.id);
       assert.equal(walk.actions, beforeActions, 'Observation refresh sends no input');
       const records = app.store.records(run.id);
       assert.equal(records.filter((r) => r.kind === 'action').length, 1);
-      assert.equal(
-        records.filter(
-          (r) => r.kind === 'observation' && r.payload.method === 'automatic_accessibility_scan',
-        ).length,
-        0,
-        'The stale source is rejected before scanning',
+      const scans = records.filter(
+        (r) => r.kind === 'observation' && r.payload.method === 'automatic_accessibility_scan',
       );
+      assert.equal(scans.length, 1, 'The stale source is rejected before scanning');
+      assert.notEqual(scans[0].sources[0], stale.id);
       const limit = records.find(
         (r) => r.kind === 'limit' && r.payload.sourceCaptureId === stale.id,
       )!;
@@ -118,7 +117,7 @@ test(
 );
 
 test(
-  'A scan that changes state retains its untrusted raw result and returns a fresh original',
+  'A scan that keeps changing state retains its untrusted raw result, tries three times and returns a fresh original',
   { timeout: 90000 },
   async () => {
     const dir = mkdtempSync(join(tmpdir(), 'access-walk-during-scan-'));
@@ -147,13 +146,24 @@ test(
         original,
         new AbortController().signal,
       );
-      assert.equal(reads, 2);
+      assert(reads >= 2);
+      // The simulated page changes during every attempt: three tries, then the check stays unknown.
       assert.equal(measured.scan, undefined);
       assert.notEqual(measured.current.id, original.id);
+      assert.equal(
+        app.store
+          .records(run.id)
+          .filter((r) => r.kind === 'limit' && r.payload.method === 'automatic_accessibility_scan')
+          .length,
+        3,
+      );
       const raw = app.store
         .records(run.id)
         .find(
-          (r) => r.kind === 'observation' && r.payload.method === 'automatic_accessibility_scan',
+          (r) =>
+            r.kind === 'observation' &&
+            r.payload.method === 'automatic_accessibility_scan' &&
+            r.payload.stable === false,
         )!;
       assert(raw);
       assert.equal(raw.payload.stable, false);
@@ -440,6 +450,9 @@ test('Automatic start continues from one fresh observation and always cleans up'
         captures++;
         return fresh;
       },
+      async waitForReloadsToStop() {
+        return true;
+      },
       assertActive() {
         assert.equal(x.store.run(x.run.id).state, 'running');
       },
@@ -463,8 +476,9 @@ test('Automatic start continues from one fresh observation and always cleans up'
       false,
       false,
     );
-    assert.equal(measureAttempts, 1);
-    assert.equal(captures, 1);
+    // A page that never settles: three attempts, then the walk continues from a fresh original.
+    assert.equal(measureAttempts, 3);
+    assert.equal(captures, 3);
     assert.equal(continued, 1);
     assert.deepEqual(cleanup, ['reader', 'browser']);
     assert.equal(x.store.run(x.run.id).state, 'partial');
@@ -525,6 +539,9 @@ test('Stopping during refresh and unknown scan failures cannot be recovered as u
           captures++;
           controller.abort();
           return x.capture();
+        },
+        async waitForReloadsToStop() {
+          return true;
         },
         assertActive() {},
       };

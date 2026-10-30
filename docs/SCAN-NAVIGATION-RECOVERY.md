@@ -9,10 +9,24 @@ instead of ending the run with an internal error.
 
 Only the existing, recognised document-replacement errors qualify. Original
 capture validation still runs first. A closed page, stopped run, unknown scan
-failure or damaged original remains a refusal. The scan and prior input are not
-repeated. Recovery retains the old original and reads a fresh state through the
-existing bounded capture path. Action, screenshot, time and spending limits stay
-the same.
+failure or damaged original remains a refusal. Prior input is never repeated.
+Recovery retains the old original and reads a fresh state through the existing
+bounded capture path. Action, screenshot, time and spending limits stay the same.
+
+## Waiting for reloads, then trying again (owner decision, 30 October)
+
+Before measuring, the robot now waits until the page has stopped loading new
+documents for a quiet moment: 2.5 seconds after arriving at a real website,
+1 second otherwise, and not at all when nothing loaded recently. It never waits
+more than 10 seconds. On Booking.com this lets its robot-check reload
+(`?chal_t=…`) finish before the first screenshot and scan.
+
+If the page still reloads during a scan, the robot records that attempt as
+unknown, waits, observes the page again and scans again, up to three attempts;
+after the third it continues with the check unknown, as before. Clearing banners
+and popups gets the same three attempts, clearing again on the new page. A scan
+sends no input, so repeating it never repeats a step of the journey. Every attempt
+stays saved.
 
 ## Impact on the UX
 
@@ -25,8 +39,11 @@ customer browser defaults are unchanged.
 
 The local browser regression deliberately holds axe's script-injection read
 across an actual controlled navigation, producing Chromium's real destroyed-
-document error. It proves recovery, retained originals, no repeated input or scan,
-and no accepted result from the interrupted check. Additional checks cover a
+document error. It proves recovery, retained originals, no repeated input, no accepted result
+from the interrupted check, and one new scan of the page it reached
+(tests/scan-navigation.test.ts). tests/page-reloads.test.ts covers a page that
+reloads itself after arrival, a scan or banner clearing cut short by a reload,
+and the three-attempt limits. Additional checks cover a
 replacement before scanning and refusal after close/stop or an unrelated failure.
 
 A current public-site entry check is separate from this controlled regression.
