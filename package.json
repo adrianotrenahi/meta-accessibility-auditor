@@ -25,7 +25,8 @@
     "proof:host": "node --import tsx scripts/host-proof.ts --out fixtures/host-proof",
     "serve:host": "node --import tsx scripts/serve-host.ts",
     "proof:host-controls": "node --import tsx scripts/host-controls-proof.ts",
-    "proof:sam-masks": "node --import tsx scripts/sam-mask-proof.ts"
+    "proof:sam-masks": "node --import tsx scripts/sam-mask-proof.ts",
+    "proof:blockers": "node --import tsx scripts/blocker-proof.ts"
   },
   "dependencies": {
     "@axe-core/playwright": "4.14.0",

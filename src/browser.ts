@@ -1,5 +1,5 @@
 import { originalAriaName } from './aria-name.js';
-import { webkit, chromium, type Browser, type Page } from 'playwright';
+import { webkit, chromium, type Browser, type ElementHandle, type Page } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
 import { Store, digest, recordIsIntact } from './store.js';
 import { LIMITS, type Capture, type RecordEntry } from './types.js';
@@ -14,6 +14,13 @@ import { collectBrowserFacts, summarizeAxe } from './evidence-checks.js';
 import { installControlIdentity } from './control-identity.js';
 import { publicBrowserProxy } from './public-network.js';
 import { readRecordedFocusHelp, type RecordedFocusHelp } from './focus-help.js';
+import {
+  ariaDifference,
+  contentSettled,
+  openDialogs,
+  pageStamp,
+  sameForInput,
+} from './page-state.js';
 import {
   meaningfulScreenFingerprint,
   renderedScreenShape,
@@ -86,7 +93,11 @@ export function publicSearchInput(
     focus.type === 'search' ||
     focus.role === 'searchbox' ||
     focus.searchForm === true ||
-    /\b(search|buscar|b[uú]squeda|especialidad|specialty|ciudad|city)\b/i.test(label)
+    /\b(search|buscar|b[uú]squeda|especialidad|specialty|ciudad|city)\b/i.test(label) ||
+    // Travel search fields: places and dates, never personal details (refused above).
+    /\bwhere\s+(from|to)\b|\b(origin|destination|airport|departure|return|dates?|check.?in|check.?out|desde|hacia|origen|destino|aeropuerto|salida|llegada|ida|vuelta|fechas?)\b/i.test(
+      label,
+    )
   );
 }
 export class BrowserWalk {
@@ -103,6 +114,8 @@ export class BrowserWalk {
   private lastScreenState?: { fingerprint: string; original: RecordEntry };
   private readonly controlIdentityKey = '__access_walk_control_' + randomUUID();
   private readonly pointerStateKey = '__access_walk_pointer_' + randomUUID();
+  /** Page-side registry of the exact controls each original listed (no DOM change). */
+  private readonly stampKey = '__access_walk_stamp_' + randomUUID();
   constructor(
     public store: Store,
     public runId: string,
@@ -166,6 +179,12 @@ export class BrowserWalk {
     });
     await installControlIdentity(context, this.controlIdentityKey);
     await installPointerState(context, this.pointerStateKey);
+    // WebKit can report one document's timeOrigin 1 ms apart on later reads, which
+    // looked like a new document. Read it once per document and keep that value.
+    await context.addInitScript(() => {
+      const origin = performance.timeOrigin;
+      Object.defineProperty(performance, 'timeOrigin', { value: origin, configurable: false });
+    });
     await context.route('**/*', async (route) => {
       try {
         const u = new URL(route.request().url());
@@ -191,6 +210,8 @@ export class BrowserWalk {
     this.page.on('popup', (popup) => void popup.close());
     this.count();
     await this.page.goto(approved.href, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    // Consent banners and popups usually arrive after the document itself.
+    await this.page.waitForLoadState('load', { timeout: 8000 }).catch(() => undefined);
     await this.page.bringToFront();
     return this.capture();
   }
@@ -246,6 +267,7 @@ export class BrowserWalk {
       focus: await this.focus(),
       focusHelp: await readRecordedFocusHelp(this.page),
       scroll: await this.page.evaluate(() => ({ x: scrollX, y: scrollY })),
+      dialogs: await openDialogs(this.page),
     };
   }
   private async meaningfulObservation(state: Awaited<ReturnType<BrowserWalk['observedState']>>) {
@@ -296,11 +318,28 @@ export class BrowserWalk {
     for (let attempt = 0; attempt < 3; attempt++) {
       this.assertActive();
       attempts.push(current);
-      if (current.payload.stable === true) return current;
+      if (current.payload.stable === true && current.payload.contentDrift?.settled !== false)
+        return current;
       if (attempt < 2) {
-        await this.page.waitForTimeout(200);
+        await this.page.waitForTimeout(400);
         current = await this.capture();
       }
+    }
+    // Same page, focus and popups, but its copy kept changing (a live ticker, a
+    // carousel). The latest original is used; nothing is inferred from the drift.
+    if (current.payload.stable === true) {
+      this.store.append(
+        this.runId,
+        'limit',
+        'browser',
+        {
+          method: 'content_still_changing',
+          reason:
+            'Page text kept changing across three observations while address, focus and popups stayed the same. The latest original is used.',
+        },
+        attempts.map((item) => item.id),
+      );
+      return current;
     }
     const reason =
       'The page did not settle across three observations. No input was repeated; the journey remains incomplete.';
@@ -335,8 +374,39 @@ export class BrowserWalk {
     });
     const elements = [];
     const locators = this.page.locator(controls);
-    const count = Math.min(await locators.count(), 60);
-    for (let i = 0; i < count; i++) {
+    // Real sites put many hidden menu links before their search form. Choose the
+    // first 60 visible controls, those on screen first; ids keep the page position.
+    const stampToken = randomUUID();
+    const listed = await locators.evaluateAll(
+      (targets, { key, token }) => {
+        const onScreen: number[] = [];
+        const offScreen: number[] = [];
+        targets.forEach((target, index) => {
+          const box = target.getBoundingClientRect();
+          const style = getComputedStyle(target);
+          if (
+            !box.width ||
+            !box.height ||
+            style.visibility === 'hidden' ||
+            style.display === 'none'
+          )
+            return;
+          const shown =
+            box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth;
+          (shown ? onScreen : offScreen).push(index);
+        });
+        const chosen = [...onScreen, ...offScreen].slice(0, 60).sort((a, b) => a - b);
+        // Each original keeps live references to the exact controls it listed, so a
+        // decision naming e69 reaches that element even when its name is repeated.
+        const registry: Map<string, Map<string, Element>> = ((globalThis as any)[key] ??=
+          new Map());
+        registry.set(token, new Map(chosen.map((index) => ['e' + index, targets[index]!])));
+        for (const old of [...registry.keys()].slice(0, -8)) registry.delete(old);
+        return chosen;
+      },
+      { key: this.stampKey, token: stampToken },
+    );
+    for (const i of listed) {
       const locator = locators.nth(i);
       if (!(await locator.isVisible().catch(() => false))) continue;
       const box = await locator.boundingBox();
@@ -438,8 +508,12 @@ export class BrowserWalk {
     if (before.documentEpoch !== state.documentEpoch)
       throw Error('Document changed during observation');
     const asset = this.store.asset(this.runId, `capture_${randomUUID()}.png`, image);
+    // A rotating promotion is not an unsettled page; a popup, scroll or focus change is.
+    const contentDrift =
+      before.aria === state.aria ? 0 : ariaDifference(before.aria, state.aria).length;
     const stable =
-      identitiesStable && digest(JSON.stringify(before)) === digest(JSON.stringify(state));
+      identitiesStable && sameForInput({ ...before, pageStamp: pageStamp(before) }, state);
+    const settled = contentSettled(before.aria, state.aria);
     const beforeFingerprint = meaningfulScreenFingerprint(screenBefore);
     const fingerprint =
       stable && beforeFingerprint && beforeFingerprint === meaningfulScreenFingerprint(screenAfter)
@@ -472,8 +546,12 @@ export class BrowserWalk {
       aria: state.aria,
       focus: state.focus,
       focusHelp: state.focusHelp,
+      dialogs: state.dialogs,
       stateStamp: digest(JSON.stringify(state)),
+      pageStamp: pageStamp(state),
       stable,
+      ...(contentDrift ? { contentDrift: { changedLines: contentDrift, settled } } : {}),
+      stampToken,
       ...(screenState ? { screenState } : {}),
       limits: {
         ...(!identitiesStable ? { controlIdentityChanged: true } : {}),
@@ -493,6 +571,24 @@ export class BrowserWalk {
     this.lastOriginal = { id: original.id, url: payload.url, documentEpoch: state.documentEpoch };
     this.lastScreenState = fingerprint ? { fingerprint, original: primary ?? original } : undefined;
     return original;
+  }
+  /** The exact element an original listed as `id`, while it is still on the page.
+   * Read from a page-side registry; nothing is added to the page itself. */
+  async listedControl(
+    source: RecordEntry,
+    id: string,
+  ): Promise<ElementHandle<HTMLElement | SVGElement> | null> {
+    if (typeof source.payload.stampToken !== 'string' || !/^e\d+$/.test(id)) return null;
+    const found = await this.page.evaluateHandle(
+      ({ key, token, id }) => {
+        const element = (globalThis as any)[key]?.get(token)?.get(id) as Element | undefined;
+        return element?.isConnected ? element : null;
+      },
+      { key: this.stampKey, token: source.payload.stampToken, id },
+    );
+    const element = found.asElement();
+    if (!element) await found.dispose();
+    return element as ElementHandle<HTMLElement | SVGElement> | null;
   }
   /** Ordinary Tab movement gets original focus facts, not another screenshot.
    * A changed/uncertain rendered state still takes the ordinary full image. */
@@ -519,16 +615,30 @@ export class BrowserWalk {
       source.seq >= performed.seq
     )
       throw Error('A lightweight focus observation needs its exact performed Tab.');
+    const originalId = source.kind === 'capture' ? source.id : source.payload.sourceCaptureId;
+    const original = this.store.record(this.runId, originalId);
+    if (!original || original.kind !== 'capture' || !recordIsIntact(original))
+      throw Error('The lightweight focus observation lost its original screen.');
     const state = await readPage(this.page, () => this.observedState());
     const fingerprint = meaningfulScreenFingerprint(await this.meaningfulObservation(state));
     const previous =
       source.kind === 'capture'
         ? source.payload.screenState?.fingerprint
         : source.payload.screenStateFingerprint;
+    // A complete rendered fingerprint keeps the final say: any visible change after
+    // the key takes a real original. Most commercial pages animate something, so
+    // that fingerprint is often unavailable; then the original's document, address,
+    // scroll and dialogs must match, and the accessibility snapshot may differ only
+    // within the bounded drift (page-state/1, owner decision 29 October). A larger
+    // change takes a real original; the drift that remains is recorded below.
+    const sameScreen = !!fingerprint && !!previous && fingerprint === previous;
+    const samePage =
+      (!fingerprint || !previous) &&
+      typeof original.payload.pageStamp === 'string' &&
+      original.payload.pageStamp === pageStamp(state) &&
+      contentSettled(original.payload.aria, state.aria);
     if (
-      !fingerprint ||
-      !previous ||
-      fingerprint !== previous ||
+      !(sameScreen || samePage) ||
       digest(JSON.stringify(state.focus)) !== digest(JSON.stringify(performed.payload.after))
     )
       return this.captureSettled();
@@ -536,13 +646,11 @@ export class BrowserWalk {
     const afterShape = await this.meaningfulObservation(after);
     if (
       digest(JSON.stringify(state)) !== digest(JSON.stringify(after)) ||
-      meaningfulScreenFingerprint(afterShape) !== fingerprint
+      (sameScreen
+        ? meaningfulScreenFingerprint(afterShape) !== fingerprint
+        : !contentSettled(original.payload.aria, after.aria))
     )
       return this.captureSettled();
-    const originalId = source.kind === 'capture' ? source.id : source.payload.sourceCaptureId;
-    const original = this.store.record(this.runId, originalId);
-    if (!original || original.kind !== 'capture' || !recordIsIntact(original))
-      throw Error('The lightweight focus observation lost its original screen.');
     return this.store.append(
       this.runId,
       'observation',
@@ -561,7 +669,19 @@ export class BrowserWalk {
         focusAppearance: afterShape.screenShape.focusAppearance,
         focusHelp: after.focusHelp,
         stateStamp: digest(JSON.stringify(after)),
-        screenStateFingerprint: fingerprint,
+        ...(sameScreen
+          ? { screenStateFingerprint: fingerprint }
+          : {
+              pageStamp: pageStamp(after),
+              comparison: 'page-state-and-bounded-content-drift',
+              ...(after.aria !== original.payload.aria
+                ? {
+                    contentDrift: {
+                      changedLines: ariaDifference(original.payload.aria, after.aria).length,
+                    },
+                  }
+                : {}),
+            }),
       },
       [source.id, performed.id],
     );
@@ -584,14 +704,19 @@ export class BrowserWalk {
       original.seq >= source.seq ||
       original.hash !== source.payload.sourceCaptureHash ||
       original.payload.imageHash !== source.payload.sourceImageHash ||
-      original.payload.screenState?.fingerprint !== source.payload.screenStateFingerprint
+      (typeof source.payload.screenStateFingerprint === 'string'
+        ? original.payload.screenState?.fingerprint !== source.payload.screenStateFingerprint
+        : typeof source.payload.pageStamp !== 'string' ||
+          original.payload.pageStamp !== source.payload.pageStamp)
     )
       throw Error('Keyboard input needs an intact focus observation and original screen.');
     const state = await this.observedState();
     if (
-      source.payload.stateStamp !== digest(JSON.stringify(state)) ||
-      source.payload.screenStateFingerprint !==
-        meaningfulScreenFingerprint(await this.meaningfulObservation(state))
+      typeof source.payload.screenStateFingerprint === 'string'
+        ? source.payload.stateStamp !== digest(JSON.stringify(state)) ||
+          source.payload.screenStateFingerprint !==
+            meaningfulScreenFingerprint(await this.meaningfulObservation(state))
+        : !sameForInput(source.payload, state)
     )
       throw new ActionStateChanged('The recorded focus changed before input; refresh first.');
   }
@@ -612,13 +737,20 @@ export class BrowserWalk {
       throw new ActionStateChanged(
         'A control changed or disappeared while this screen was captured; capture a fresh observation before acting.',
       );
-    if (
-      !source.payload.stable ||
-      source.payload.stateStamp !== digest(JSON.stringify(await this.observedState()))
-    )
+    if (!source.payload.stable || !sameForInput(source.payload, await this.observedState()))
       throw new ActionStateChanged(
         'Page state changed; capture a fresh observation before acting.',
       );
+  }
+  /** Completing an instruction claims what its original shows, so a page whose
+   * content was replaced since (same address, scroll, popups and focus) refuses it.
+   * A page already known to keep changing is not refused for that drift alone. */
+  async verifyCompletionCapture(source: RecordEntry) {
+    await this.verifyOriginalCapture(source);
+    if (source.payload.contentDrift?.settled === false) return;
+    const state = await this.observedState();
+    if (!contentSettled(source.payload.aria, state.aria))
+      throw new ActionStateChanged('The page content changed; capture a fresh observation first.');
   }
   async act(action: Action, source: RecordEntry, expectedTarget?: () => Promise<boolean>) {
     if (source.kind === 'observation' && source.payload.method === 'keyboard_focus/1') {

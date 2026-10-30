@@ -98,6 +98,31 @@ export function exportHostActivity(records: RecordEntry[], runId: string, runnin
         record.payload.outcome === 'performed'
           ? 'The recorded browser input was sent. Its result still needs checking.'
           : 'This record does not establish a performed browser input.';
+    } else if (record.kind === 'observation' && record.payload.method === 'page_blocker/1') {
+      const p = record.payload;
+      const what = p.blocker === 'consent' ? 'Cookie banner' : 'Popup';
+      const presses = `${p.tabsPressed} ${p.tabsPressed === 1 ? 'press' : 'presses'}`;
+      const text =
+        p.test === 'escape'
+          ? `${what}: Escape ${p.closed ? 'closed it' : 'did not close it'}.`
+          : p.test === 'tab_reach'
+            ? (p.reachedControl
+                ? `${what}: Tab reached "${p.control?.name}" after ${presses}.`
+                : `${what}: Tab did not reach "${p.control?.name}" in ${presses}.`) +
+              (p.choice === 'accept_only_offered'
+                ? ' No one-click refusal was offered, so the robot will try accepting to continue.'
+                : '')
+            : p.test === 'activate'
+              ? p.choice === 'accept_only_offered'
+                ? `${what}: ${p.cleared ? 'accepted to continue; dismissed' : 'accepted; still shown'}.`
+                : `${what}: ${p.cleared ? 'dismissed' : 'still shown after activation'}.`
+              : typeof p.reason === 'string'
+                ? `${what}: ${p.reason}`
+                : undefined;
+      if (!text) return [];
+      kind = 'progress';
+      action = 'Recorded progress';
+      reason = scrub(text, record.seq);
     } else if (record.kind === 'limit' && typeof record.payload.reason === 'string') {
       kind = 'limit';
       action = 'Run limit';
