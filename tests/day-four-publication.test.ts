@@ -14,6 +14,8 @@ import { suppliedImageIds } from '../src/image-receipt.js';
 import { candidateTarget } from '../src/candidate-target.js';
 import { digest } from '../src/store.js';
 import type { RecordEntry } from '../src/types.js';
+import { pullShared, SharedMirror } from '../src/shared-storage.js';
+import { FakeRemote } from './fake-shared-remote.js';
 
 // Saved responses prove the publication contract, not provider authenticity or semantic accuracy.
 function fixture() {
@@ -565,5 +567,44 @@ test('A direct kept title change cannot replace a new exact finding version, pre
     } finally {
       x.close();
     }
+  }
+});
+
+test('A pulled audit publishes exactly what its owner publishes, whatever the folder already holds', async () => {
+  const x = fixture();
+  // Another audit saved first gives the owner's step numbers a head start.
+  const earlier = x.store.create('Earlier audit', 'https://example.org', 'offline');
+  for (let i = 0; i < 40; i++) x.store.append(earlier.id, 'observation', 'browser', { note: i });
+  const fresh = new Store(mkdtempSync(join(tmpdir(), 'access-walk-pulled-fresh-')));
+  const busy = new Store(mkdtempSync(join(tmpdir(), 'access-walk-pulled-busy-')));
+  const other = busy.create('Local audit', 'https://example.org', 'offline');
+  for (let i = 0; i < 200; i++) busy.append(other.id, 'observation', 'browser', { note: i });
+  const remote = new FakeRemote();
+  const mirror = new SharedMirror(x.store, remote);
+  try {
+    x.candidate();
+    await x.review(() => ({ verdict: 'keep' }));
+    assert.equal(x.store.published(x.run.id).length, 1);
+    await mirror.sync();
+    for (const reader of [fresh, busy]) {
+      await pullShared(reader, remote);
+      assert.equal(reader.published(x.run.id).length, 1, 'a valid finding stays published');
+    }
+    // Later evidence withholds the finding until a fresh review reads it.
+    x.store.append(x.run.id, 'navigator_note', 'driver', { text: 'A later walk note.' }, [
+      x.after.id,
+    ]);
+    assert.deepEqual(x.store.published(x.run.id), []);
+    await mirror.sync();
+    for (const reader of [fresh, busy]) {
+      await pullShared(reader, remote);
+      assert.deepEqual(reader.published(x.run.id), [], 'a stale finding stays withheld');
+    }
+  } finally {
+    for (const reader of [fresh, busy]) {
+      reader.close();
+      rmSync(reader.dir, { recursive: true, force: true });
+    }
+    x.close();
   }
 });

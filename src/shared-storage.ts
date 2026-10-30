@@ -1,6 +1,14 @@
 import { neon } from '@neondatabase/serverless';
 import { AwsClient } from 'aws4fetch';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { digest, KEPT_ROWS, type Store } from './store.js';
@@ -95,6 +103,8 @@ export interface SharedRemote {
 }
 
 const RUN_ID = /^[a-f0-9-]{36}$/;
+/** Marks a kept copy already in the shared copy; like KEPT_ROWS, no screenshot can use it. */
+export const KEPT_SENT = 'sent.discarded.json';
 const OBJECT_NAME = /^[a-zA-Z0-9_-]+\.(png|json)$/;
 const objectKey = (runId: string, name: string) => {
   if (!RUN_ID.test(runId) || !OBJECT_NAME.test(name)) throw Error('Invalid shared file name.');
@@ -138,7 +148,13 @@ export function sharedRemote(config: SharedConfig): SharedRemote {
     const response = await r2.fetch(`${base}/${key}`, init).catch((error) => {
       throw safe(error);
     });
-    if (!response.ok) throw Error(`The screenshot store answered ${response.status}.`);
+    if (!response.ok) {
+      // R2's short error code (for example AccessDenied) helps setup and holds no secret.
+      const code = (await response.text().catch(() => '')).match(/<Code>([A-Za-z]{1,64})<\/Code>/);
+      throw Error(
+        `The screenshot store answered ${response.status}${code ? ` (${code[1]})` : ''}.`,
+      );
+    }
     return response;
   };
   return {
@@ -240,6 +256,7 @@ export class SharedMirror {
   private ready = false;
   private closed = false;
   private lastSignature?: string;
+  private lastDiscardCheck = 0;
   lastError?: string;
   constructor(
     private store: Store,
@@ -249,6 +266,8 @@ export class SharedMirror {
     },
     private everyMs = 2000,
     private closeMs = 5000,
+    /** Discards made in another copy are checked hourly, so Neon still sleeps between. */
+    private discardEveryMs = 3_600_000,
   ) {}
   start() {
     const loop = () => {
@@ -290,7 +309,7 @@ export class SharedMirror {
   private signature() {
     const runs = this.store.db
       .prepare(
-        "SELECT id,body,(SELECT max(seq) FROM records WHERE run_id=runs.id) AS seq,(SELECT group_concat(id||status||coalesce(actual,'')) FROM requests WHERE run_id=runs.id) AS requests FROM runs WHERE id NOT IN (SELECT run_id FROM shared_pulled) ORDER BY id",
+        "SELECT id,body,(SELECT max(seq) FROM records WHERE run_id=runs.id) AS seq,(SELECT group_concat(v) FROM (SELECT id||status||coalesce(actual,'') AS v FROM requests WHERE run_id=runs.id ORDER BY id)) AS requests FROM runs WHERE id NOT IN (SELECT run_id FROM shared_pulled) ORDER BY id",
       )
       .all() as { id: string; body: string; seq: number | null; requests: string | null }[];
     const files = (folder: string) => (existsSync(folder) ? readdirSync(folder).length : 0);
@@ -310,13 +329,15 @@ export class SharedMirror {
   }
   private async pass() {
     const signature = this.signature();
-    if (this.ready && signature === this.lastSignature) return;
+    const checkDue = Date.now() - this.lastDiscardCheck >= this.discardEveryMs;
+    if (this.ready && signature === this.lastSignature && !checkDue) return;
     if (!this.ready) {
       await this.remote.prepare();
       this.ready = true;
     }
     await this.sendOwn();
     this.lastSignature = signature;
+    this.lastDiscardCheck = Date.now();
   }
   private async sendOwn() {
     await this.sendKept();
@@ -356,7 +377,9 @@ export class SharedMirror {
       db.prepare('UPDATE shared_sync SET record_seq=? WHERE run_id=?').run(after, id);
     }
     const requests = db
-      .prepare('SELECT id,role,reserved,actual,status,created FROM requests WHERE run_id=?')
+      .prepare(
+        'SELECT id,role,reserved,actual,status,created FROM requests WHERE run_id=? ORDER BY id',
+      )
       .all(id) as SharedRequest[];
     const requestsHash = digest(JSON.stringify(requests));
     if (requestsHash !== sync.requests_hash) {
@@ -372,15 +395,18 @@ export class SharedMirror {
       let bytes: Uint8Array;
       try {
         bytes = readFileSync(join(folder, name));
-      } catch {
-        continue; // Moved by a discard mid-pass; the kept copy sends it next.
+      } catch (error) {
+        // Only a file a discard moved mid-pass is skipped; the kept copy sends it next.
+        // Any other read failure stops the pass, so nothing is marked sent without it.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
       }
       await this.remote.putObject(id, name, bytes);
       this.store.db.prepare('INSERT OR IGNORE INTO shared_objects VALUES(?,?)').run(id, name);
     }
   }
-  /** A discarded audit's kept copy is sent whole, then marked discarded, then left
-   * only in the shared copy. Without shared storage it simply stays on this Mac. */
+  /** A discarded audit's kept copy is sent whole and marked discarded. It also stays
+   * on this Mac, so losing the shared copy never loses the evidence. */
   private async sendKept() {
     const root = this.store.keptDir();
     if (!existsSync(root)) return;
@@ -389,6 +415,7 @@ export class SharedMirror {
       // Only a discard that finished: an unfinished one could still be undone.
       if (
         !existsSync(join(folder, KEPT_ROWS)) ||
+        existsSync(join(folder, KEPT_SENT)) ||
         this.store.discardPending(id) ||
         this.store.hasRun(id)
       )
@@ -404,7 +431,9 @@ export class SharedMirror {
       const db = this.store.db;
       db.prepare('DELETE FROM shared_sync WHERE run_id=?').run(id);
       db.prepare('DELETE FROM shared_objects WHERE run_id=?').run(id);
-      rmSync(folder, { recursive: true, force: true });
+      writeFileSync(join(folder, KEPT_SENT), JSON.stringify({ sentAt: new Date().toISOString() }), {
+        mode: 0o600,
+      });
     }
   }
 }
@@ -417,7 +446,7 @@ export async function pullShared(
   options: { includeDiscarded?: boolean } = {},
 ) {
   const db = store.db;
-  const summary = { added: 0, updated: 0, removed: 0, files: 0 };
+  const summary = { added: 0, updated: 0, removed: 0, files: 0, rejected: 0 };
   for (const run of await remote.runs()) {
     if (!RUN_ID.test(run.id)) continue;
     const own = store.hasRun(run.id) && !store.pulled(run.id);
@@ -482,11 +511,17 @@ export async function pullShared(
     for (const object of await remote.objects(run.id)) {
       if (!OBJECT_NAME.test(object.name) || existsSync(join(folder, object.name))) continue;
       const bytes = await remote.object(run.id, object.name);
-      // A screenshot that does not match its saved fingerprint is never written.
-      if (digest(bytes) !== object.hash)
-        throw Error('A shared screenshot did not match its record.');
+      // A screenshot that does not match its saved fingerprint is never written;
+      // it is counted, and every other audit still comes through.
+      if (digest(bytes) !== object.hash) {
+        summary.rejected++;
+        continue;
+      }
       mkdirSync(folder, { recursive: true, mode: 0o700 });
-      writeFileSync(join(folder, object.name), bytes, { mode: 0o600 });
+      // Written under a temporary name first, so an interrupted pull never leaves half a file.
+      const partial = join(folder, `${object.name}.partial`);
+      writeFileSync(partial, bytes, { mode: 0o600 });
+      renameSync(partial, join(folder, object.name));
       summary.files++;
     }
     summary[known ? 'updated' : 'added']++;

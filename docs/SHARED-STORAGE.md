@@ -2,14 +2,14 @@
 
 Every audit is saved on the Mac first, exactly as before. When shared storage is set up, the engine also copies each audit while it runs: the text (steps, findings, notes, costs) to a Neon database, and the screenshots to a private Cloudflare R2 bucket. Any working copy of this code — any branch, Claude's or Codex's — can then pull those audits in and open them.
 
-Without the settings, nothing is shared and the engine behaves as before. Tests and proof scripts never share, even when the settings exist.
+Without the settings, nothing is shared and the engine behaves as before. Only the public-website host (`serve-host --public-websites`, which the audits page uses) and the standalone app share. The controlled example host, tests and proof scripts never share, even when the settings exist.
 
 ## What is copied, and when
 
 - **While an audit runs:** every few seconds, the new steps and screenshots since the last copy. The audit never waits for this. If the internet or Neon is down, the copy pauses, says so once in the engine's log, and catches up when the connection returns.
 - **Finished, stopped, interrupted and failed audits:** copied in full like any other.
-- **Discarded audits:** the audit leaves every list and report, but its evidence is kept for investigating what went wrong (owner decision, 30 October). It first moves to `.discarded/<run id>` inside the data folder. With shared storage, the full copy is sent and marked as discarded, and only then removed from the Mac. Without shared storage it stays in `.discarded/`.
-- **Discard in one copy applies everywhere:** if an audit is discarded from a copy that pulled it, the copy that ran it also removes it from its lists, and the evidence stays kept.
+- **Discarded audits:** the audit leaves every list and report, but its evidence is kept for investigating what went wrong (owner decision, 30 October). It moves to `.discarded/<run id>` inside the data folder and stays there. With shared storage, the full copy is also sent and marked as discarded, so the evidence lives in both places.
+- **Discard in one copy applies everywhere:** if an audit is discarded from a copy that pulled it, the copy that ran it also removes it from its lists, and the evidence stays kept. The copy that ran it checks for this at start-up, whenever it has something new to send, and otherwise once an hour, so Neon can sleep in between.
 
 ## Setting it up
 
@@ -34,6 +34,6 @@ Without the settings, nothing is shared and the engine behaves as before. Tests 
 npm run storage -- pull --data data
 ```
 
-This adds or updates read copies of every shared audit in that folder. Add `--follow` to keep pulling every few seconds while an audit runs elsewhere, and `--include-discarded` to also pull discarded audits for investigation. Each screenshot is checked against its saved fingerprint before it is written; a mismatch stops the pull. A folder an engine is currently using is refused, so pull into a separate folder or stop that engine first.
+This adds or updates read copies of every shared audit in that folder. Add `--follow` to keep pulling every few seconds while an audit runs elsewhere, and `--include-discarded` to also pull discarded audits for investigation. Each screenshot is checked against its saved fingerprint before it is written. One that does not match is never written; it is counted as `rejected`, and every other audit still comes through. A folder an engine is currently using is refused, so pull into a separate folder or stop that engine first.
 
 A read copy is never sent back: only the copy that ran an audit changes its saved state. The Cavioo audits page lists only the audits started from it, so pulled audits open in this engine's own viewer.

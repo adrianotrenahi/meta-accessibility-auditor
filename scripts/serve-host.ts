@@ -9,7 +9,8 @@ const publicWebsites = process.argv.includes('--public-websites');
 const app = await startServer(0, resolve(process.argv[index + 1]), false, {
   controlledLiveProof: controlledLiveProof || publicWebsites,
   publicWebsites,
-  shared: sharedConfig(),
+  // Only real public-website audits share; the controlled example and proofs stay local.
+  shared: publicWebsites ? sharedConfig() : null,
 });
 console.log(JSON.stringify({ protocol: 'access-walk/host-v1', origin: app.origin }));
 for (const signal of ['SIGINT', 'SIGTERM'] as const)

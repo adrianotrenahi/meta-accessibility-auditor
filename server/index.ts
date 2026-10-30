@@ -238,7 +238,11 @@ export async function startServer(
     store.recoverInterrupted();
     if (options.shared) {
       mirror = new SharedMirror(store, sharedRemote(options.shared), {
-        discard: (id) => runner.discard(id),
+        // Same order as the discard buttons: planning stops before the evidence is kept.
+        discard: async (id) => {
+          await planner.stop(id);
+          await runner.discard(id);
+        },
         log: (line) => console.error(line),
       });
       mirror.start();

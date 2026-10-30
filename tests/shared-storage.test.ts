@@ -1,94 +1,26 @@
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { digest, KEPT_ROWS, Store } from '../src/store.js';
 import {
+  KEPT_SENT,
   pullShared,
   redactor,
   SharedMirror,
   sharedConfig,
-  type SharedRecord,
   type SharedRemote,
-  type SharedRequest,
 } from '../src/shared-storage.js';
-
-/** An in-memory stand-in for Neon and R2, so no test touches a real account. */
-class FakeRemote implements SharedRemote {
-  runsById = new Map<string, { body: string; discarded_at: string | null }>();
-  recordsById = new Map<string, SharedRecord>();
-  requestsById = new Map<string, SharedRequest & { run_id: string }>();
-  files = new Map<string, { bytes: Uint8Array; hash: string }>();
-  offline = false;
-  recordBatches = 0;
-  ownedWrites = 0;
-  hang = false;
-  calls = 0;
-  private check() {
-    this.calls++;
-    if (this.offline) throw Error('network unreachable');
-  }
-  async prepareHang() {
-    if (this.hang) await new Promise(() => {});
-  }
-  async prepare() {
-    this.check();
-    await this.prepareHang();
-  }
-  async putRun(id: string, body: string, owned: boolean) {
-    this.check();
-    const prior = this.runsById.get(id);
-    if (owned) this.ownedWrites++;
-    if (!prior) this.runsById.set(id, { body, discarded_at: null });
-    else if (owned) prior.body = body;
-  }
-  async markDiscarded(id: string, at: string) {
-    this.check();
-    const run = this.runsById.get(id);
-    if (run) run.discarded_at ??= at;
-  }
-  async discarded(ids: string[]) {
-    this.check();
-    return new Set(ids.filter((id) => this.runsById.get(id)?.discarded_at));
-  }
-  async putRecords(rows: SharedRecord[]) {
-    this.check();
-    this.recordBatches++;
-    for (const row of rows) if (!this.recordsById.has(row.id)) this.recordsById.set(row.id, row);
-  }
-  async putRequests(runId: string, rows: SharedRequest[]) {
-    this.check();
-    for (const row of rows) this.requestsById.set(row.id, { ...row, run_id: runId });
-  }
-  async putObject(runId: string, name: string, bytes: Uint8Array) {
-    this.check();
-    this.files.set(`${runId}/${name}`, { bytes, hash: digest(bytes) });
-  }
-  async runs() {
-    this.check();
-    return [...this.runsById].map(([id, run]) => ({ id, ...run }));
-  }
-  async records(runId: string, after: number) {
-    return [...this.recordsById.values()]
-      .filter((row) => row.run_id === runId && row.seq > after)
-      .sort((a, b) => a.seq - b.seq);
-  }
-  async requests(runId: string) {
-    return [...this.requestsById.values()].filter((row) => row.run_id === runId);
-  }
-  async objects(runId: string) {
-    return [...this.files]
-      .filter(([key]) => key.startsWith(`${runId}/`))
-      .map(([key, file]) => ({ name: key.slice(runId.length + 1), hash: file.hash }));
-  }
-  async object(runId: string, name: string) {
-    return this.files.get(`${runId}/${name}`)!.bytes;
-  }
-  recordsOf(runId: string) {
-    return [...this.recordsById.values()].filter((row) => row.run_id === runId);
-  }
-}
+import { FakeRemote } from './fake-shared-remote.js';
 
 const folders: string[] = [];
 const freshStore = () => {
@@ -212,7 +144,12 @@ test('A discarded audit reaches the shared copy whole, even when discarded while
   assert.equal(remote.recordsOf(run.id).length, 2);
   assert.ok(remote.runsById.get(run.id)!.discarded_at);
   assert.ok(remote.files.has(`${run.id}/capture_one.png`));
-  assert.equal(existsSync(store.keptDir(run.id)), false, 'left only in the shared copy');
+  assert.ok(existsSync(join(store.keptDir(run.id), KEPT_SENT)), 'kept here too, marked as sent');
+  assert.ok(existsSync(join(store.keptDir(run.id), 'capture_one.png')));
+  const writes = remote.ownedWrites;
+  audit(store); // Something new, so the next pass really runs.
+  await mirror.sync();
+  assert.equal(remote.ownedWrites, writes + 1, 'only the new audit is sent, not the kept copy');
   store.close();
 });
 
@@ -227,6 +164,7 @@ test('Another copy pulls a shared audit whole, with screenshots that pass their 
     updated: 0,
     removed: 0,
     files: 1,
+    rejected: 0,
   });
   assert.equal(reader.records(run.id).length, 1);
   assert.deepEqual(new Uint8Array(reader.image(run.id, 'capture_one.png')), bytes);
@@ -244,6 +182,7 @@ test('Another copy pulls a shared audit whole, with screenshots that pass their 
     updated: 1,
     removed: 0,
     files: 0,
+    rejected: 0,
   });
   assert.equal(reader.records(run.id).length, 2);
   owner.close();
@@ -276,19 +215,30 @@ test('Discarding a read copy removes the audit everywhere, and every copy is kep
   const remote = new FakeRemote();
   const { run } = audit(owner);
   owner.finish(run.id, 'complete');
-  await mirrorFor(owner, remote).sync();
-  const reader = freshStore();
-  await pullShared(reader, remote);
-  reader.discard(run.id);
-  await mirrorFor(reader, remote).sync();
-  assert.ok(remote.runsById.get(run.id)!.discarded_at);
-  await mirrorFor(owner, remote).sync();
-  assert.equal(owner.hasRun(run.id), false, 'the owner applies the discard too');
-  await mirrorFor(owner, remote).sync();
+  // The owner's own, long-running sender: idle passes skip Neon until its hourly check.
+  let now = Date.now();
+  const clock = mock.method(Date, 'now', () => now);
+  try {
+    const ownerMirror = mirrorFor(owner, remote);
+    await ownerMirror.sync();
+    const reader = freshStore();
+    await pullShared(reader, remote);
+    reader.discard(run.id);
+    await mirrorFor(reader, remote).sync();
+    assert.ok(remote.runsById.get(run.id)!.discarded_at);
+    await ownerMirror.sync();
+    assert.equal(owner.hasRun(run.id), true, 'an idle owner does not wake Neon every pass');
+    now += 3_600_000;
+    await ownerMirror.sync();
+    assert.equal(owner.hasRun(run.id), false, 'the hourly check applies the discard');
+    await ownerMirror.sync();
+    reader.close();
+  } finally {
+    clock.mock.restore();
+  }
   assert.equal(remote.recordsOf(run.id).length, 1, 'the shared copy keeps the evidence');
   assert.ok(remote.files.has(`${run.id}/capture_one.png`));
   owner.close();
-  reader.close();
 });
 
 test('A shared screenshot that changed, or a file name escaping the folder, is never written', async () => {
@@ -302,9 +252,16 @@ test('A shared screenshot that changed, or a file name escaping the folder, is n
   assert.equal((await pullShared(reader, remote)).files, 1, 'only the real screenshot');
   assert.equal(existsSync(join(reader.dir, '..', 'escape.png')), false);
   const second = freshStore();
+  const untouched = audit(owner).run;
+  await mirrorFor(owner, remote).sync();
   remote.files.get(`${run.id}/capture_one.png`)!.bytes = new Uint8Array([9, 9, 9]);
-  await assert.rejects(pullShared(second, remote), /did not match/);
+  const summary = await pullShared(second, remote);
+  assert.equal(summary.rejected, 1);
   assert.equal(existsSync(join(second.dir, run.id, 'capture_one.png')), false);
+  assert.ok(
+    existsSync(join(second.dir, untouched.id, 'capture_one.png')),
+    'other audits still pull',
+  );
   owner.close();
   reader.close();
   second.close();
@@ -381,4 +338,33 @@ test('A connection error never shows the database password or the screenshot key
   ).message;
   for (const secret of ['p@ss-word', 'p%40ss-word', 'AKID123', 'SK456'])
     assert.ok(!text.includes(secret));
+});
+
+test('A kept screenshot that cannot be read keeps the audit from being marked sent', async () => {
+  const store = freshStore();
+  const remote = new FakeRemote();
+  const { run } = audit(store);
+  store.finish(run.id, 'stopped');
+  store.discard(run.id);
+  const screenshot = join(store.keptDir(run.id), 'capture_one.png');
+  chmodSync(screenshot, 0);
+  const mirror = mirrorFor(store, remote);
+  try {
+    await mirror.sync();
+    assert.ok(mirror.lastError, 'the pass stops instead of skipping the screenshot');
+    assert.equal(remote.runsById.get(run.id)?.discarded_at ?? null, null);
+    assert.equal(existsSync(join(store.keptDir(run.id), KEPT_SENT)), false);
+  } finally {
+    chmodSync(screenshot, 0o600);
+  }
+  await mirror.sync();
+  assert.ok(remote.runsById.get(run.id)!.discarded_at);
+  assert.ok(remote.files.has(`${run.id}/capture_one.png`));
+  store.close();
+});
+
+test('Only the public-website host shares; the controlled example and proofs stay local', () => {
+  const script = readFileSync(new URL('../scripts/serve-host.ts', import.meta.url), 'utf8');
+  assert.match(script, /shared: publicWebsites \? sharedConfig\(\) : null/);
+  assert.equal(script.match(/sharedConfig\(/g)!.length, 1);
 });

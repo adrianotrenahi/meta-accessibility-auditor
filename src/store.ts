@@ -725,7 +725,9 @@ export class Store {
             ['action', 'capture', 'at_check', 'observation', 'navigator_note'].includes(r.kind),
           )
           .at(-1)?.seq ?? 0;
-      if (read.payload.throughSeq < latestEvidence) continue;
+      // Compared with the review record's own position, not its saved number, so an audit
+      // pulled from another copy (whose records are renumbered here) is judged the same way.
+      if (latestEvidence > read.seq) continue;
       try {
         if (!readHashMatches(read, review.payload.readSnapshotHash)) continue;
         const reviewerImages = suppliedImageIds(read, records);
