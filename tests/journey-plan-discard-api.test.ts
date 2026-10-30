@@ -312,7 +312,9 @@ test('A discard retry must finish failed physical cleanup before confirming its 
     assert.equal(f.store.hasRun(prepared.run.id), false);
     assert.equal(f.store.discardPending(prepared.run.id), true);
     assert.equal(f.store.journeyDraftDiscardRun(f.binding), prepared.run.id);
-    assert.equal(fs.existsSync(join(folder, asset.file)), true);
+    // The evidence is already in the kept copy; only the run's own folder remains.
+    assert.equal(fs.existsSync(folder), true);
+    assert.equal(fs.existsSync(join(f.store.keptDir(prepared.run.id), asset.file)), true);
     failure.mock.restore();
     failure = undefined;
     syncBuiltinESMExports();
@@ -326,7 +328,8 @@ test('A discard retry must finish failed physical cleanup before confirming its 
       reopened.close();
     }
     assert.equal((await f.post('/api/host/journey-plans/discard', f.body)).status, 200);
-    assert.equal(fs.existsSync(join(folder, asset.file)), false);
+    assert.equal(fs.existsSync(folder), false);
+    assert.equal(fs.existsSync(join(f.store.keptDir(prepared.run.id), asset.file)), true);
     assert.equal(f.store.discardPending(prepared.run.id), false);
     assert.equal(f.store.journeyDraftDiscardRun(f.binding), null);
   } finally {

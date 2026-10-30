@@ -58,10 +58,10 @@ unverified progress while retaining independently valid screenshots and findings
 The core `access-walk/host-v1` contract and uncertainty remain intact.
 
 Stop retains the attempt and any known or uncertain charge. A confirmed discard
-waits for planning to settle and removes the proposal, records and raw files.
+waits for planning to settle and removes the proposal from every list; its
+records and raw files are kept in `.discarded/` for investigation.
 Failed physical cleanup remains pending and retryable; it is not reported as
-successful deletion. Opaque retry/deletion identities and financial totals remain
-without the discarded brief or response. Restart recovery never starts a prepared
+successful deletion. Restart recovery never starts a prepared
 journey or regenerates an interrupted proposal by itself.
 
 ## Impact on the UX

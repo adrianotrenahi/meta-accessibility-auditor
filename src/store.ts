@@ -1,7 +1,15 @@
 import { RoleAllowanceLimit } from './role-allowance.js';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import type { RecordEntry, RecordKind, Role, Run, RunState, Approval } from './types.js';
 import { LIMITS, PHASE, FINAL_REVIEW_RESERVE_MICROS } from './types.js';
@@ -26,6 +34,8 @@ export const recordIsIntact = (record: RecordEntry) =>
   digest(JSON.stringify(record.payload)) === record.hash &&
   (record.payload._sourcesHash === undefined ||
     record.payload._sourcesHash === digest(JSON.stringify(record.sources)));
+/** No screenshot name can contain a second dot, so this never collides with one. */
+export const KEPT_ROWS = 'rows.discarded.json';
 export class Store {
   db: DatabaseSync;
   constructor(public dir: string) {
@@ -42,11 +52,14 @@ export class Store {
       CREATE TABLE IF NOT EXISTS discarded_usage(id TEXT PRIMARY KEY,role TEXT NOT NULL,reserved INTEGER NOT NULL,actual INTEGER,status TEXT NOT NULL,created TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS host_versions(run_id TEXT PRIMARY KEY REFERENCES runs(id), hash TEXT NOT NULL, version INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS journey_drafts(draft_id TEXT PRIMARY KEY,owner_hash TEXT NOT NULL,brief_hash TEXT NOT NULL,run_id TEXT UNIQUE REFERENCES runs(id) ON DELETE SET NULL,planning_request_id TEXT REFERENCES requests(id) ON DELETE SET NULL,plan_id TEXT REFERENCES records(id) ON DELETE SET NULL,plan_hash TEXT);
-      CREATE TABLE IF NOT EXISTS journey_draft_discards(draft_id TEXT PRIMARY KEY REFERENCES journey_drafts(draft_id),run_id TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS journey_draft_discards(draft_id TEXT PRIMARY KEY REFERENCES journey_drafts(draft_id),run_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS shared_sync(run_id TEXT PRIMARY KEY,body_hash TEXT NOT NULL,record_seq INTEGER NOT NULL,requests_hash TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS shared_objects(run_id TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(run_id,name));
+      CREATE TABLE IF NOT EXISTS shared_pulled(run_id TEXT PRIMARY KEY,remote_seq INTEGER NOT NULL);`);
   }
   recoverInterrupted() {
     for (const run of this.runs())
-      if (run.state === 'running' || run.state === 'planning')
+      if ((run.state === 'running' || run.state === 'planning') && !this.pulled(run.id))
         this.finish(
           run.id,
           'interrupted',
@@ -401,6 +414,32 @@ export class Store {
       .run(requestId.toLowerCase());
     return this.hostStart(requestId);
   }
+  /** A read copy of an audit another working copy owns and shares. */
+  pulled(id: string) {
+    return !!this.db.prepare('SELECT 1 FROM shared_pulled WHERE run_id=?').get(id);
+  }
+  /** Where a discarded audit's evidence is kept for investigation (owner decision, 30 October). */
+  keptDir(id?: string) {
+    return id ? join(this.dir, '.discarded', id) : join(this.dir, '.discarded');
+  }
+  /** Writes the complete saved rows before the discard removes them from every list. */
+  private keepDiscarded(id: string) {
+    const rows = {
+      run: this.db.prepare('SELECT body FROM runs WHERE id=?').get(id) as { body: string },
+      records: this.db
+        .prepare(
+          'SELECT id,seq,kind,author,body,sources,hash,created FROM records WHERE run_id=? ORDER BY seq',
+        )
+        .all(id),
+      requests: this.db
+        .prepare('SELECT id,role,reserved,actual,status,created FROM requests WHERE run_id=?')
+        .all(id),
+      pulled: this.pulled(id),
+      discardedAt: new Date().toISOString(),
+    };
+    mkdirSync(this.keptDir(id), { recursive: true, mode: 0o700 });
+    writeFileSync(join(this.keptDir(id), KEPT_ROWS), JSON.stringify(rows), { mode: 0o600 });
+  }
   discardPending(id: string) {
     return !!this.db.prepare('SELECT 1 FROM discard_cleanup WHERE run_id=?').get(id);
   }
@@ -417,6 +456,7 @@ export class Store {
         throw Error('Stop the run or planning before discarding evidence.');
       if (this.usage(id).requests.some((request) => request.status === 'sending'))
         throw Error('Wait for the active paid request to settle before discarding evidence.');
+      this.keepDiscarded(id);
       this.db.prepare('INSERT OR IGNORE INTO discard_cleanup VALUES(?)').run(id);
       this.db
         .prepare(
@@ -438,6 +478,7 @@ export class Store {
       this.db.prepare('DELETE FROM records WHERE run_id=?').run(id);
       this.db.prepare('UPDATE journey_drafts SET plan_hash=NULL WHERE run_id=?').run(id);
       this.db.prepare('DELETE FROM runs WHERE id=?').run(id);
+      this.db.prepare('DELETE FROM shared_pulled WHERE run_id=?').run(id);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -446,7 +487,14 @@ export class Store {
     this.cleanupDiscard(id);
   }
   private cleanupDiscard(id: string) {
-    rmSync(join(this.dir, id), { recursive: true, force: true });
+    // Screenshots move beside the kept rows. Nothing stays in the run's own folder.
+    const files = join(this.dir, id);
+    if (existsSync(files)) {
+      mkdirSync(this.keptDir(id), { recursive: true, mode: 0o700 });
+      for (const name of readdirSync(files))
+        renameSync(join(files, name), join(this.keptDir(id), name));
+    }
+    rmSync(files, { recursive: true, force: true });
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.prepare('DELETE FROM host_starts WHERE run_id=?').run(id);
@@ -677,7 +725,9 @@ export class Store {
             ['action', 'capture', 'at_check', 'observation', 'navigator_note'].includes(r.kind),
           )
           .at(-1)?.seq ?? 0;
-      if (read.payload.throughSeq < latestEvidence) continue;
+      // Compared with the review record's own position, not its saved number, so an audit
+      // pulled from another copy (whose records are renumbered here) is judged the same way.
+      if (latestEvidence > read.seq) continue;
       try {
         if (!readHashMatches(read, review.payload.readSnapshotHash)) continue;
         const reviewerImages = suppliedImageIds(read, records);

@@ -36,7 +36,7 @@ The connector must handle:
 - **Identity:** keep a durable mapping between the engine run, Cavioo job/session, screen, capture, finding and review version. Replayed events must update the same items rather than create duplicates.
 - **Live browser and screenshots:** supply actual frame delivery for the existing browser view. After-action screenshots alone are not a continuous browser stream. Preserve viewport, original image dimensions, scroll and capture identity so zoomed pins and SAM outlines stay on the right element.
 - **Findings:** publish only the accepted exact claim version. Map supported fields into Cavioo's existing finding readers; preserve evidence, uncertainty, severity, grouping, visibility and withdrawals separately. Do not invent a second customer-facing finding model.
-- **Controls:** preserve Cavioo's own finish, discard, pause/resume and reconnect meanings. In particular, its confirmed discard removes the linked run's findings, screenshots and engine evidence; it must not be connected directly to the prototype's evidence-preserving Stop. Do not retain a hidden original-evidence archive after promising deletion. Preserve originals for retained runs, and stop in-flight work before applying discard. A partial run must remain visibly incomplete. Unsupported capabilities need explicit existing states rather than apparently working controls.
+- **Controls:** preserve Cavioo's own finish, discard, pause/resume and reconnect meanings. In particular, its confirmed discard removes the linked run from every list and report; it must not be connected directly to the prototype's Stop. Owner decision, 30 October: for this hackathon build the engine keeps a copy of a discarded run's evidence for investigation (see `AGENTS.md`). Preserve originals for retained runs, and stop in-flight work before applying discard. A partial run must remain visibly incomplete. Unsupported capabilities need explicit existing states rather than apparently working controls.
 - **Report and scoring:** preserve report structure, screen ordering, screenshots, filters, details and permissions. Version the new method and fifteen-criterion scope. Only map criteria with explicitly equivalent meaning; do not present a partial new audit as full Cavioo coverage or turn unassessed checks into a pass or zero score.
 - **Access and spending:** keep keys in the engine service, and enforce Cavioo workspace access through the host. Ordinary report reads and reconnects never start paid work. Production account, billing and audit settings are not changed by this plan.
 
@@ -100,9 +100,9 @@ existing setup → browser → reviewed finding → report flow without paid inf
 The example uses actual keyboard actions and saved analysis/review responses;
 its declaration is not a claim about model accuracy or native-reader operation.
 Stable start identities and revision-bound advance controls prevent duplicated
-work. Confirmed discard waits for all writes to stop before removing original
-run evidence and images; Stop keeps them. Minimal financial totals and deletion
-identifiers survive without retaining the discarded actions, prompts or images.
+work. Confirmed discard waits for all writes to stop before removing the run from
+every list; its original evidence and images move to a kept copy for
+investigation (owner decision, 30 October). Stop keeps the run visible.
 Private UI source and production credentials remain outside this repository.
 
 ## Local live browser connection
