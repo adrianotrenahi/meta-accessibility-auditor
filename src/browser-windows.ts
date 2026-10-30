@@ -224,8 +224,11 @@ export class BrowserWindows {
   async allows(request: Request) {
     if (!request.isNavigationRequest()) return true;
     let page: Page | undefined;
+    let subframe = false;
     try {
-      page = request.frame().page();
+      const frame = request.frame();
+      page = frame.page();
+      subframe = frame.parentFrame() !== null;
     } catch {
       /* The first child frame may not exist yet. */
     }
@@ -238,11 +241,26 @@ export class BrowserWindows {
       if (pending.candidate && pending.candidate !== page) return false;
     }
     if (!this.isCurrent(pending)) return false;
+    // An iframe inside the expected tab loads with that tab's own document. The
+    // network boundary has already checked its address; it never proves arrival.
+    if (subframe) return !!page && this.hasDocumentRequest(pending, page);
     let first = request;
     for (let i = 0; first.redirectedFrom() && i < 10; i++) first = first.redirectedFrom()!;
     if (addressKey(first.url()) !== pending.destination) return false;
     pending.navigations.add(request);
     return true;
+  }
+  /** Whether this tab's own main document was already allowed for this action. */
+  private hasDocumentRequest(pending: PendingWindow, popup: Page) {
+    for (const request of pending.navigations) {
+      try {
+        const frame = request.frame();
+        if (frame.page() === popup && frame.parentFrame() === null) return true;
+      } catch {
+        // A frame that never became a real document cannot vouch for an iframe.
+      }
+    }
+    return false;
   }
   private documentRequest(pending: PendingWindow, popup: Page, destination: string) {
     for (const original of [...pending.navigations].reverse()) {

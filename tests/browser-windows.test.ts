@@ -46,6 +46,42 @@ test('An expected-window route cannot outlive its deadline while checking the ke
   await windows.close();
 });
 
+test("An iframe is allowed only inside a tab whose own document was already allowed", async () => {
+  const source = { setDefaultTimeout() {}, on() {} };
+  const windows = new BrowserWindows({
+    context: { on() {} } as any,
+    current: () => source as any,
+    active() {},
+    permitted: async (raw) => new URL(raw),
+    adopted() {},
+    record() {},
+  });
+  // A script on the original page can answer the real key with a blank tab of its own.
+  const popup = { opener: async () => source };
+  const pending = {
+    source,
+    candidate: popup,
+    destination: 'https://example.com/results',
+    expires: Date.now() + 60000,
+    navigations: new Set(),
+    keyObserved: async () => true,
+    finish() {},
+  };
+  (windows as any).pending = pending;
+  const iframe = {
+    isNavigationRequest: () => true,
+    frame: () => ({ page: () => popup, parentFrame: () => ({}) }),
+    redirectedFrom: () => null,
+    url: () => 'https://example.com/embed',
+  } as any;
+  assert.equal(await windows.allows(iframe), false);
+  // Once the tab's own main document is allowed, its iframes may load; they never count as arrival.
+  pending.navigations.add({ frame: () => ({ page: () => popup, parentFrame: () => null }) });
+  assert.equal(await windows.allows(iframe), true);
+  assert.equal(pending.navigations.size, 1);
+  await windows.close();
+});
+
 for (const boundary of ['destination', 'response', 'foreground'] as const)
   test(`An expected-window handoff cannot outlive its deadline during ${boundary} verification`, async (t) => {
     let now = 1000;
@@ -148,7 +184,7 @@ for (const change of ['changed-address', 'same-address-reload'] as const)
     await windows.close();
   });
 
-async function fixture(engine: 'chromium' | 'webkit') {
+async function fixture(engine: 'chromium' | 'webkit', entry = '/') {
   const dir = mkdtempSync(join(tmpdir(), 'browser-windows-'));
   const store = new Store(dir);
   const requests: string[] = [];
@@ -164,6 +200,16 @@ async function fixture(engine: 'chromium' | 'webkit') {
       return;
     }
     res.writeHead(200, { 'Content-Type': 'text/html' });
+    if (req.url === '/framed' || req.url === '/framed-results' || req.url === '/embed') {
+      res.end(
+        req.url === '/framed'
+          ? '<title>Controlled entry</title><h1>Entry page</h1><a id="next" target="_blank" href="/framed-results">Open results</a>'
+          : req.url === '/framed-results'
+            ? '<title>Framed results</title><h1>Framed results</h1><iframe title="Embedded results map" src="/embed"></iframe>'
+            : '<title>Embedded</title><p>Embedded content</p>',
+      );
+      return;
+    }
     res.end(
       req.url === '/results'
         ? '<title>Controlled results</title><h1>Results page</h1><button>Inspect results</button><a id="next" target="_blank" href="/final">Continue results</a>'
@@ -176,7 +222,7 @@ async function fixture(engine: 'chromium' | 'webkit') {
   const origin = 'http://127.0.0.1:' + (server.address() as any).port;
   const run = store.create(
     'Synthetic expected new-tab journey; no models.',
-    origin + '/',
+    origin + entry,
     'offline',
   );
   const walk = new BrowserWalk(store, run.id, origin, true, engine);
@@ -326,6 +372,27 @@ for (const engine of ['chromium', 'webkit'] as const)
         }
       },
     );
+
+for (const engine of ['chromium', 'webkit'] as const)
+  test(`Actual ${engine} loads the followed tab's own iframe before adopting it`, async () => {
+    const f = await fixture(engine, '/framed');
+    try {
+      await f.walk.page.locator('#next').focus();
+      const source = await f.walk.captureSettled();
+      await f.walk.act(
+        { kind: 'press', key: 'Enter', note: 'Open the results with an embedded map.' },
+        source,
+      );
+      assert.equal(f.walk.page.url(), f.origin + '/framed-results');
+      assert.equal(
+        await f.walk.page.frameLocator('iframe').locator('p').textContent(),
+        'Embedded content',
+      );
+      assert(f.requests.includes('/embed'), 'The embedded document must not be blocked.');
+    } finally {
+      await f.close();
+    }
+  });
 
 for (const engine of ['chromium', 'webkit'] as const) {
   test(`Actual ${engine} follows the declared link's real redirect chain and final document response`, async () => {
