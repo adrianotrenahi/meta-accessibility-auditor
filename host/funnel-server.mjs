@@ -59,9 +59,11 @@ export async function startMetaFunnelProof({
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const runtime = path.join(directory, "runtime");
   await mkdir(runtime, { recursive: true, mode: 0o700 });
+  // Shared-storage settings given on purpose (src/shared-storage.ts) reach the engine too.
   const env = Object.fromEntries(
-    ["PATH", "HOME", "USER", "TMPDIR", "LANG", "PLAYWRIGHT_BROWSERS_PATH"]
-      .filter((k) => process.env[k])
+    Object.keys(process.env)
+      .filter((k) => ["PATH", "HOME", "USER", "TMPDIR", "LANG", "PLAYWRIGHT_BROWSERS_PATH"].includes(k) ||
+        /^ACCESS_WALK_(STORAGE_FILE|DATABASE_URL|R2_[A-Z_]+)$/.test(k))
       .map((k) => [k, process.env[k]]),
   );
   const child = spawn(

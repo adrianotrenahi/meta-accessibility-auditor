@@ -240,7 +240,7 @@ function App({ bootstrap }: { bootstrap: Bootstrap }) {
       >
         <CavCallout variant="info" icon="info">
           {publicSites
-            ? (history ? "Meta test history · one card per saved run in this browser. Page counts are saved screens; partial runs remain unscored. Setup attempts that never started a run are not listed. " : "Meta website test · enter your public website and journey below. ") +
+            ? (history ? "Meta test history · one card per saved run of Testing Account, the same in every browser on this computer. Page counts are saved screens; partial runs remain unscored. Setup attempts that never started a run are not listed. " : "Meta website test · enter your public website and journey below. ") +
               "The existing browser, findings and report are used. Model credits stay within the configured test budget; no Cavioo account is charged. " +
               "Use the Desktop keyboard plan. Stop before a booking, purchase, login or account creation."
             : liveProof
@@ -364,7 +364,7 @@ function App({ bootstrap }: { bootstrap: Bootstrap }) {
             <RunProgress
               key={jobId}
               jobId={jobId!}
-              viewerId="offline-user"
+              viewerId="testing-account"
               capabilities={capabilities}
               browserFeed={browserFeed}
             />

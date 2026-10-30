@@ -1,12 +1,12 @@
 // Synthetic local account for this isolated tool; never imports Clerk services.
 const user = {
-  id: "offline-user",
-  firstName: "Offline",
-  lastName: "Proof",
-  fullName: "Offline Proof",
-  username: "offline-proof",
+  id: "testing-account",
+  firstName: "Testing",
+  lastName: "Account",
+  fullName: "Testing Account",
+  username: "testing-account",
   imageUrl: null,
-  primaryEmailAddress: { emailAddress: "offline@cavioo.test" },
+  primaryEmailAddress: { emailAddress: "testing-account@access-walk.test" },
 };
 export const useUser = () => ({ isLoaded: true, isSignedIn: true, user });
 export const useAuth = () => ({

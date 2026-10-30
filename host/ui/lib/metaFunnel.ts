@@ -48,9 +48,9 @@ export function metaWalkSession(
     createdAt: snapshot.run.createdAt,
     updatedAt: snapshot.run.createdAt,
     createdBy: {
-      id: "offline-user",
-      name: snapshot.run.mode === "live" ? "Local Meta proof" : "Testing Account",
-      email: "offline@cavioo.test",
+      id: "testing-account",
+      name: "Testing Account",
+      email: "testing-account@access-walk.test",
     },
     project: null,
     runs: [
@@ -112,7 +112,7 @@ export function metaWalkSession(
     canTransferOwnership: false,
     canEdit: false,
     canComment: false,
-    viewerUserId: "offline-user",
+    viewerUserId: "testing-account",
     journeyMap: null,
   };
 }

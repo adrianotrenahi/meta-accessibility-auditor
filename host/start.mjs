@@ -12,7 +12,8 @@ const publicWebsites = process.argv.includes('--public-websites');
 try {
   const page = await startMetaFunnelProof({
     engineRoot: project,
-    dataDirectory: path.resolve(arg('--data', path.join(project, 'data/audits'))),
+    // Each mode keeps its own records: saved website runs and the example cannot share a folder.
+    dataDirectory: path.resolve(arg('--data', path.join(project, 'data/audits', publicWebsites ? 'websites' : 'example'))),
     port: Number(arg('--port', 4346)),
     publicWebsites,
     engineWorkingDirectory: project,

@@ -1,7 +1,9 @@
 // Proves the hosted package carries none of Cavioo's private text.
 //   node tools/cavioo-ui/leak-check.mjs --cavioo <Cavioo checkout> --package <cavioo-ui.json>
-// Every string literal of 24+ characters in the private files below must be absent
-// from the package's screens and helpers. Exit code 1 lists any that leaked.
+// Every string literal in the private files below is decoded (escapes, quotes,
+// line breaks), split into lines, and each line of 24+ characters must be absent
+// from the package in every form a bundle can hold it: as written, JSON-escaped,
+// and with non-ASCII characters escaped. Exit code 1 lists any that leaked.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
@@ -31,22 +33,45 @@ const text = [
   Buffer.from(pkg.hostLib, 'base64').toString('utf8'),
 ].join('\n');
 const allowed = JSON.parse(readFileSync(new URL('./leak-allow.json', import.meta.url), 'utf8'));
-const leaks = [];
+
+/** The value a source literal stands for, as the browser would see it. */
+function decode(raw, quote) {
+  const body = raw
+    .replace(/\\x([0-9a-fA-F]{2})/g, '\\u00$1')
+    .replace(/\\u\{([0-9a-fA-F]+)\}/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/\\(['`$])/g, '$1')
+    .replace(/(^|[^\\])"/g, '$1\\"')
+    .replace(/\n/g, '\\n');
+  try {
+    return JSON.parse(`"${body}"`);
+  } catch {
+    return quote === '`' ? raw : null;
+  }
+}
+/** Every way a bundler may have written the same text. */
+const forms = (value) => {
+  const json = JSON.stringify(value).slice(1, -1);
+  return [value, json, json.replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)];
+};
+const leaks = new Set();
 let checked = 0;
 for (const file of privateFiles) {
   const source = readFileSync(file, 'utf8');
-  for (const m of source.matchAll(/(["'`])((?:\\.|(?!\1)[^\\\n]){24,}?)\1/g)) {
-    const literal = m[2];
-    if (/\$\{/.test(literal)) continue; // a template's pieces are checked below
-    checked++;
-    if (text.includes(literal) && !allowed[literal]) leaks.push(`${path.relative(cavioo, file)}: ${literal.slice(0, 80)}`);
-  }
-  for (const m of source.matchAll(/`([^`]{24,})`/g))
-    for (const piece of m[1].split(/\$\{[^}]*\}/).filter((p) => p.trim().length >= 24)) {
+  const literals = [...source.matchAll(/(["'])((?:\\.|(?!\1)[^\\\n])*)\1/g)].map((m) => [m[2], m[1]]);
+  for (const m of source.matchAll(/`((?:\\.|[^`\\])*)`/g))
+    for (const piece of m[1].split(/\$\{[^}]*\}/)) literals.push([piece, '`']);
+  for (const [raw, quote] of literals) {
+    const value = decode(raw, quote);
+    if (value === null) continue;
+    for (const line of value.split('\n')) {
+      const piece = line.trim();
+      // Colours are not wording.
+      if (piece.length < 24 || allowed[piece] || /^(rgb|hsl)a?\(|^var\(--/.test(piece)) continue;
       checked++;
-      if (text.includes(piece) && !allowed[piece.trim()]) leaks.push(`${path.relative(cavioo, file)}: ${piece.slice(0, 80)}`);
+      if (forms(piece).some((form) => text.includes(form))) leaks.add(`${path.relative(cavioo, file)}: ${piece.slice(0, 80)}`);
     }
+  }
 }
-console.log(JSON.stringify({ privateFiles: privateFiles.length, textsChecked: checked, leaked: leaks.length }));
-for (const leak of leaks.slice(0, 40)) console.log('LEAK', leak);
-process.exitCode = leaks.length ? 1 : 0;
+console.log(JSON.stringify({ privateFiles: privateFiles.length, textsChecked: checked, leaked: leaks.size }));
+for (const leak of [...leaks].slice(0, 40)) console.log('LEAK', leak);
+process.exitCode = leaks.size ? 1 : 0;
