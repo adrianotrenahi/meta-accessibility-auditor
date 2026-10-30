@@ -361,174 +361,193 @@ export function contrastMeasurements(result: AxeResults): ContrastMeasurement[] 
   return rows;
 }
 
-export async function collectBrowserFacts(page: Page, source: RecordEntry, axe: AxeResults) {
-  const dom = await page.evaluate((maximum) => {
-    let textTruncated = false;
-    const util = {
-      selector(element: Element) {
-        const parts: string[] = [];
-        let e: Element | null = element;
-        while (e) {
-          if (e.id) {
-            parts.unshift('#' + CSS.escape(e.id));
-            break;
+/**
+ * `listed` names the page-side list of exact controls the original saved
+ * (page-state/1). With it, a target binds to a control id only when the live
+ * element is that very control; without it (older records) selectors decide.
+ */
+export async function collectBrowserFacts(
+  page: Page,
+  source: RecordEntry,
+  axe: AxeResults,
+  listed?: { key: string; token: string },
+) {
+  const dom = await page.evaluate(
+    ({ maximum, listed }) => {
+      const registry = listed
+        ? ((globalThis as any)[listed.key]?.get(listed.token) as Map<string, Element> | undefined)
+        : undefined;
+      const listedIdOf = new Map<Element, string>();
+      for (const [id, element] of registry ?? []) listedIdOf.set(element, id);
+      let textTruncated = false;
+      const util = {
+        selector(element: Element) {
+          const parts: string[] = [];
+          let e: Element | null = element;
+          while (e) {
+            if (e.id) {
+              parts.unshift('#' + CSS.escape(e.id));
+              break;
+            }
+            const tag = e.tagName.toLowerCase();
+            const siblings = e.parentElement
+              ? [...e.parentElement.children].filter((s) => s.tagName === e!.tagName)
+              : [e];
+            parts.unshift(`${tag}:nth-of-type(${siblings.indexOf(e) + 1})`);
+            e = e.parentElement;
           }
-          const tag = e.tagName.toLowerCase();
-          const siblings = e.parentElement
-            ? [...e.parentElement.children].filter((s) => s.tagName === e!.tagName)
-            : [e];
-          parts.unshift(`${tag}:nth-of-type(${siblings.indexOf(e) + 1})`);
-          e = e.parentElement;
-        }
-        return parts.join(' > ');
-      },
-      text(e: Element | null) {
-        const value = (e instanceof HTMLElement ? e.innerText : (e?.textContent ?? '')).trim();
-        if (value.length > 500) textTruncated = true;
-        return value.slice(0, 500);
-      },
-      box(e: Element) {
-        const r = e.getBoundingClientRect();
-        return { x: r.x, y: r.y, width: r.width, height: r.height };
-      },
-      visible(e: Element, margin = 0) {
-        const r = e.getBoundingClientRect(),
-          s = getComputedStyle(e);
-        return (
-          r.width > 0 &&
-          r.height > 0 &&
-          r.right > -margin &&
-          r.bottom > -margin &&
-          r.left < innerWidth + margin &&
-          r.top < innerHeight + margin &&
-          s.visibility !== 'hidden' &&
-          s.visibility !== 'collapse' &&
-          s.display !== 'none' &&
-          Number(s.opacity) > 0
-        );
-      },
-      labelledBy(e: Element, attribute: string) {
-        return (e.getAttribute(attribute) ?? '')
-          .split(/\s+/)
-          .filter(Boolean)
-          .map((id) => util.text(document.getElementById(id)))
-          .filter(Boolean);
-      },
-      get(query: string, margin = 0) {
-        return [...document.querySelectorAll(query)].filter((e) => util.visible(e, margin));
-      },
-    };
-    const allFields = util.get('input:not([type=hidden]),select,textarea');
-    const fields = allFields.slice(0, maximum).map((e) => {
-      const input = e as HTMLInputElement;
-      const labels = [...(input.labels ?? [])];
-      const ariaInvalid = e.getAttribute('aria-invalid');
-      const nativeValidityValid = input.validity?.valid ?? null;
-      return {
+          return parts.join(' > ');
+        },
+        text(e: Element | null) {
+          const value = (e instanceof HTMLElement ? e.innerText : (e?.textContent ?? '')).trim();
+          if (value.length > 500) textTruncated = true;
+          return value.slice(0, 500);
+        },
+        box(e: Element) {
+          const r = e.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        },
+        visible(e: Element, margin = 0) {
+          const r = e.getBoundingClientRect(),
+            s = getComputedStyle(e);
+          return (
+            r.width > 0 &&
+            r.height > 0 &&
+            r.right > -margin &&
+            r.bottom > -margin &&
+            r.left < innerWidth + margin &&
+            r.top < innerHeight + margin &&
+            s.visibility !== 'hidden' &&
+            s.visibility !== 'collapse' &&
+            s.display !== 'none' &&
+            Number(s.opacity) > 0
+          );
+        },
+        labelledBy(e: Element, attribute: string) {
+          return (e.getAttribute(attribute) ?? '')
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((id) => util.text(document.getElementById(id)))
+            .filter(Boolean);
+        },
+        get(query: string, margin = 0) {
+          return [...document.querySelectorAll(query)].filter((e) => util.visible(e, margin));
+        },
+      };
+      const allFields = util.get('input:not([type=hidden]),select,textarea');
+      const fields = allFields.slice(0, maximum).map((e) => {
+        const input = e as HTMLInputElement;
+        const labels = [...(input.labels ?? [])];
+        const ariaInvalid = e.getAttribute('aria-invalid');
+        const nativeValidityValid = input.validity?.valid ?? null;
+        return {
+          selector: util.selector(e),
+          tag: e.tagName.toLowerCase(),
+          type: e.getAttribute('type') ?? '',
+          visibleLabels: labels.filter((label) => util.visible(label)).map((e) => util.text(e)),
+          programmaticLabels: [
+            e.getAttribute('aria-label') ?? '',
+            ...util.labelledBy(e, 'aria-labelledby'),
+            ...labels.map((e) => util.text(e)),
+          ].filter(Boolean),
+          placeholder: e.getAttribute('placeholder') ?? '',
+          required: input.required || e.getAttribute('aria-required') === 'true',
+          // ARIA's false/empty/absent states are false; other nonempty tokens are invalid.
+          invalid:
+            (ariaInvalid !== null && ariaInvalid !== '' && ariaInvalid.toLowerCase() !== 'false') ||
+            nativeValidityValid === false,
+          ariaInvalid,
+          nativeValidityValid,
+          describedBy: util.labelledBy(e, 'aria-describedby'),
+        };
+      });
+      const allImages = util.get('img,[role="img"]');
+      const images = allImages.slice(0, maximum).map((e) => ({
         selector: util.selector(e),
         tag: e.tagName.toLowerCase(),
-        type: e.getAttribute('type') ?? '',
-        visibleLabels: labels.filter((label) => util.visible(label)).map((e) => util.text(e)),
-        programmaticLabels: [
-          e.getAttribute('aria-label') ?? '',
-          ...util.labelledBy(e, 'aria-labelledby'),
-          ...labels.map((e) => util.text(e)),
-        ].filter(Boolean),
-        placeholder: e.getAttribute('placeholder') ?? '',
-        required: input.required || e.getAttribute('aria-required') === 'true',
-        // ARIA's false/empty/absent states are false; other nonempty tokens are invalid.
-        invalid:
-          (ariaInvalid !== null && ariaInvalid !== '' && ariaInvalid.toLowerCase() !== 'false') ||
-          nativeValidityValid === false,
-        ariaInvalid,
-        nativeValidityValid,
-        describedBy: util.labelledBy(e, 'aria-describedby'),
-      };
-    });
-    const allImages = util.get('img,[role="img"]');
-    const images = allImages.slice(0, maximum).map((e) => ({
-      selector: util.selector(e),
-      tag: e.tagName.toLowerCase(),
-      alt: e.getAttribute('alt'),
-      role: e.getAttribute('role'),
-      ariaLabel: e.getAttribute('aria-label'),
-      programmaticLabels: util.labelledBy(e, 'aria-labelledby'),
-      contextText: util.text(e.closest('figure,article,li') ?? e.parentElement),
-    }));
-    const allHeadings = util.get('h1,h2,h3,h4,h5,h6,[role="heading"]');
-    const headings = allHeadings.slice(0, maximum).map((e) => ({
-      selector: util.selector(e),
-      level: /^H[1-6]$/.test(e.tagName)
-        ? Number(e.tagName[1])
-        : Number(e.getAttribute('aria-level')) || null,
-      text: util.text(e),
-      ariaHidden: e.getAttribute('aria-hidden') === 'true',
-    }));
-    const allTargets = util.get(
-      'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]',
-      12,
-    );
-    const targets = allTargets.slice(0, maximum).map((e) => {
-      const b = util.box(e),
-        s = getComputedStyle(e);
-      const radii = [
-        s.borderTopLeftRadius,
-        s.borderTopRightRadius,
-        s.borderBottomLeftRadius,
-        s.borderBottomRightRadius,
-      ];
-      const simpleRadii = radii.every((r) => /^\d+(?:\.\d+)?px$/.test(r));
-      const radius = Math.max(...radii.map(parseFloat));
-      const simple = s.transform === 'none' && s.clipPath === 'none' && simpleRadii;
-      const sizeMet =
-        b.width < 24 || b.height < 24
-          ? false
-          : simple && b.width - radius * 2 >= 24 && b.height - radius * 2 >= 24
-            ? true
-            : null;
-      return {
+        alt: e.getAttribute('alt'),
+        role: e.getAttribute('role'),
+        ariaLabel: e.getAttribute('aria-label'),
+        programmaticLabels: util.labelledBy(e, 'aria-labelledby'),
+        contextText: util.text(e.closest('figure,article,li') ?? e.parentElement),
+      }));
+      const allHeadings = util.get('h1,h2,h3,h4,h5,h6,[role="heading"]');
+      const headings = allHeadings.slice(0, maximum).map((e) => ({
         selector: util.selector(e),
-        box: b,
-        sizeMet,
-        shapeLimit: simple
-          ? null
-          : 'Clipping, transformation or target shape needs separate review.',
+        level: /^H[1-6]$/.test(e.tagName)
+          ? Number(e.tagName[1])
+          : Number(e.getAttribute('aria-level')) || null,
+        text: util.text(e),
+        ariaHidden: e.getAttribute('aria-hidden') === 'true',
+      }));
+      const allTargets = util.get(
+        'button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=combobox]',
+        12,
+      );
+      const targets = allTargets.slice(0, maximum).map((e) => {
+        const b = util.box(e),
+          s = getComputedStyle(e);
+        const radii = [
+          s.borderTopLeftRadius,
+          s.borderTopRightRadius,
+          s.borderBottomLeftRadius,
+          s.borderBottomRightRadius,
+        ];
+        const simpleRadii = radii.every((r) => /^\d+(?:\.\d+)?px$/.test(r));
+        const radius = Math.max(...radii.map(parseFloat));
+        const simple = s.transform === 'none' && s.clipPath === 'none' && simpleRadii;
+        const sizeMet =
+          b.width < 24 || b.height < 24
+            ? false
+            : simple && b.width - radius * 2 >= 24 && b.height - radius * 2 >= 24
+              ? true
+              : null;
+        return {
+          listedId: listedIdOf.get(e) ?? null,
+          selector: util.selector(e),
+          box: b,
+          sizeMet,
+          shapeLimit: simple
+            ? null
+            : 'Clipping, transformation or target shape needs separate review.',
+        };
+      });
+      const allMessages = util.get(
+        '[role="alert"],[role="status"],[aria-invalid="true"],.error,.warning,[data-error]',
+      );
+      const colourMessages = allMessages.slice(0, maximum).map((e) => ({
+        selector: util.selector(e),
+        text: util.text(e),
+        color: getComputedStyle(e).color,
+        role: e.getAttribute('role'),
+        describedBy: util.labelledBy(e, 'aria-describedby'),
+      }));
+      return {
+        fields,
+        images,
+        headings: { title: document.title, items: headings },
+        targets,
+        colourMessages,
+        viewport: { width: innerWidth, height: innerHeight },
+        counts: {
+          fields: allFields.length,
+          images: allImages.length,
+          headings: allHeadings.length,
+          targets: allTargets.length,
+          colourMessages: allMessages.length,
+        },
+        visibleTextCount: util
+          .get('body *')
+          .filter((e) =>
+            [...e.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim()),
+          ).length,
+        unknownSurfaces: !!document.querySelector('iframe,canvas'),
+        shadowRoots: [...document.querySelectorAll('*')].some((e) => !!e.shadowRoot),
+        textTruncated,
       };
-    });
-    const allMessages = util.get(
-      '[role="alert"],[role="status"],[aria-invalid="true"],.error,.warning,[data-error]',
-    );
-    const colourMessages = allMessages.slice(0, maximum).map((e) => ({
-      selector: util.selector(e),
-      text: util.text(e),
-      color: getComputedStyle(e).color,
-      role: e.getAttribute('role'),
-      describedBy: util.labelledBy(e, 'aria-describedby'),
-    }));
-    return {
-      fields,
-      images,
-      headings: { title: document.title, items: headings },
-      targets,
-      colourMessages,
-      viewport: { width: innerWidth, height: innerHeight },
-      counts: {
-        fields: allFields.length,
-        images: allImages.length,
-        headings: allHeadings.length,
-        targets: allTargets.length,
-        colourMessages: allMessages.length,
-      },
-      visibleTextCount: util
-        .get('body *')
-        .filter((e) =>
-          [...e.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim()),
-        ).length,
-      unknownSurfaces: !!document.querySelector('iframe,canvas'),
-      shadowRoots: [...document.querySelectorAll('*')].some((e) => !!e.shadowRoot),
-      textTruncated,
-    };
-  }, limit);
+    },
+    { maximum: limit, listed },
+  );
   const controls = ((source.payload.elements as ElementInfo[]) ?? [])
     .filter(
       (e) =>
@@ -548,11 +567,17 @@ export async function collectBrowserFacts(page: Page, source: RecordEntry, axe: 
       box: e.box,
       disabled: e.disabled,
     }));
-  const targets: TargetMeasurement[] = dom.targets.map((target, index) => {
+  const targets: TargetMeasurement[] = dom.targets.map(({ listedId, ...target }, index) => {
     const matched = controls.filter((c) => c.selector === target.selector);
+    const bySelector = matched.length === 1 ? matched[0].elementId : null;
     return {
       ...target,
-      elementId: matched.length === 1 ? matched[0].elementId : null,
+      // With the original's exact list, a position-only match is not enough.
+      elementId: listed
+        ? bySelector !== null && bySelector === listedId
+          ? bySelector
+          : null
+        : bySelector,
       spacingException: spacingException(
         target.box,
         dom.targets.filter((_, n) => n !== index),

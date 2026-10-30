@@ -11,6 +11,10 @@ import { digest } from './store.js';
 // Measured 29 October in Chromium over 30 seconds: eDreams' carousels changed up to
 // 23 of 286 lines (8%) by themselves; Booking, Renfe, Vueling 0; Ryanair 2.
 export const CONTENT_DRIFT = { minimumLines: 12, share: 0.1 } as const;
+// A scan has no separate focus or chosen-control check, so a small page gets a
+// smaller floor: 6 lines is two or three rotated lines, and eDreams' 23 of 286
+// still falls within 10%.
+export const SCAN_DRIFT = { minimumLines: 6, share: 0.1 } as const;
 
 const dialogLine = /^\s*- (?:dialog|alertdialog)\b/;
 
@@ -31,7 +35,11 @@ export function ariaDifference(before: string, after: string) {
 }
 
 /** Ordinary content drift, not a different screen. Opening or closing a dialog never qualifies. */
-export function contentSettled(before: unknown, after: unknown) {
+export function contentSettled(
+  before: unknown,
+  after: unknown,
+  bound: { minimumLines: number; share: number } = CONTENT_DRIFT,
+) {
   if (typeof before !== 'string' || typeof after !== 'string') return false;
   if (before === after) return true;
   // A snapshot taken before the page rendered anything describes no page at all.
@@ -39,7 +47,7 @@ export function contentSettled(before: unknown, after: unknown) {
   const changed = ariaDifference(before, after);
   if (changed.some((line) => dialogLine.test(line))) return false;
   const lines = Math.max(before.split('\n').length, after.split('\n').length);
-  return changed.length <= Math.max(CONTENT_DRIFT.minimumLines, lines * CONTENT_DRIFT.share);
+  return changed.length <= Math.max(bound.minimumLines, lines * bound.share);
 }
 
 /** The page apart from keyboard focus and its copy: same document, address, scroll and dialogs. */
@@ -58,8 +66,8 @@ function focusKey(focus: unknown) {
  * Whether a saved observation still describes the page closely enough to send
  * the next key: same document, address, scroll, open popups and focus. Copy
  * elsewhere on the page (promotions, counters) does not matter to a key; the
- * chosen control is checked separately. Scans and journey evidence keep the
- * exact state stamp. Records saved before page-state/1 keep exact comparison.
+ * chosen control is checked separately. Scans use sameForScan; journey evidence
+ * keeps the exact state stamp. Records saved before page-state/1 keep exact comparison.
  */
 export function sameForInput(
   saved: {
@@ -78,6 +86,24 @@ export function sameForInput(
     focusKey(saved.focus) === focusKey(state.focus) &&
     digest(JSON.stringify(saved.focusHelp)) === digest(JSON.stringify(state.focusHelp))
   );
+}
+
+/**
+ * Whether an automatic scan still measures the screen its original shows: same
+ * document, address, scroll and open popups, with the accessibility snapshot
+ * differing only within the scan's bounded drift. Focus does not matter to a scan.
+ * Returns the differing snapshot lines (empty when identical), or null when the
+ * page is a different screen. Records saved before page-state/1 never qualify;
+ * their exact state stamp decides alone.
+ */
+export function sameForScan(
+  saved: { pageStamp?: unknown; aria?: unknown },
+  state: Record<string, unknown>,
+): string[] | null {
+  if (typeof saved.pageStamp !== 'string' || typeof saved.aria !== 'string') return null;
+  if (saved.pageStamp !== pageStamp(state) || !contentSettled(saved.aria, state.aria, SCAN_DRIFT))
+    return null;
+  return ariaDifference(saved.aria, state.aria as string);
 }
 
 /** Visible modal surfaces and consent banners. Their arrival or removal is always a new screen. */

@@ -22,6 +22,7 @@ import {
   openDialogs,
   pageStamp,
   sameForInput,
+  sameForScan,
 } from './page-state.js';
 import {
   meaningfulScreenFingerprint,
@@ -970,6 +971,25 @@ export class BrowserWalk {
     this.assertActive();
     return readPage(this.page, async () => digest(JSON.stringify(await this.observedState())));
   }
+  /** The page facts a scan is compared on when its exact state stamp no longer matches. */
+  async scanState() {
+    this.assertActive();
+    return readPage(this.page, () => this.observedState());
+  }
+  /**
+   * Most commercial pages rotate copy while a scan runs, so an exact stamp rarely
+   * holds there. A page-state/1 original still counts when the same document,
+   * address, scroll and popups remain and the copy differs only within the bounded
+   * drift; the larger differing set is kept in `drift` and saved with the scan.
+   */
+  private async scanStillMatches(source: RecordEntry, drift: { lines: string[] }) {
+    if (typeof source.payload.pageStamp !== 'string') return false;
+    const changed = sameForScan(source.payload, await this.scanState());
+    if (!changed) return false;
+    // Keep the larger of the before/after differences, counted like the drift bound.
+    if (changed.length > drift.lines.length) drift.lines = changed;
+    return true;
+  }
   async measurements(source: RecordEntry) {
     this.assertActive();
     const original = this.store.record(this.runId, source.id);
@@ -987,14 +1007,28 @@ export class BrowserWalk {
     if (source.payload.stable !== true) throw new MeasurementStateChanged(source.id, 'before');
     let stage: 'before' | 'during' = 'before';
     try {
+      const drift = { lines: [] as string[] };
       const before = await this.observationStamp();
-      if (source.payload.stateStamp !== before)
+      if (source.payload.stateStamp !== before && !(await this.scanStillMatches(source, drift)))
         throw new MeasurementStateChanged(source.id, 'before');
       stage = 'during';
       const result = await new AxeBuilder({ page: this.page })
         .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
         .analyze();
-      const facts = await collectBrowserFacts(this.page, source, result);
+      // Measurements bind to the exact controls this original listed, never by position
+      // alone: a slider inserting or reordering buttons must not move a size to another id.
+      const facts = await collectBrowserFacts(
+        this.page,
+        source,
+        result,
+        typeof source.payload.stampToken === 'string'
+          ? { key: this.stampKey, token: source.payload.stampToken }
+          : undefined,
+      );
+      const exact =
+        source.payload.stateStamp === before &&
+        source.payload.stateStamp === (await this.observationStamp());
+      const stable = exact || (await this.scanStillMatches(source, drift));
       const observation = this.store.append(
         this.runId,
         'observation',
@@ -1004,9 +1038,19 @@ export class BrowserWalk {
           sourceCaptureId: source.id,
           sourceCaptureHash: source.hash,
           sourceImageHash: source.payload.imageHash,
-          stable:
-            source.payload.stateStamp === before &&
-            source.payload.stateStamp === (await this.observationStamp()),
+          stable,
+          // The scan read the live page, so copy that differed from the original's
+          // snapshot is named here; the screenshot may not show those lines.
+          ...(stable && !exact
+            ? {
+                comparison: 'page-state-and-bounded-content-drift',
+                contentDrift: {
+                  changedLines: drift.lines.length,
+                  lines: drift.lines.slice(0, 40).map((line) => line.slice(0, 200)),
+                  linesTruncated: drift.lines.length > 40,
+                },
+              }
+            : {}),
           engine: result.testEngine,
           ...summarizeAxe(result),
           facts,
