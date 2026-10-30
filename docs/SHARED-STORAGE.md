@@ -15,7 +15,7 @@ Without the settings, nothing is shared and the engine behaves as before. Only t
 
 1. **Neon:** create a project (region: Frankfurt, closest to Madrid). Copy its connection address, the one that starts with `postgresql://`.
 2. **Cloudflare R2:** create a private bucket, for example `access-walk-screenshots`. Do not turn on public access. Then create an R2 API token with **Object Read & Write** limited to that bucket only, and note its Access Key ID and Secret Access Key. The account id is the 32-character id on the R2 overview page.
-3. **Settings file:** create `~/.access-walk/storage.env` with these five lines and your own values:
+3. **Settings:** add these five lines, with your own values, to the `.env` file in the folder the engine runs from, beside your other keys:
 
    ```
    ACCESS_WALK_DATABASE_URL=postgresql://…
@@ -25,7 +25,7 @@ Without the settings, nothing is shared and the engine behaves as before. Only t
    ACCESS_WALK_R2_SECRET_ACCESS_KEY=…
    ```
 
-   The file lives outside every working copy, so no branch can commit it. If only some of the five lines are present, the engine refuses to start and names the missing ones, without printing any value.
+   Git ignores `.env`, so no branch can commit it. If several working copies should share without repeating the lines, put them instead in `~/.access-walk/storage.env`, outside every copy; a copy whose `.env` holds none of the five lines reads that file. One file is never patched from the other. If only some of the five lines are present, the engine refuses to start and names the missing ones and the file, without printing any value.
 4. **Restart the engine.** It creates its tables in Neon on the first copy and then copies every audit in its data folder, including older ones.
 
 ## Opening shared audits in another copy

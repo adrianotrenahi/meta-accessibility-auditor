@@ -10,7 +10,10 @@ const index = process.argv.indexOf('--data');
 if (command !== 'pull' || index < 0 || !process.argv[index + 1])
   throw Error('Use: npm run storage -- pull --data <folder> [--include-discarded] [--follow]');
 const config = sharedConfig();
-if (!config) throw Error('Shared storage is not set up on this Mac (~/.access-walk/storage.env).');
+if (!config)
+  throw Error(
+    'Shared storage is not set up: add its five settings to .env (see docs/SHARED-STORAGE.md).',
+  );
 const dir = resolve(process.argv[index + 1]);
 // A running engine owns its folder; pulling into it at the same time could block its saves.
 mkdirSync(dir, { recursive: true, mode: 0o700 });
