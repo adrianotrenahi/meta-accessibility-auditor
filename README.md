@@ -28,10 +28,14 @@ Use Node.js 24 or later.
 ```sh
 npm ci
 npx playwright install webkit chromium
-npm run dev
+npm run audits
 ```
 
-Open http://127.0.0.1:4317. Choose **Start saved demo**. It opens the controlled shop in a visible browser. Reopening a run or reading its evidence never starts another run.
+Open http://127.0.0.1:4346/audits. This is Cavioo's audits page, signed in as **Testing Account**: start an audit of the controlled example shop, watch the live run and read the report. It needs no AI key and spends nothing. The first start downloads Cavioo's screens once (an internet connection is needed then); see [docs/CAVIOO-SCREENS.md](docs/CAVIOO-SCREENS.md). Audits are saved in the ignored `data/audits/example` folder (`data/audits/websites` for real websites), and every browser on the computer sees the same audits of Testing Account.
+
+For real websites, add `META_API_KEY` to `.env`, write a bounded `spend-approval.json` (see below), and run `npm run audits -- --public-websites`.
+
+`npm run dev` still opens the engine's own plain test viewer at http://127.0.0.1:4317, an engineering harness without Cavioo's design. Reopening a run or reading its evidence never starts another run.
 
 ```sh
 npm run check
@@ -83,7 +87,7 @@ The twelve-case evaluation set is a draft for owner review. Offline code tests e
 
 ## Prior work and public submission
 
-Cavioo existed before this event. This repository contains newly written hackathon work and open-source dependencies. Cavioo source, private prompts, criterion wording, production data and services are excluded. The controlled shop and test examples were written for this project. The video must distinguish prior work from the new contribution.
+Cavioo existed before this event. This repository contains newly written hackathon work and open-source dependencies. Cavioo source, private prompts, criterion wording, scoring, production data and services are excluded. Cavioo's screens (prior work) are not in the repository: the audits page downloads them as one pre-built, fingerprint-checked file, built without Cavioo's criteria, scoring, advice or prompts ([docs/CAVIOO-SCREENS.md](docs/CAVIOO-SCREENS.md)). The page server in `host/` and its Meta helpers in `host/ui/` were written for this hackathon (27–29 October). The controlled shop and test examples were written for this project. The video must distinguish prior work from the new contribution.
 
 Keep every change on a branch and reviewed through a pull request. Do not merge without Adriano's instruction. Never run paid tests just because a key exists. Preserve original evidence, record uncertainty and keep robot limitations separate from website defects.
 

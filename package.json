@@ -10,7 +10,7 @@
     "predev": "npm run build",
     "dev": "node --import tsx server/index.ts",
     "build": "tsc --noEmit && vite build",
-    "check": "tsc --noEmit && node --import tsx --test tests/*.test.ts",
+    "check": "tsc --noEmit && node --import tsx --test tests/*.test.ts host/*.test.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
     "preflight": "node --import tsx scripts/preflight.ts",
     "demo": "node --import tsx scripts/run.ts --mode offline",
@@ -27,7 +27,9 @@
     "proof:host-controls": "node --import tsx scripts/host-controls-proof.ts",
     "proof:sam-masks": "node --import tsx scripts/sam-mask-proof.ts",
     "proof:blockers": "node --import tsx scripts/blocker-proof.ts",
-    "storage": "node --import tsx scripts/shared-storage.ts"
+    "storage": "node --import tsx scripts/shared-storage.ts",
+    "audits": "node host/start.mjs",
+    "test:host": "node --test host/*.test.mjs"
   },
   "dependencies": {
     "@axe-core/playwright": "4.14.0",
