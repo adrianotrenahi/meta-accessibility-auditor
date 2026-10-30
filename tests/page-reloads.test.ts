@@ -194,3 +194,30 @@ test(
     }
   },
 );
+
+test(
+  'A closed page is never mistaken for a reload: it stops at once, with no retry note',
+  { timeout: 60000 },
+  async () => {
+    const site = await reloadingSite();
+    try {
+      const first = await site.walk.start(site.run.url);
+      site.walk.measurements = async () => {
+        await site.walk.page.close();
+        throw destroyed();
+      };
+      await assert.rejects(
+        (site.runner as any).automaticMeasurement(
+          site.run,
+          site.walk,
+          first,
+          new AbortController().signal,
+        ),
+        /Execution context was destroyed/,
+      );
+      assert.equal(site.store.records(site.run.id).filter((r) => r.kind === 'limit').length, 0);
+    } finally {
+      await site.close();
+    }
+  },
+);

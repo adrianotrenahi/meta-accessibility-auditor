@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
 import {
   ARRIVAL_QUIET_MS,
+  RELOAD_QUIET_MS,
   BrowserWalk,
   MeasurementStateChanged,
   ActionStateChanged,
@@ -977,7 +978,9 @@ export class Runner {
         return { current, scan };
       } catch (error) {
         const changed = error instanceof MeasurementStateChanged;
-        if ((!changed && !documentWasReplaced(error)) || signal.aborted) throw error;
+        // A closed page is a refusal, never a reload to wait out.
+        if ((!changed && !documentWasReplaced(error)) || signal.aborted || walk.page?.isClosed())
+          throw error;
         this.store.append(
           run.id,
           'limit',
@@ -1022,12 +1025,17 @@ export class Runner {
     for (let attempt = 1; ; attempt++) {
       try {
         if (attempt > 1) {
-          await walk.waitForReloadsToStop(options.arrival ? ARRIVAL_QUIET_MS : undefined);
+          await walk.waitForReloadsToStop(options.arrival ? ARRIVAL_QUIET_MS : RELOAD_QUIET_MS);
           current = await this.observeAgain(run, walk, signal);
         }
         return await clearPageBlockers(walk, this.store, run.id, current, signal, options);
       } catch (error) {
-        if (!documentWasReplaced(error) || attempt >= BLOCKER_ATTEMPTS || signal.aborted)
+        if (
+          !documentWasReplaced(error) ||
+          attempt >= BLOCKER_ATTEMPTS ||
+          signal.aborted ||
+          walk.page?.isClosed()
+        )
           throw error;
         this.store.append(
           run.id,

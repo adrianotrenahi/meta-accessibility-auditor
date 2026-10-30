@@ -23,10 +23,12 @@ more than 10 seconds. On Booking.com this lets its robot-check reload
 
 If the page still reloads during a scan, the robot records that attempt as
 unknown, waits, observes the page again and scans again, up to three attempts;
-after the third it continues with the check unknown, as before. Clearing banners
-and popups gets the same three attempts, clearing again on the new page. A scan
-sends no input, so repeating it never repeats a step of the journey. Every attempt
-stays saved.
+after the third it continues with the check unknown, as before. A scan sends no
+input, so repeating it never repeats a step of the journey. Clearing banners and
+popups gets the same three attempts. Clearing does press keys (Escape, Tab,
+Enter), but on a retry the robot first looks for the banner on the new page and
+presses keys only if it is still there; each press is recorded as its own step.
+A closed page is never treated as a reload. Every attempt stays saved.
 
 ## Impact on the UX
 
