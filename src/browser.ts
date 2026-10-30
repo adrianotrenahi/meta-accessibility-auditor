@@ -37,6 +37,14 @@ export const isCommitment = (name: string) =>
     name,
   );
 /** An intact original no longer describes the page; this is an observation limit. */
+/** Real websites often load a new document right after arrival: a robot check,
+ * a consent or language redirect. The robot measures only after the page has gone
+ * this long without loading a new document (owner, 30 Oct). */
+export const ARRIVAL_QUIET_MS = 2500;
+/** After the journey's own steps, a shorter quiet moment; no wait when nothing loaded recently. */
+export const RELOAD_QUIET_MS = 1000;
+/** The wait never exceeds this; a page still reloading is then measured with retries. */
+export const RELOAD_WAIT_MAX_MS = 10000;
 export class MeasurementStateChanged extends Error {
   constructor(
     public captureId: string,
@@ -115,6 +123,8 @@ export class BrowserWalk {
   started = Date.now();
   readonly frames: LiveFrames;
   private lastOriginal?: { id: string; url: string; documentEpoch: number };
+  /** When the current tab last loaded a new document (a reload, redirect or navigation). */
+  private lastDocumentAt = 0;
   private lastScreenState?: { fingerprint: string; original: RecordEntry };
   private readonly controlIdentityKey = '__access_walk_control_' + randomUUID();
   private readonly pointerStateKey = '__access_walk_pointer_' + randomUUID();
@@ -211,6 +221,7 @@ export class BrowserWalk {
       }
     });
     this.page = await context.newPage();
+    this.watchDocuments(this.page);
     this.windows = new BrowserWindows({
       context,
       current: () => this.page,
@@ -233,6 +244,7 @@ export class BrowserWalk {
       },
       adopted: (page) => {
         this.page = page;
+        this.watchDocuments(page);
         this.lastOriginal = undefined;
       },
       record: (outcome, reason, sourceCaptureId) => {
@@ -265,8 +277,31 @@ export class BrowserWalk {
     await this.page.goto(approved.href, { waitUntil: 'domcontentloaded', timeout: 20000 });
     // Consent banners and popups usually arrive after the document itself.
     await this.page.waitForLoadState('load', { timeout: 8000 }).catch(() => undefined);
+    await this.waitForReloadsToStop(this.publicWebsite ? ARRIVAL_QUIET_MS : RELOAD_QUIET_MS);
     await this.page.bringToFront();
     return this.capture();
+  }
+  private watchDocuments(page: Page) {
+    this.lastDocumentAt = Date.now();
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame() && page === this.page) this.lastDocumentAt = Date.now();
+    });
+  }
+  /** Waits until the page has gone `quietMs` without loading a new document, at most
+   * `maxMs`; returns at once when nothing loaded recently. True when it went quiet. */
+  async waitForReloadsToStop(quietMs = RELOAD_QUIET_MS, maxMs = RELOAD_WAIT_MAX_MS) {
+    const deadline = Date.now() + maxMs;
+    for (;;) {
+      this.assertActive();
+      const quietFor = Date.now() - this.lastDocumentAt;
+      if (quietFor >= quietMs) break;
+      if (Date.now() >= deadline) return false;
+      await this.page.waitForTimeout(Math.min(quietMs - quietFor, deadline - Date.now()));
+    }
+    await this.page
+      .waitForLoadState('domcontentloaded', { timeout: Math.max(1000, deadline - Date.now()) })
+      .catch(() => undefined);
+    return true;
   }
   async focus() {
     return readPage(this.page, () => this.readFocus());

@@ -203,6 +203,9 @@ function fixture(
       if (controller.signal.aborted || store.run(run.id).state !== 'running')
         throw Error('Owner stopped this run.');
     },
+    async waitForReloadsToStop() {
+      return true;
+    },
     images: (records: RecordEntry[]) =>
       records
         .filter((record) => record.kind === 'capture')
@@ -667,6 +670,7 @@ test('A deferred role cannot bypass the original capture hash guard', async () =
     const walk = {
       images: () => [],
       assertActive() {},
+      waitForReloadsToStop: async () => true,
       captureSettled: async () => {
         throw Error('No observation should disguise the changed source.');
       },
