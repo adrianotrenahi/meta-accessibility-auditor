@@ -12,6 +12,7 @@ import { isPublicAddress } from './network.js';
 type Address = { address: string; family: number };
 export type PublicLookup = (hostname: string) => Promise<Address[]>;
 const dns: PublicLookup = (hostname) => lookup(hostname, { all: true });
+export const PUBLIC_PROXY_REFUSAL_HEADER = 'x-access-walk-proxy-refused';
 
 /** Resolve once, reject mixed/private answers, and dial only this verified address. */
 export async function publicDestination(raw: string, resolve: PublicLookup = dns) {
@@ -74,6 +75,7 @@ export function forwardHeaders(headers: IncomingMessage['headers']) {
     'te',
     'trailer',
     'transfer-encoding',
+    PUBLIC_PROXY_REFUSAL_HEADER,
   ]);
   for (const name of (headers.connection ?? '').split(',')) hop.add(name.trim().toLowerCase());
   if (headers['transfer-encoding']) hop.add('content-length');
@@ -127,7 +129,7 @@ export async function publicBrowserProxy(resolve: PublicLookup = dns) {
   let closing: Promise<void> | undefined;
   const refuse = (response: ServerResponse) => {
     if (response.destroyed || response.writableEnded) return;
-    response.writeHead(502);
+    response.writeHead(502, { [PUBLIC_PROXY_REFUSAL_HEADER]: '1' });
     response.end('The public website connection was refused.');
   };
   const server = createServer(async (incoming, response) => {
@@ -197,7 +199,9 @@ export async function publicBrowserProxy(resolve: PublicLookup = dns) {
         upstream.pipe(downstream);
       });
     })().catch(() => {
-      downstream.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+      downstream.end(
+        `HTTP/1.1 502 Bad Gateway\r\n${PUBLIC_PROXY_REFUSAL_HEADER}: 1\r\nConnection: close\r\n\r\n`,
+      );
     });
   });
   await new Promise<void>((accept, reject) => {
