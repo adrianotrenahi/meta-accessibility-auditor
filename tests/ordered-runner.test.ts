@@ -450,3 +450,56 @@ test('Legacy controlled walks keep their every-third-decision checkpoint', async
     await x.close();
   }
 });
+
+test('Two instructions finished on one unchanged screenshot get one scan and one paid check', async (t) => {
+  // Owner, 30 Oct: Booking.com's home page was scanned, analysed and reviewed twice.
+  const x = await fixture();
+  let calls = 0,
+    analyses = 0,
+    scans = 0;
+  const realScan = x.walk.measurements.bind(x.walk);
+  x.walk.measurements = async (source) => {
+    scans++;
+    return realScan(source);
+  };
+  t.mock.method(x.runner as any, 'analyse', async (_models: any, run: any, current: any) => {
+    analyses++;
+    x.app.store.append(run.id, 'coverage', 'analyst', {
+      topics: [
+        { captureId: current.id, topic: 'content', state: 'examined', reason: 'Synthetic.' },
+      ],
+    });
+    return current;
+  });
+  t.mock.method(x.runner as any, 'review', async () => {});
+  t.mock.method(MetaModels.prototype, 'reason', async () => {
+    calls++;
+    return {
+      kind: 'step_done',
+      stepId: calls === 1 ? 'open' : 'check',
+      captureId: x.current.id,
+      note: 'Synthetic completion on the same screenshot.',
+    };
+  });
+  try {
+    await (x.runner as any).live(
+      x.run,
+      x.walk,
+      new VoiceOverProbe(x.walk),
+      x.current,
+      x.controller,
+    );
+    const records = x.app.store.records(x.run.id);
+    assert.equal(readOrderedJourney(records)?.completed.length, 2);
+    assert.equal(scans, 1, 'the second completion reuses the scan of the same screenshot');
+    assert.equal(analyses, 1, 'the final checkpoint does not resend the same screenshot');
+    const skipped = records.filter(
+      (record) => record.kind === 'coverage' && record.payload.method === 'repeat_checkpoint/1',
+    );
+    assert.equal(skipped.length, 1);
+    assert.equal(skipped[0]!.payload.captureId, x.current.id);
+    assert.equal(skipped[0]!.payload.state, 'ALREADY_CHECKED');
+  } finally {
+    await x.close();
+  }
+});

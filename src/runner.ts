@@ -18,6 +18,7 @@ const MEASUREMENT_ATTEMPTS = 3;
 const BLOCKER_ATTEMPTS = 3;
 import { VoiceOverProbe } from './voiceover.js';
 import { Store, digest, recordIsIntact } from './store.js';
+import { earlierCheck, earlierScan } from './repeat-checkpoint.js';
 import {
   MetaModels,
   IncompleteModelResult,
@@ -966,6 +967,8 @@ export class Runner {
   ): Promise<{ current: RecordEntry; scan?: RecordEntry }> {
     // Measure only once the page has stopped reloading; if it reloads mid-scan anyway,
     // wait, observe the new page and measure again (owner, 30 Oct). A scan sends no input.
+    const repeated = earlierScan(this.store.records(run.id), current);
+    if (repeated) return { current, scan: repeated };
     let observeAgain = false;
     for (let attempt = 1; ; attempt++) {
       if (signal.aborted) throw Error('The run stopped before the automatic measurement.');
@@ -1062,6 +1065,24 @@ export class Runner {
     probe?: VoiceOverProbe,
   ) {
     if (this.stopForDeniedPage(run, walk, current)) return current;
+    const checked = earlierCheck(this.store.records(run.id), current);
+    if (checked) {
+      this.store.append(
+        run.id,
+        'coverage',
+        'runner',
+        {
+          method: 'repeat_checkpoint/1',
+          state: 'ALREADY_CHECKED',
+          reason:
+            'The analyst already checked this exact screenshot, and nothing was seen or done on the page since. It is not sent to the analyst or reviewer again; the earlier check and any review of it stand.',
+          captureId: current.id,
+          analystCoverageId: checked.id,
+        },
+        [current.id, checked.id],
+      );
+      return current;
+    }
     try {
       return (await this.analyse(models, run, current, walk, signal, probe)) ?? current;
     } catch (error) {
