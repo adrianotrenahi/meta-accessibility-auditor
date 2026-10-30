@@ -145,3 +145,46 @@ test('A scan accepts rotating copy on the same screen and names the differing li
   // Records saved before page-state/1 have no page stamp: the exact stamp decides alone.
   assert.equal(sameForScan({ aria: state.aria }, state), null);
 });
+
+test('A scan on a small page refuses a swapped main section that a key press would tolerate', () => {
+  const state = (lines: string[]) => ({
+    documentEpoch: 1,
+    url: 'https://example.test/step',
+    aria: page(lines),
+    focus: { tag: 'body' },
+    focusHelp: null,
+    scroll: { x: 0, y: 0 },
+    dialogs: [],
+  });
+  const frame = Array.from({ length: 24 }, (_, i) => `- link "Menu ${i}"`);
+  const product = (name: string) =>
+    Array.from({ length: 6 }, (_, i) => `- text: ${name} detail ${i}`);
+  const before = state([...frame, ...product('Blue jumper')]);
+  const after = state([...frame, ...product('Red jumper')]);
+  // 12 of 30 lines differ: within the key-press floor, beyond the scan's.
+  assert.equal(ariaDifference(before.aria, after.aria).length, 12);
+  assert.equal(contentSettled(before.aria, after.aria), true);
+  const saved = { pageStamp: pageStamp(before), aria: before.aria };
+  assert.equal(sameForScan(saved, after), null);
+  // Two rotated lines on the same small page still qualify.
+  const small = state([...frame, ...product('Blue jumper').slice(0, 5), '- text: Offer A']);
+  const rotated = state([...frame, ...product('Blue jumper').slice(0, 5), '- text: Offer B']);
+  assert.equal(sameForScan({ pageStamp: pageStamp(small), aria: small.aria }, rotated)?.length, 2);
+});
+
+test("eDreams' largest measured drift still keeps a scan", () => {
+  const home = Array.from({ length: 286 }, (_, index) => `- text: Home line ${index}`);
+  const slides = Array.from({ length: 11 }, (_, i) => `- text: Slide ${i}`);
+  const state = (lines: string[]) => ({
+    documentEpoch: 1,
+    url: 'https://www.edreams.com/',
+    aria: page(lines),
+    focus: null,
+    focusHelp: null,
+    scroll: { x: 0, y: 0 },
+    dialogs: [],
+  });
+  const before = state(home);
+  const after = state([...home.slice(0, 274), ...slides]);
+  assert.equal(sameForScan({ pageStamp: pageStamp(before), aria: before.aria }, after)?.length, 23);
+});

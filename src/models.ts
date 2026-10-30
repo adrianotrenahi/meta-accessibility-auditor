@@ -237,7 +237,8 @@ const jobInstructions = {
     VISUAL_INSPECTION_GUIDANCE +
     ' Also independently review the exact criterion_proposal versions in this request and return criterionDecisions. Use their proposalId and proposalHash; keep only the unchanged verdict/reason/scope supported by the original facts. ' +
     'A rewrite/unresolved decision leaves the criterion unsettled. Positive results and genuine inapplicability need review too. Visual observations are analyst interpretations to inspect, not new factual proof. ' +
-    'Do not equate examined visual coverage with a pass. A sound expert judgement need not have a numeric measurement unless its scored criterion requires it.',
+    'Do not equate examined visual coverage with a pass. A sound expert judgement need not have a numeric measurement unless its scored criterion requires it. ' +
+    'An automatic scan whose comparison is page-state-and-bounded-content-drift read the live page while the copy in its contentDrift.lines differed from the original screenshot; a measured claim about other elements is not contradicted by that copy difference, and a claim that a contentDrift line is visible in the screenshot is unsupported.',
 } as const;
 export function outputText(response: any): string {
   if (typeof response.output_text === 'string') return response.output_text;

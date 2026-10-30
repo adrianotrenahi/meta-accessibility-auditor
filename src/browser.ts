@@ -980,13 +980,14 @@ export class BrowserWalk {
    * Most commercial pages rotate copy while a scan runs, so an exact stamp rarely
    * holds there. A page-state/1 original still counts when the same document,
    * address, scroll and popups remain and the copy differs only within the bounded
-   * drift; the differing lines are added to `drift` and saved with the scan.
+   * drift; the larger differing set is kept in `drift` and saved with the scan.
    */
-  private async scanStillMatches(source: RecordEntry, drift: Set<string>) {
+  private async scanStillMatches(source: RecordEntry, drift: { lines: string[] }) {
     if (typeof source.payload.pageStamp !== 'string') return false;
     const changed = sameForScan(source.payload, await this.scanState());
     if (!changed) return false;
-    for (const line of changed) drift.add(line);
+    // Keep the larger of the before/after differences, counted like the drift bound.
+    if (changed.length > drift.lines.length) drift.lines = changed;
     return true;
   }
   async measurements(source: RecordEntry) {
@@ -1006,7 +1007,7 @@ export class BrowserWalk {
     if (source.payload.stable !== true) throw new MeasurementStateChanged(source.id, 'before');
     let stage: 'before' | 'during' = 'before';
     try {
-      const drift = new Set<string>();
+      const drift = { lines: [] as string[] };
       const before = await this.observationStamp();
       if (source.payload.stateStamp !== before && !(await this.scanStillMatches(source, drift)))
         throw new MeasurementStateChanged(source.id, 'before');
@@ -1014,7 +1015,16 @@ export class BrowserWalk {
       const result = await new AxeBuilder({ page: this.page })
         .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
         .analyze();
-      const facts = await collectBrowserFacts(this.page, source, result);
+      // Measurements bind to the exact controls this original listed, never by position
+      // alone: a slider inserting or reordering buttons must not move a size to another id.
+      const facts = await collectBrowserFacts(
+        this.page,
+        source,
+        result,
+        typeof source.payload.stampToken === 'string'
+          ? { key: this.stampKey, token: source.payload.stampToken }
+          : undefined,
+      );
       const exact =
         source.payload.stateStamp === before &&
         source.payload.stateStamp === (await this.observationStamp());
@@ -1035,8 +1045,9 @@ export class BrowserWalk {
             ? {
                 comparison: 'page-state-and-bounded-content-drift',
                 contentDrift: {
-                  changedLines: drift.size,
-                  lines: [...drift].slice(0, 40).map((line) => line.slice(0, 200)),
+                  changedLines: drift.lines.length,
+                  lines: drift.lines.slice(0, 40).map((line) => line.slice(0, 200)),
+                  linesTruncated: drift.lines.length > 40,
                 },
               }
             : {}),
