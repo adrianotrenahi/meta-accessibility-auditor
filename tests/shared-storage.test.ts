@@ -45,10 +45,11 @@ test('Shared storage is off unless all five settings exist, and never echoes a v
   const dir = mkdtempSync(join(tmpdir(), 'access-walk-config-'));
   folders.push(dir);
   const file = join(dir, 'storage.env');
-  assert.equal(sharedConfig({}, file), null);
+  const noDotenv = join(dir, 'missing.env');
+  assert.equal(sharedConfig({}, file, noDotenv), null);
   writeFileSync(file, 'ACCESS_WALK_DATABASE_URL=postgresql://user:sekret@host/db\n');
   assert.throws(
-    () => sharedConfig({}, file),
+    () => sharedConfig({}, file, noDotenv),
     (error: Error) =>
       error.message.includes('ACCESS_WALK_R2_BUCKET') && !error.message.includes('sekret'),
   );
@@ -62,7 +63,7 @@ test('Shared storage is off unless all five settings exist, and never echoes a v
       'ACCESS_WALK_R2_SECRET_ACCESS_KEY=secret',
     ].join('\n'),
   );
-  const config = sharedConfig({ ACCESS_WALK_R2_BUCKET: 'from-environment' }, file)!;
+  const config = sharedConfig({ ACCESS_WALK_R2_BUCKET: 'from-environment' }, file, noDotenv)!;
   assert.equal(config.databaseUrl, 'postgresql://user:sekret@host/db');
   assert.equal(config.r2.bucket, 'from-environment');
 });
@@ -367,4 +368,41 @@ test('Only the public-website host shares; the controlled example and proofs sta
   const script = readFileSync(new URL('../scripts/serve-host.ts', import.meta.url), 'utf8');
   assert.match(script, /shared: publicWebsites \? sharedConfig\(\) : null/);
   assert.equal(script.match(/sharedConfig\(/g)!.length, 1);
+});
+
+test("Storage settings in the folder's .env sit beside the other keys and are used first", () => {
+  const dir = mkdtempSync(join(tmpdir(), 'access-walk-dotenv-'));
+  folders.push(dir);
+  const shared = join(dir, 'storage.env');
+  const dotenv = join(dir, '.env');
+  const lines = (bucket: string) =>
+    [
+      'ACCESS_WALK_DATABASE_URL=postgresql://user:sekret@host/db',
+      `ACCESS_WALK_R2_ACCOUNT_ID=${'a'.repeat(32)}`,
+      `ACCESS_WALK_R2_BUCKET=${bucket}`,
+      'ACCESS_WALK_R2_ACCESS_KEY_ID=key',
+      'ACCESS_WALK_R2_SECRET_ACCESS_KEY=secret',
+    ].join('\n');
+  writeFileSync(shared, lines('from-shared-file'));
+  // A .env with only the model key leaves storage to the shared file.
+  writeFileSync(dotenv, 'META_API_KEY=model-key\n');
+  assert.equal(sharedConfig({}, shared, dotenv)!.r2.bucket, 'from-shared-file');
+  // Once .env holds storage settings, it is the one used.
+  writeFileSync(
+    dotenv,
+    `META_API_KEY=model-key\n${lines('from-dotenv').replace(/^/gm, 'export ')}\n`,
+  );
+  assert.equal(sharedConfig({}, shared, dotenv)!.r2.bucket, 'from-dotenv');
+  // A file named on purpose wins over a filled .env.
+  assert.equal(
+    sharedConfig({ ACCESS_WALK_STORAGE_FILE: shared }, shared, dotenv)!.r2.bucket,
+    'from-shared-file',
+  );
+  // A half-filled .env is reported by name, never patched from the other file.
+  writeFileSync(dotenv, 'ACCESS_WALK_R2_BUCKET=from-dotenv\n');
+  assert.throws(
+    () => sharedConfig({}, shared, dotenv),
+    (error: Error) =>
+      error.message.includes('ACCESS_WALK_DATABASE_URL') && error.message.includes(dotenv),
+  );
 });

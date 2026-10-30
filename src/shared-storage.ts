@@ -10,7 +10,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { root } from './config.js';
 import { digest, KEPT_ROWS, type Store } from './store.js';
 
 /** Audits stay saved locally first. A shared copy is optional and never required to run. */
@@ -26,18 +27,30 @@ const NAMES = {
   secretAccessKey: 'ACCESS_WALK_R2_SECRET_ACCESS_KEY',
 } as const;
 export const defaultSharedFile = () => join(homedir(), '.access-walk', 'storage.env');
-
-/** Reads one file outside every working copy, so no branch can commit it. */
-export function sharedConfig(
-  env: Record<string, string | undefined> = process.env,
-  file = env.ACCESS_WALK_STORAGE_FILE || defaultSharedFile(),
-): SharedConfig | null {
+const readSettings = (file: string) => {
   const saved: Record<string, string> = {};
   if (existsSync(file))
     for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
-      const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
+      const match = line.match(/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*)$/);
       if (match) saved[match[1]] = match[2].trim().replace(/^['"]|['"]$/g, '');
     }
+  return saved;
+};
+
+/** Reads the working folder's .env, beside the other keys, when it holds any storage
+ * setting; otherwise one file outside every working copy. Git ignores both. One file
+ * is never mixed with the other, so a half-filled .env is reported, not patched. */
+export function sharedConfig(
+  env: Record<string, string | undefined> = process.env,
+  file = env.ACCESS_WALK_STORAGE_FILE || defaultSharedFile(),
+  dotenv = resolve(root, '.env'),
+): SharedConfig | null {
+  const local = readSettings(dotenv);
+  // A file named on purpose (ACCESS_WALK_STORAGE_FILE) always wins over the default .env.
+  const fromDotenv =
+    !env.ACCESS_WALK_STORAGE_FILE && Object.values(NAMES).some((name) => local[name]);
+  const saved = fromDotenv ? local : readSettings(file);
+  const source = fromDotenv ? dotenv : file;
   const value = (name: string) => env[name] || saved[name] || '';
   const found = Object.fromEntries(
     Object.entries(NAMES).map(([field, name]) => [field, value(name)]),
@@ -47,7 +60,7 @@ export function sharedConfig(
     .map(([, name]) => name);
   if (missing.length === Object.keys(NAMES).length) return null;
   if (missing.length)
-    throw Error(`Shared storage is half set up. Missing: ${missing.join(', ')} (in ${file}).`);
+    throw Error(`Shared storage is half set up. Missing: ${missing.join(', ')} (in ${source}).`);
   if (!/^postgres(ql)?:\/\//.test(found.databaseUrl))
     throw Error(`${NAMES.databaseUrl} must be a Postgres connection address.`);
   if (!/^[a-f0-9]{32}$/.test(found.accountId))
