@@ -1,3 +1,4 @@
+import { showsStatusBox } from "./notice";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BriefScreen } from "@/app/audits/new/BriefScreen";
@@ -76,6 +77,9 @@ function App({ bootstrap }: { bootstrap: Bootstrap }) {
     unavailableJob.current = null;
     if (!jobId) {
       setJob(null);
+      // A run page's messages never follow the viewer back to the audits list.
+      setError(null);
+      setReadError(null);
       return;
     }
     let closed = false,
@@ -234,7 +238,7 @@ function App({ bootstrap }: { bootstrap: Bootstrap }) {
     >
       {/* The real-website audits list shows no standing notice (owner, 30 Oct); the
           box appears there only for an unconfirmed Start or an error. */}
-      {(!(publicSites && history) || pendingStarts.length > 0 || error || readError) && (
+      {showsStatusBox({ publicSites, history, pendingStarts: pendingStarts.length, error, readError }) && (
       <div
         className="flex-none p-3"
         data-testid="offline-funnel-notice"
