@@ -135,3 +135,12 @@ checks. The controlled shop keeps Playwright's test browsers.
 Findings and the strip also show every screenshot that proved a finished journey
 step, marked as not analysed when Meta's analysis of it never came back, so a
 failed analysis no longer hides how far the robot got (owner, 31 October).
+
+The robot's typing guard (it types only a short search term into a search box, never
+personal, account or payment details) refusing an input no longer ends the audit: an
+`input_refused` limit records why, nothing is typed, and the navigator is asked again;
+three refused inputs in a row stop navigation. The navigator is told that date
+pickers, day and month selectors, dropdowns and option lists are chosen with the arrow
+keys and Enter or Space, not typed into (owner, 31 October). Each navigator decision
+is one request to Meta: audits estimate its size locally and generously instead of
+asking Meta first; the estimate counts text bytes (very likely an upper bound), asks Meta when it looks too big, and records a `reservation_exceeded` warning if a charge ever exceeds what was set aside.

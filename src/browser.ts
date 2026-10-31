@@ -80,6 +80,9 @@ export const RELOAD_QUIET_MS = 1000;
 /** The wait never exceeds this; a page still reloading is then measured with retries. */
 export const RELOAD_WAIT_MAX_MS = 10000;
 /** The audit's key-press limit: navigation stops cleanly and what was recorded is analysed. */
+/** The robot's typing guard refused this input; nothing was typed. The guard stays: the robot
+ * types only a short search term into a search box, never personal, account or payment data. */
+export class InputRefused extends Error {}
 export class ActionLimitReached extends Error {
   constructor() {
     super('Browser action limit reached.');
@@ -1003,14 +1006,14 @@ export class BrowserWalk {
       }
     } else if (action.kind === 'type') {
       if (before.type === 'password' || before.type === 'file')
-        throw Error('Passwords and file inputs are outside this demo.');
+        throw new InputRefused('Passwords and file inputs are outside this demo.');
       if (
         !action.text ||
         !(this.publicWebsite
           ? publicSearchInput(before, action.text)
           : ['test@example.org', 'Demo', 'Visitor', 'Demo Street', '12345'].includes(action.text))
       )
-        throw Error(
+        throw new InputRefused(
           this.publicWebsite
             ? 'Only a short search term in an identified search field can be entered; patient, account and payment details are outside this run.'
             : 'Only the approved synthetic demonstration values may be entered.',

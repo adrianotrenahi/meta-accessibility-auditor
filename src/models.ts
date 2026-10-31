@@ -255,6 +255,7 @@ const jobInstructions = {
     ' Prefer focus_target to reach a named control through several real keyboard steps in one decision. Use its exact targetId from the supplied controls, or targetRole plus exact targetName from the current original accessible page. Use traversalKey Tab or Shift+Tab for ordinary controls. When the target belongs to a menubar, menu or tablist, Tab reaches its active entry and the local keyboard path uses real orientation-aware arrows within that same group; inactive items are not necessarily Tab-reachable. To reach a menu or tab item from outside its group, use traversalKey Tab: the robot enters the group and then uses the arrows. Do not Tab past an active menu item to seek another item in that same menu. For a calendar with a current date cell, use an arrow key to move within that same native grid; first bring the desired month into the first visible calendar if necessary. Dates may not be individually Tab-reachable. The robot uses real keys until that same unique control is focused and stops on a meaningful page change or cycle. Optional activation Enter or Space is an explicit request applied only after the target is reached and freshly checked against the original control, with the ordinary no-booking/payment/login guards. Without activation it only reaches focus; it never types during traversal. Previously unseen descriptions require a fresh decision before any inherited activation, and changed descriptions stop traversal. If the requested control is now focused, read the fresh original and choose a separate press only when the intent still holds. Use a new type action after reaching an input. Never repeat an exhausted or refused target unchanged. A wait action may use waitMs up to10000 while a real results page loads; loading alone is not task completion. Do not request focus_target again when the requested control is already focused. Single press remains available for one key or widget-specific arrow keys. ' +
     ' If a search box already holds a different entry (a pre-filled airport chip, for example), remove that entry by keyboard before typing, then type the requested value once. ' +
     ' Typing into a search box that offers a suggestion list does not choose anything: when the list appears, choose the option that matches the request (London, for example: an all-airports option or the named airport the task asks for) with ArrowDown and Enter, or focus_target that option with activation Enter, and check that the box now shows it. ' +
+    ' Type only into a text or search box. Date pickers, day and month selectors, dropdowns and option lists are chosen with the keyboard, not typed into: move with the arrow keys until the wanted value is focused or shown, then press Enter or Space to choose it, and check the field now shows it. ' +
     ' When the site answers your input with its own error (for example "something went wrong", "try again" or "refresh the page"), the site refused or failed that request. Do not activate its refresh, reload or retry links, do not leave the page and do not repeat the same input: choose finish with a short note quoting the site\'s message. A site refusal is a recorded limit, not a website defect and not task completion. ' +
     ' Missing-fact checks share the existing two native/focused slots. Do not repeat an exhausted or refused check or revisit an unavailable state to force a result.',
   analyst:
@@ -289,6 +290,31 @@ export class IncompleteModelResult extends Error {
     super('The model response was incomplete.');
   }
 }
+/** Generous allowance per supplied screenshot: a 1440x900 viewport costs about 1-2k tokens
+ * under every published image scheme. Unproven for Muse Spark; see reservation_exceeded. */
+export const IMAGE_TOKEN_ESTIMATE = 10_000;
+/** An upper-bound token estimate: every ordinary token is at least one byte of UTF-8 text (byte
+ * BPE and byte-fallback tokenizers), so the text's byte length bounds its tokens, Chinese,
+ * Arabic, emoji and long hex hashes included. Images get a generous fixed allowance, and a
+ * margin covers special and template tokens. For plain English it over-counts about 4x. */
+export function estimateInputTokens(body: {
+  instructions?: string;
+  input?: { content?: { type: string; text?: string }[] }[];
+  tools?: unknown;
+}) {
+  let bytes =
+    Buffer.byteLength(body.instructions ?? '', 'utf8') +
+    Buffer.byteLength(JSON.stringify(body.tools ?? []), 'utf8');
+  let images = 0;
+  let parts = 0;
+  for (const message of body.input ?? [])
+    for (const part of message.content ?? []) {
+      parts++;
+      if (part.type === 'input_image') images++;
+      else bytes += Buffer.byteLength(part.text ?? '', 'utf8');
+    }
+  return bytes + images * IMAGE_TOKEN_ESTIMATE + 1000 + parts * 8;
+}
 /** A completed answer that is unreadable or breaks its rules; only the answer check raises it. */
 export class InvalidModelAnswer extends Error {
   constructor(
@@ -299,6 +325,9 @@ export class InvalidModelAnswer extends Error {
   }
 }
 export class MetaModels {
+  /** Audits switch this on: the navigator's request size is estimated locally (one request per
+   * decision). Off, the size is asked of Meta first, as before; its own checks stay tested. */
+  estimateNavigatorInput = false;
   constructor(
     private store: Store,
     private fetcher: typeof fetch = fetch,
@@ -511,13 +540,19 @@ export class MetaModels {
           ' Distinguish the supplied-image receipt from original record availability: records-only baseline captures were not visually supplied. Never assess their criterion scope, visual appearance or element targets. Review feedback is an interpretation to reconsider against originals, never factual evidence. Do not repeat an unchanged existing finding; a requested rewrite needs a distinct corrected body using the same issueKey and a new exact independent review. ' +
           ' Return only the schema-constrained JSON result, without progress messages or narrative outside it. Keep reasons concise; leave unavailable checks explicitly unknown. ';
     }
-    const { input_tokens: count } = await this.post(
-      runId,
-      '/responses/input_tokens',
-      body,
-      signal,
-      purpose,
-    );
+    // The navigator's request size is estimated here instead of asking Meta first, so each
+    // decision is one request, not two (owner, 31 Oct). The estimate counts text bytes, which is
+    // very likely an upper bound for Muse Spark's (unpublished) tokenizer; a request that looks
+    // too big that way asks Meta for its exact size instead of being refused, and a charge above
+    // the money set aside is recorded below rather than passing silently.
+    const estimated =
+      this.estimateNavigatorInput && role === 'driver' && purpose === 'execution'
+        ? estimateInputTokens(body)
+        : undefined;
+    const count =
+      estimated !== undefined && estimated <= cap.input
+        ? estimated
+        : (await this.post(runId, '/responses/input_tokens', body, signal, purpose)).input_tokens;
     if (!Number.isInteger(count) || count < 0)
       throw Error('The provider did not return a valid evidence input count.');
     if (count > cap.input) throw new EvidenceRequestLimit(role, 'input');
@@ -535,6 +570,16 @@ export class MetaModels {
         throw Error('Meta usage was missing; the spending reservation is retained.');
       const actual = tokenCostMicros(cap.model, u.input_tokens, u.output_tokens);
       this.store.settle(id, actual, response.status === 'completed' ? 'received' : 'incomplete');
+      if (actual > reserved)
+        this.store.append(runId, 'limit', 'runner', {
+          method: 'reservation_exceeded',
+          reason:
+            'This request cost more than the money set aside for it. The charge is recorded as billed; the size estimate needs checking.',
+          requestId: id,
+          reservedMicros: reserved,
+          actualMicros: actual,
+          ...(estimated !== undefined ? { estimatedInputTokens: estimated } : {}),
+        });
       this.store.append(runId, 'model_response', role, {
         requestId: id,
         requestPurpose: purpose,
@@ -542,6 +587,7 @@ export class MetaModels {
         instructionHash: digest(body.instructions),
         status: response.status,
         usage: u,
+        ...(estimated !== undefined && count === estimated ? { inputEstimate: estimated } : {}),
         output: response.output,
         ...(read
           ? {

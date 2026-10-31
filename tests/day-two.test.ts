@@ -14,7 +14,7 @@ import {
   InvalidModelAnswer,
 } from '../src/models.js';
 import { Runner, MAX_REFUSED_ANSWERS } from '../src/runner.js';
-import { ActionStateChanged, ObservationUnsettled } from '../src/browser.js';
+import { ActionStateChanged, InputRefused, ObservationUnsettled } from '../src/browser.js';
 import { exportHostSnapshot } from '../src/host-export.js';
 import type { RecordEntry } from '../src/types.js';
 
@@ -487,6 +487,70 @@ for (const scenario of ['recovers', 'stops'] as const)
         assert.equal(refusals.length, MAX_REFUSED_ANSWERS);
         assert.equal(actions, 0, 'no refused answer sends input');
         assert(records.some((r) => r.payload.method === 'navigator_answers_refused'));
+      }
+    } finally {
+      mock.restoreAll();
+      x.close();
+    }
+  });
+
+// Owner, 31 Oct: typing "12, Saturday" into Booking.com's date selector was refused by the
+// typing guard, and the refusal ended the audit. It is now noted and the navigator asked again.
+for (const scenario of ['recovers', 'stops'] as const)
+  test(`A refused input is noted and the navigator asked again (${scenario})`, async () => {
+    const x = setup();
+    try {
+      let decisions = 0,
+        captures = 0;
+      const original = x.capture(captures++);
+      mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+        if (role === 'driver') {
+          decisions++;
+          if (scenario === 'stops' || decisions === 1)
+            return { kind: 'type', text: '12, Saturday', note: 'Set departure day' };
+          return {
+            kind: decisions === 2 ? 'press' : 'finish',
+            key: 'ArrowRight',
+            note: 'Next day',
+          };
+        }
+        if (role === 'analyst') return { findings: [], coverage: [] };
+        throw Error('No accepted finding needs review.');
+      });
+      const walk = {
+        assertActive() {},
+        images: x.images,
+        act: async (action: any, source: RecordEntry) => {
+          if (action.kind === 'type')
+            throw new InputRefused(
+              'Only a short search term in an identified search field can be entered; patient, account and payment details are outside this run.',
+            );
+          return x.store.append(x.run.id, 'action', 'browser', { performed: true }, [source.id]);
+        },
+        captureSettled: async () => x.capture(captures++),
+        waitForReloadsToStop: async () => true,
+        measurements: async (source: RecordEntry) =>
+          x.store.append(x.run.id, 'observation', 'browser', { measured: true }, [source.id]),
+      };
+      await (new Runner(x.store, 'http://127.0.0.1:4317') as any).live(
+        x.run,
+        walk,
+        {},
+        original,
+        new AbortController(),
+      );
+      const records = x.store.records(x.run.id);
+      const refusals = records.filter((r) => r.payload.method === 'input_refused');
+      assert.match(refusals[0]!.payload.reason, /arrow keys and Enter/);
+      const actions = records.filter((r) => r.kind === 'action').length;
+      if (scenario === 'recovers') {
+        assert.equal(refusals.length, 1);
+        assert.equal(actions, 1, 'the next key press is acted on');
+      } else {
+        assert.equal(refusals.length, MAX_REFUSED_ANSWERS);
+        assert.equal(actions, 0, 'nothing is typed');
+        assert(records.some((r) => r.payload.method === 'inputs_refused'));
+        assert(!records.some((r) => r.payload.method === 'navigator_answers_refused'));
       }
     } finally {
       mock.restoreAll();
