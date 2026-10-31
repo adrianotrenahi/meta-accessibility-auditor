@@ -1,13 +1,7 @@
 import { recordIsIntact, type Store } from './store.js';
 import type { RecordEntry, Role } from './types.js';
 import { reviewFeedbackIds } from './review-feedback.js';
-import {
-  JOURNEY_EVIDENCE_VERSION,
-  INCOMPARABLE_TOTALS_LIMIT,
-  JOURNEY_CONTEXT_LIMIT,
-  UNRECOGNISED_BUNDLE_LIMIT,
-  journeyDataSchema,
-} from './journey-evidence.js';
+import { INCOMPARABLE_TOTALS_LIMIT, journeyDataSchema } from './journey-evidence.js';
 import {
   makeImageReceipt,
   suppliedImageIds,
@@ -46,10 +40,7 @@ export function originalClosure(records: RecordEntry[], ids: string[]) {
   return records.filter((r) => selected.has(r.id));
 }
 
-/** Keep an older, empty price comparison outside a first analysis checkpoint.
- * This does not declare its picture equivalent or checked. Preserve the raw pool,
- * claims, material history, current tests and broken-source refusals.
- */
+/** The fields a price comparison may carry; any other field counts as a recorded change. */
 const comparisonFields = new Set([
   'method',
   'version',
@@ -69,27 +60,22 @@ const comparisonFields = new Set([
   'limit',
   '_sourcesHash',
 ]);
-/** A comparison across one input that recorded no price, choice or other change. With
- * `anyInput` false it must be a Tab press on one page; with true, any recorded input (a
- * page change alone is not a recorded change), and both originals must be settled. */
-function emptyEarlierTraversal(
-  record: RecordEntry,
-  current: RecordEntry | null,
-  records: RecordEntry[],
-  anyInput = false,
-) {
+/** Whether a price comparison actually recorded something (owner, 31 Oct: "those are
+ * different screens"). Moving to another page is not a change by itself; a choice that
+ * only exists on one of the two pages is not either. Counted: a real price comparison
+ * (it can prove a price result either way), a price on either side (it is copied into
+ * beforeTotal/afterTotal), a choice present on both screens whose state differs, or
+ * anything this check cannot read cleanly (unrecognised fields, missing or unsettled
+ * contexts). */
+function recordedChange(record: RecordEntry, records: RecordEntry[]) {
   const p = record.payload;
+  if (record.kind !== 'observation' || p.method !== 'comparable_totals') return false;
+  if (!recordIsIntact(record) || p.stable !== true || p.comparable === true) return true;
+  if (Object.keys(p).some((key) => !comparisonFields.has(key))) return true;
+  // Any recorded value or note beyond "not comparable" is information worth both screens.
   if (
-    record.author !== 'browser' ||
-    !recordIsIntact(record) ||
-    p.method !== 'comparable_totals' ||
-    p.version !== JOURNEY_EVIDENCE_VERSION ||
-    p.stable !== true ||
-    p.comparable !== false ||
     p.limit !== INCOMPARABLE_TOTALS_LIMIT ||
-    Object.keys(p).some((key) => !comparisonFields.has(key)) ||
-    (current !== null && (record.seq >= current.seq || p.afterCaptureId === current.id)) ||
-    ![
+    [
       'selectionSame',
       'sameCurrency',
       'currency',
@@ -98,91 +84,46 @@ function emptyEarlierTraversal(
       'disclosure',
       'beforeDisclosure',
       'afterDisclosure',
-    ].every((key) => p[key] === null)
+    ].some((key) => p[key] !== null)
   )
-    return false;
-  const before = records.find((item) => item.id === p.beforeCaptureId);
-  const after = records.find((item) => item.id === p.afterCaptureId);
-  const action = records.find((item) => item.id === p.actionId);
+    return true;
+  // Missing, changed or unsettled originals count, so the request refuses rather than drops them.
+  const original = (id: string, kind: RecordEntry['kind']) => {
+    const found = records.find((item) => item.id === id);
+    return (
+      !!found &&
+      found.kind === kind &&
+      recordIsIntact(found) &&
+      (kind !== 'capture' || found.payload.stable === true)
+    );
+  };
   if (
-    !before ||
-    !after ||
-    !action ||
-    before.kind !== 'capture' ||
-    after.kind !== 'capture' ||
-    before.author !== 'browser' ||
-    after.author !== 'browser' ||
-    typeof before.payload.url !== 'string' ||
-    (!anyInput && before.payload.url !== after.payload.url) ||
-    (anyInput && (before.payload.stable !== true || after.payload.stable !== true)) ||
-    action.kind !== 'action' ||
-    action.author !== 'browser' ||
-    action.payload.method !== 'actual_keyboard_or_browser' ||
-    action.payload.outcome !== 'performed' ||
-    action.payload.sourceCaptureId !== before.id ||
-    action.payload.sourceImageHash !== before.payload.imageHash ||
-    !(before.seq < action.seq && action.seq < after.seq && after.seq < record.seq) ||
-    (!anyInput &&
-      (action.payload.action?.kind !== 'press' ||
-        !['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.payload.action.key))) ||
-    record.sources.length !== 5 ||
-    ![before.id, after.id, action.id].every((id) => record.sources.includes(id))
+    !original(p.beforeCaptureId, 'capture') ||
+    !original(p.afterCaptureId, 'capture') ||
+    !original(p.actionId, 'action')
   )
-    return false;
-  try {
-    const chain = originalClosure(records, [record.id]);
-    const contexts = chain.filter(
+    return true;
+  const contextOf = (captureId: string) => {
+    const found = records.filter(
       (item) =>
         record.sources.includes(item.id) &&
         item.kind === 'observation' &&
-        item.payload.method === 'journey_context',
+        item.payload.method === 'journey_context' &&
+        item.payload.sourceCaptureId === captureId,
     );
-    if (contexts.length !== 2) return false;
-    for (const capture of [before, after]) {
-      const matching = contexts.filter((item) => item.payload.sourceCaptureId === capture.id);
-      if (matching.length !== 1) return false;
-      const context = matching[0]!;
-      const value = context.payload;
-      if (
-        context.author !== 'browser' ||
-        value.version !== JOURNEY_EVIDENCE_VERSION ||
-        value.stable !== true ||
-        value.limit !== JOURNEY_CONTEXT_LIMIT ||
-        value.sourceCaptureHash !== capture.hash ||
-        value.sourceImageHash !== capture.payload.imageHash ||
-        context.sources.length !== 1 ||
-        context.sources[0] !== capture.id ||
-        Object.keys(value).some(
-          (key) =>
-            ![
-              'method',
-              'version',
-              'stable',
-              'sourceCaptureId',
-              'sourceCaptureHash',
-              'sourceImageHash',
-              'data',
-              'limit',
-              '_sourcesHash',
-            ].includes(key),
-        )
-      )
-        return false;
-      const parsed = journeyDataSchema.safeParse(value.data);
-      if (
-        !parsed.success ||
-        parsed.data.commerce !== null ||
-        parsed.data.choices.length !== 0 ||
-        parsed.data.choicesComplete !== true ||
-        parsed.data.limits.some((limit) => limit !== UNRECOGNISED_BUNDLE_LIMIT)
-      )
-        return false;
-    }
-    return true;
-  } catch {
-    // A missing/changed dependency must still refuse the request, not disappear from it.
-    return false;
-  }
+    if (found.length !== 1 || !recordIsIntact(found[0]!) || found[0]!.payload.stable !== true)
+      return null;
+    const parsed = journeyDataSchema.safeParse(found[0]!.payload.data);
+    return parsed.success ? parsed.data : null;
+  };
+  const before = contextOf(p.beforeCaptureId),
+    after = contextOf(p.afterCaptureId);
+  if (!before || !after) return true;
+  const later = new Map(after.choices.map((choice) => [choice.id, choice]));
+  return before.choices.some((choice) => {
+    const same = later.get(choice.id);
+    return !!same && JSON.stringify(choice) !== JSON.stringify(same);
+  });
 }
 
 export function requestEvidence(
@@ -223,12 +164,7 @@ export function requestEvidence(
     // A recorded price or choice change between screens keeps both screens (latest two).
     roots.push(
       ...walked
-        .filter(
-          (r) =>
-            r.kind === 'observation' &&
-            r.payload.method === 'comparable_totals' &&
-            !emptyEarlierTraversal(r, null, records, true),
-        )
+        .filter((r) => r.kind === 'observation' && recordedChange(r, records))
         .slice(-2)
         .map((r) => r.id),
     );
@@ -261,7 +197,12 @@ export function requestEvidence(
         record.sources.some((id) => selectedCaptures.has(id)) &&
         // An input that changed nothing brings no picture to the analyst or reviewer; a
         // saved claim that cites one still keeps it (requiredIds).
-        !(!requiredIds.has(record.id) && emptyEarlierTraversal(record, null, records, true)),
+        !(
+          !requiredIds.has(record.id) &&
+          record.kind === 'observation' &&
+          record.payload.method === 'comparable_totals' &&
+          !recordedChange(record, records)
+        ),
     );
     const available = attached.filter((record) => {
       if (record.kind !== 'observation' || record.payload.stable !== false) return true;

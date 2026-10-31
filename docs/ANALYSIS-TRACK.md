@@ -40,7 +40,11 @@ Each analyst request now carries only the screens a customer sees on the strip:
 
 Two exceptions add earlier pictures:
 
-- a recorded price, choice or other change between screens (the latest two comparisons);
+- a recorded price, choice or other change between screens (the latest two comparisons).
+  Owner, 31 October ("those are different screens"): moving to another page is not a change
+  by itself, and a choice that exists on only one of the two pages is not either. A change is
+  a real price comparison, a price that appeared, disappeared or differs, a choice present on
+  both screens whose state differs, or anything that cannot be read cleanly;
 - a control Tab never reached (`keyboard_reach/1` with `reached: false`, latest two).
 
 Tab steps, earlier pages and comparisons that recorded no change are not sent as

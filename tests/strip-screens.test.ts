@@ -149,3 +149,65 @@ test('The reviewer is not sent Tab steps that changed nothing either', async () 
     x.close();
   }
 });
+
+async function contextFor(x: ReturnType<typeof walk>, screen: any, choices: any[]) {
+  const { JOURNEY_EVIDENCE_VERSION, JOURNEY_CONTEXT_LIMIT } =
+    await import('../src/journey-evidence.js');
+  return x.store.append(
+    x.run.id,
+    'observation',
+    'browser',
+    {
+      method: 'journey_context',
+      version: JOURNEY_EVIDENCE_VERSION,
+      stable: true,
+      sourceCaptureId: screen.id,
+      sourceCaptureHash: screen.hash,
+      sourceImageHash: screen.payload.imageHash,
+      limit: JOURNEY_CONTEXT_LIMIT,
+      data: { commerce: null, choices, choicesComplete: false, limits: [] },
+    },
+    [screen.id],
+  );
+}
+const choice = (id: string, checked: boolean) => ({
+  id,
+  selector: `#${id}`,
+  type: 'checkbox',
+  checked,
+  selectedIndexes: [],
+  quantity: null,
+  extra: null,
+});
+
+test('Booking.com home page to Flights: different pages are not a change, so Flights is read alone', async () => {
+  const { compareJourneyTotals } = await import('../src/journey-evidence.js');
+  const x = walk();
+  try {
+    const home = x.shot('https://www.booking.com/index.es.html');
+    const before = await contextFor(x, home, [choice('flights', false), choice('work', false)]);
+    const enter = x.press(home, 'Enter');
+    const flights = x.shot('https://www.booking.com/flights/index.es.html');
+    const after = await contextFor(x, flights, [choice('direct', false)]);
+    compareJourneyTotals(x.store, x.run.id, before, enter, after);
+    assert.deepEqual(x.images(flights), [flights.id]);
+  } finally {
+    x.close();
+  }
+});
+
+test('A choice on both screens that changed state keeps both screens', async () => {
+  const { compareJourneyTotals } = await import('../src/journey-evidence.js');
+  const x = walk();
+  try {
+    const home = x.shot('https://www.booking.com/index.es.html');
+    const before = await contextFor(x, home, [choice('insurance', false)]);
+    const space = x.press(home, 'Space');
+    const after_ = x.shot('https://www.booking.com/index.es.html?step=2');
+    const after = await contextFor(x, after_, [choice('insurance', true)]);
+    compareJourneyTotals(x.store, x.run.id, before, space, after);
+    assert.deepEqual(x.images(after_), [home.id, after_.id]);
+  } finally {
+    x.close();
+  }
+});

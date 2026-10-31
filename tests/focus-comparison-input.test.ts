@@ -255,12 +255,21 @@ test('A mandatory older comparison remains supplied with every original picture 
   }
 });
 
-for (const options of [
-  { choices: true },
-  { choicesComplete: false },
-  { limits: ['Choice scope was incomplete'] },
-]) {
-  test(`Original selection context survives empty price summary: ${JSON.stringify(options)}`, () => {
+for (const options of [{ choicesComplete: false }, { limits: ['Choice scope was incomplete'] }]) {
+  test(`Incomplete but unchanged choice reads add no earlier picture: ${JSON.stringify(options)}`, () => {
+    // Owner, 31 Oct: nothing was recorded as different, as on Booking.com's home-to-Flights step.
+    const x = fixture(options);
+    try {
+      const read = x.read();
+      assert.deepEqual(suppliedImageIds(read.read, read.records), [x.current.id]);
+    } finally {
+      x.close();
+    }
+  });
+}
+
+for (const options of [{ choices: true }]) {
+  test(`A choice that changed state keeps both screens: ${JSON.stringify(options)}`, () => {
     const x = fixture(options);
     try {
       assert.equal(x.older.payload.selectionSame, null);
