@@ -11,6 +11,7 @@ import {
   MeasurementStateChanged,
   ActionLimitReached,
   ActionStateChanged,
+  InputRefused,
 } from './browser.js';
 import { documentWasReplaced } from './page-observation.js';
 /** Attempts across page reloads before a scan stays unknown (owner, 30 Oct). */
@@ -611,6 +612,7 @@ export class Runner {
     controller: AbortController,
   ) {
     const models = new MetaModels(this.store);
+    models.estimateNavigatorInput = true;
     const returnEvidence = new ReturnEvidence(this.store, run.id);
     let current = start;
     const signal = AbortSignal.any([
@@ -621,6 +623,7 @@ export class Runner {
     let unreachedTargets = 0;
     let decisionAllowanceSpent = true;
     let refusedAnswers = 0;
+    let refusedInputs = 0;
     let finalReviewSafe = true;
     const track = new AnalysisTrack();
     // Each journey step has its own allowance; a walk without a plan is one step.
@@ -875,6 +878,38 @@ export class Runner {
           try {
             performed = await walk.act(action, current);
           } catch (error) {
+            // The typing guard refusing an input is a reason to try another way, not to end the
+            // audit (owner, 31 Oct: typing a date into Booking.com's date selector ended one).
+            // Nothing was typed; the guard itself is unchanged.
+            if (error instanceof InputRefused) {
+              refusedInputs++;
+              this.store.append(
+                run.id,
+                'limit',
+                'browser',
+                {
+                  method: 'input_refused',
+                  reason: `${error.message} Nothing was typed. Date and option selectors take arrow keys and Enter, not typing.`,
+                  consecutive: refusedInputs,
+                },
+                [current.id],
+              );
+              if (refusedInputs >= MAX_REFUSED_ANSWERS) {
+                this.store.append(
+                  run.id,
+                  'limit',
+                  'driver',
+                  {
+                    method: 'navigator_answers_refused',
+                    reason: `${MAX_REFUSED_ANSWERS} inputs in a row were refused. Navigation stopped so the recorded evidence can be analysed; remaining instructions stay incomplete.`,
+                  },
+                  [current.id],
+                );
+                decisionAllowanceSpent = false;
+                break;
+              }
+              continue;
+            }
             if (!(error instanceof ActionStateChanged)) throw error;
             this.store.append(
               run.id,
@@ -890,6 +925,7 @@ export class Runner {
             unchangedTraversal = 0;
             continue;
           }
+          refusedInputs = 0;
           current = await walk.captureSettled();
           if (this.stopForDeniedPage(run, walk, current)) return;
           try {

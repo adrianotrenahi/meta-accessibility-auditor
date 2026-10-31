@@ -255,6 +255,7 @@ const jobInstructions = {
     ' Prefer focus_target to reach a named control through several real keyboard steps in one decision. Use its exact targetId from the supplied controls, or targetRole plus exact targetName from the current original accessible page. Use traversalKey Tab or Shift+Tab for ordinary controls. When the target belongs to a menubar, menu or tablist, Tab reaches its active entry and the local keyboard path uses real orientation-aware arrows within that same group; inactive items are not necessarily Tab-reachable. To reach a menu or tab item from outside its group, use traversalKey Tab: the robot enters the group and then uses the arrows. Do not Tab past an active menu item to seek another item in that same menu. For a calendar with a current date cell, use an arrow key to move within that same native grid; first bring the desired month into the first visible calendar if necessary. Dates may not be individually Tab-reachable. The robot uses real keys until that same unique control is focused and stops on a meaningful page change or cycle. Optional activation Enter or Space is an explicit request applied only after the target is reached and freshly checked against the original control, with the ordinary no-booking/payment/login guards. Without activation it only reaches focus; it never types during traversal. Previously unseen descriptions require a fresh decision before any inherited activation, and changed descriptions stop traversal. If the requested control is now focused, read the fresh original and choose a separate press only when the intent still holds. Use a new type action after reaching an input. Never repeat an exhausted or refused target unchanged. A wait action may use waitMs up to10000 while a real results page loads; loading alone is not task completion. Do not request focus_target again when the requested control is already focused. Single press remains available for one key or widget-specific arrow keys. ' +
     ' If a search box already holds a different entry (a pre-filled airport chip, for example), remove that entry by keyboard before typing, then type the requested value once. ' +
     ' Typing into a search box that offers a suggestion list does not choose anything: when the list appears, choose the option that matches the request (London, for example: an all-airports option or the named airport the task asks for) with ArrowDown and Enter, or focus_target that option with activation Enter, and check that the box now shows it. ' +
+    ' Type only into a text or search box. Date pickers, day and month selectors, dropdowns and option lists are chosen with the keyboard, not typed into: move with the arrow keys until the wanted value is focused or shown, then press Enter or Space to choose it, and check the field now shows it. ' +
     ' When the site answers your input with its own error (for example "something went wrong", "try again" or "refresh the page"), the site refused or failed that request. Do not activate its refresh, reload or retry links, do not leave the page and do not repeat the same input: choose finish with a short note quoting the site\'s message. A site refusal is a recorded limit, not a website defect and not task completion. ' +
     ' Missing-fact checks share the existing two native/focused slots. Do not repeat an exhausted or refused check or revisit an unavailable state to force a result.',
   analyst:
@@ -289,6 +290,24 @@ export class IncompleteModelResult extends Error {
     super('The model response was incomplete.');
   }
 }
+/** Images are priced by size, not file bytes; a 1440x900 screenshot is well under this. */
+export const IMAGE_TOKEN_ESTIMATE = 3000;
+/** A generous local token estimate: one token per three characters of text (real text runs
+ * nearer four), a fixed amount per image, and a margin for the request's own structure. */
+export function estimateInputTokens(body: {
+  instructions?: string;
+  input?: { content?: { type: string; text?: string }[] }[];
+  tools?: unknown;
+}) {
+  let characters = (body.instructions ?? '').length + JSON.stringify(body.tools ?? []).length;
+  let images = 0;
+  for (const message of body.input ?? [])
+    for (const part of message.content ?? []) {
+      if (part.type === 'input_image') images++;
+      else characters += (part.text ?? '').length;
+    }
+  return Math.ceil(characters / 3) + images * IMAGE_TOKEN_ESTIMATE + 1000;
+}
 /** A completed answer that is unreadable or breaks its rules; only the answer check raises it. */
 export class InvalidModelAnswer extends Error {
   constructor(
@@ -299,6 +318,9 @@ export class InvalidModelAnswer extends Error {
   }
 }
 export class MetaModels {
+  /** Audits switch this on: the navigator's request size is estimated locally (one request per
+   * decision). Off, the size is asked of Meta first, as before; its own checks stay tested. */
+  estimateNavigatorInput = false;
   constructor(
     private store: Store,
     private fetcher: typeof fetch = fetch,
@@ -511,13 +533,13 @@ export class MetaModels {
           ' Distinguish the supplied-image receipt from original record availability: records-only baseline captures were not visually supplied. Never assess their criterion scope, visual appearance or element targets. Review feedback is an interpretation to reconsider against originals, never factual evidence. Do not repeat an unchanged existing finding; a requested rewrite needs a distinct corrected body using the same issueKey and a new exact independent review. ' +
           ' Return only the schema-constrained JSON result, without progress messages or narrative outside it. Keep reasons concise; leave unavailable checks explicitly unknown. ';
     }
-    const { input_tokens: count } = await this.post(
-      runId,
-      '/responses/input_tokens',
-      body,
-      signal,
-      purpose,
-    );
+    // The navigator's request size is estimated here instead of asking Meta first, so each
+    // decision is one request, not two (owner, 31 Oct). The estimate is generous, so the money
+    // set aside is never too small; the actual charge is settled from Meta's own answer.
+    const count =
+      this.estimateNavigatorInput && role === 'driver' && purpose === 'execution'
+        ? estimateInputTokens(body)
+        : (await this.post(runId, '/responses/input_tokens', body, signal, purpose)).input_tokens;
     if (!Number.isInteger(count) || count < 0)
       throw Error('The provider did not return a valid evidence input count.');
     if (count > cap.input) throw new EvidenceRequestLimit(role, 'input');

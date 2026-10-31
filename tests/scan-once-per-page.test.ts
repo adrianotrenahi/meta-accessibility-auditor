@@ -42,7 +42,8 @@ function seeded() {
           type: '',
           disabled: false,
           box: { x: 10, y: 20, width: 80, height: 30 },
-          selector: 'html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1) > a:nth-of-type(2)',
+          selector:
+            'html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1) > a:nth-of-type(2)',
           contextFingerprint: 'c'.repeat(64),
         },
       ],
@@ -210,5 +211,72 @@ test('The runner skips a second scan of one page, and notes it only for a differ
     assert.equal(notes()[0]!.payload.sourceCaptureId, later.id);
   } finally {
     x.close();
+  }
+});
+
+// Owner, 31 Oct: one request per navigator decision instead of two. Audits switch the local
+// size estimate on; the analyst still asks Meta for the size first.
+test('With the local estimate on, a navigator decision is one request to Meta', async () => {
+  for (const role of ['driver', 'analyst'] as const) {
+    const x = seeded();
+    try {
+      const current = x.capture('https://www.booking.com/index.es.html');
+      const packet = requestEvidence(x.store, x.run.id, role, current);
+      const urls: string[] = [];
+      const model = new MetaModels(
+        x.store,
+        (async (url) => {
+          urls.push(String(url));
+          if (String(url).endsWith('/input_tokens')) return Response.json({ input_tokens: 1000 });
+          return Response.json({
+            status: 'completed',
+            usage: { input_tokens: 1000, output_tokens: 10 },
+            output:
+              role === 'driver'
+                ? [
+                    {
+                      type: 'function_call',
+                      name: 'return_result',
+                      arguments: JSON.stringify({ kind: 'press', key: 'Tab', note: 'Next' }),
+                    },
+                  ]
+                : [],
+            output_text: JSON.stringify({ findings: [], coverage: [] }),
+          });
+        }) as typeof fetch,
+        () => ({
+          approvedBy: 'Adriano',
+          maxUsd: 3,
+          maxRunUsd: 3,
+          approvedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        }),
+        () => 'mock-key-no-provider-access',
+      );
+      model.estimateNavigatorInput = true;
+      await model
+        .reason(
+          x.run.id,
+          role,
+          packet.records,
+          imageRecordsForRead(packet).map((capture) => ({
+            captureId: capture.id,
+            image:
+              'data:image/png;base64,' +
+              x.store.image(x.run.id, capture.payload.imageFile).toString('base64'),
+          })),
+          (role === 'driver' ? navigationActionSchema : analysisSchema) as any,
+          false,
+          new AbortController().signal,
+          packet.read,
+        )
+        .catch(() => undefined);
+      const counts = urls.filter((url) => url.endsWith('/input_tokens')).length;
+      assert.equal(counts, role === 'driver' ? 0 : 1, `${role} size checks`);
+      assert.equal(urls.length - counts, 1, `${role} sends one generation`);
+      assert.equal(x.store.usage(x.run.id).requests[0]!.role, role, 'money is still set aside');
+    } finally {
+      x.close();
+    }
   }
 });
