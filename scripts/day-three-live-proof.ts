@@ -25,7 +25,7 @@ const proofName = finalJourney
       ? 'day-three-live-proof-corrected'
       : 'day-three-live-proof';
 const approved = approval();
-if (!key() || approved.maxUsd > 3 || approved.maxRunUsd > 3)
+if (!key() || (approved.maxUsd ?? Infinity) > 3 || approved.maxRunUsd > 3)
   throw Error('The Day 3 check requires a private approval capped at $3 total and $3 per run.');
 // The first one-off test predates the batch ledgers; its retained cost is in FIRST-PAID-TEST.md.
 let priorEstimate = 0.314504;
@@ -38,7 +38,7 @@ if (
 if (
   assessmentOnly &&
   (!existsSync('data/day-three-live-proof-corrected/runs.sqlite') ||
-    approved.maxUsd > 0.5 ||
+    (approved.maxUsd ?? Infinity) > 0.5 ||
     approved.maxRunUsd > 0.5)
 )
   throw Error(
@@ -47,7 +47,7 @@ if (
 if (
   finalJourney &&
   (!existsSync('data/day-three-assessment-proof/runs.sqlite') ||
-    approved.maxUsd > 1.25 ||
+    (approved.maxUsd ?? Infinity) > 1.25 ||
     approved.maxRunUsd > 1.25)
 )
   throw Error(
@@ -72,9 +72,9 @@ for (const dir of [
     prior.close();
   }
 }
-if (dayThreeSpent + approved.maxUsd > 3)
+if (dayThreeSpent + (approved.maxUsd ?? Infinity) > 3)
   throw Error('All Day 3 proof versions must fit the original $3 total ceiling.');
-if (priorEstimate + approved.maxUsd > 10)
+if (priorEstimate + (approved.maxUsd ?? Infinity) > 10)
   throw Error('This check would exceed the conservative $10 cumulative local testing ceiling.');
 const sourceFiles = [
   'src/runner.ts',

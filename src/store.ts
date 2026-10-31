@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import type { RecordEntry, RecordKind, Role, Run, RunState, Approval } from './types.js';
-import { LIMITS, PHASE, FINAL_REVIEW_RESERVE_MICROS } from './types.js';
+import { LIMITS, phaseLimits, FINAL_REVIEW_RESERVE_MICROS } from './types.js';
 import { groupPublished } from './finding-key.js';
 import { presentRecordPayload } from './presentation.js';
 import { readHashMatches, suppliedImageIds, type ImageReceipt } from './image-receipt.js';
@@ -361,8 +361,8 @@ export class Store {
       if (total.requests.some((request) => request.status === 'sending'))
         throw Error('An active paid request must finish before this preparation can start.');
       if (
-        total.spent + total.reserved >=
-          Math.min(LIMITS.routineMicros, Math.floor(options.approval.maxUsd * 1e6)) ||
+        (options.approval.maxUsd !== undefined &&
+          total.spent + total.reserved >= Math.floor(options.approval.maxUsd * 1e6)) ||
         runUsage.spent + runUsage.reserved >=
           Math.min(LIMITS.runMicros, Math.floor(options.approval.maxRunUsd * 1e6))
       )
@@ -868,11 +868,10 @@ export class Store {
       approval.approvedBy !== 'Adriano' ||
       !Number.isFinite(Date.parse(approval.expiresAt)) ||
       Date.parse(approval.expiresAt) <= Date.now() ||
-      !Number.isFinite(approval.maxUsd) ||
-      approval.maxUsd <= 0 ||
-      approval.maxUsd > 110 ||
+      (approval.maxUsd !== undefined &&
+        (!Number.isFinite(approval.maxUsd) || approval.maxUsd <= 0)) ||
       !Number.isFinite(approval.maxRunUsd) ||
-      approval.maxRunUsd > 3 ||
+      approval.maxRunUsd > LIMITS.runMicros / 1e6 ||
       approval.maxRunUsd <= 0
     )
       throw Error('A valid, bounded owner spending approval is required.');
@@ -910,16 +909,15 @@ export class Store {
         )
       )
         throw Error('Another paid request is in progress.');
+      // A project total applies only when the approval sets one (owner, 31 Oct).
       if (
-        total.spent + total.reserved + micros >
-        Math.min(LIMITS.routineMicros, Math.floor(approval.maxUsd * 1e6))
+        approval.maxUsd !== undefined &&
+        total.spent + total.reserved + micros > Math.floor(approval.maxUsd * 1e6)
       )
         throw Error('Approved project spending limit reached.');
-      if (
-        run.spent + run.reserved + micros >
-        Math.min(LIMITS.runMicros, Math.floor(approval.maxRunUsd * 1e6))
-      )
-        throw Error('Run spending limit reached.');
+      const runLimit = Math.min(LIMITS.runMicros, Math.floor(approval.maxRunUsd * 1e6));
+      const PHASE = phaseLimits(runLimit);
+      if (run.spent + run.reserved + micros > runLimit) throw Error('Run spending limit reached.');
       if (phase.length >= LIMITS[role])
         throw new RoleAllowanceLimit(role, 'Request count limit reached.');
       const charged = (r: any) => r.actual ?? r.reserved;
@@ -943,7 +941,7 @@ export class Store {
             ),
           0,
         );
-      if (run.spent + run.reserved + micros + protectedPhases > LIMITS.runMicros)
+      if (run.spent + run.reserved + micros + protectedPhases > runLimit)
         throw Error('Other run phases are protected.');
       const id = randomUUID();
       this.db

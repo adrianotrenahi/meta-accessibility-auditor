@@ -118,15 +118,15 @@ export interface Decision {
 }
 export interface Approval {
   approvedBy: 'Adriano';
-  maxUsd: number;
+  /** Optional project total; without it only the per-audit limit applies (owner, 31 Oct). */
+  maxUsd?: number;
   maxRunUsd: number;
   expiresAt: string;
   approvedAt: string;
 }
 export const LIMITS = {
-  runMicros: 3_000_000,
-  routineMicros: 110_000_000,
-  totalMicros: 150_000_000,
+  // Owner, 31 Oct: at most $10 per audit and no project total.
+  runMicros: 10_000_000,
   actions: 120,
   minutes: 15,
   driver: 20,
@@ -136,12 +136,15 @@ export const LIMITS = {
   voiceOverCheckpoints: 2,
   voiceOverCommands: 12,
 } as const;
-export const PHASE = {
-  driver: 1_600_000,
-  analyst: 650_000,
-  reviewer: 650_000,
-  sam: 100_000,
-} as const;
+/** Each role's share of one audit's limit, so the split holds at any approved amount. At
+ * $3 it matches the original $1.60 / $0.65 / $0.65 / $0.10 split within a cent. */
+export const PHASE_SHARE = { driver: 0.53, analyst: 0.22, reviewer: 0.22, sam: 0.03 } as const;
+export const phaseLimits = (runLimitMicros: number) =>
+  Object.fromEntries(
+    Object.entries(PHASE_SHARE).map(([role, share]) => [role, Math.floor(share * runLimitMicros)]),
+  ) as Record<keyof typeof PHASE_SHARE, number>;
+/** The role limits of a $3 audit, the amount the controlled tests approve. */
+export const PHASE = phaseLimits(3_000_000);
 // Configured capacity for the fixed muse-spark-1.3 model, verified 28 October 2026.
 // https://dev.meta.ai/docs/models — input and reserved output share this window.
 // This is documented configuration, not automatic provider-capability discovery.

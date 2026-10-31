@@ -428,7 +428,7 @@ test('Expired and unbounded approvals cannot authorise spend', () => {
   try {
     for (const a of [
       { ...approved, maxUsd: Infinity },
-      { ...approved, maxRunUsd: 4 },
+      { ...approved, maxRunUsd: 10.01 },
       { ...approved, maxRunUsd: NaN },
       { ...approved, expiresAt: 'invalid' },
       { ...approved, expiresAt: '2020-01-01' },
@@ -531,4 +531,28 @@ test('SAM uses capture pixels, validates visible targets and avoids unrelated ge
   assert.throws(() =>
     boxPrompt({ ...target, box: { x: 1500, y: 20, width: 100, height: 40 } }, 1440, 900),
   );
+});
+test('Each role gets its share of the audit limit, at $10 as at $3 (owner, 31 Oct)', () => {
+  for (const [maxRunUsd, analystShare] of [
+    [10, 2_200_000],
+    [3, 660_000],
+  ] as const) {
+    const x = create();
+    try {
+      const allowed = { ...approved, maxUsd: undefined, maxRunUsd };
+      const first = x.store.reserve(x.run.id, 'analyst', analystShare, allowed);
+      x.store.settle(first, analystShare, 'completed');
+      assert.throws(
+        () => x.store.reserve(x.run.id, 'analyst', 1, allowed),
+        /Phase spending limit reached/,
+        `the analyst's share of a $${maxRunUsd} audit is used up`,
+      );
+      // Without a project total, earlier spending in other audits never blocks this one.
+      const next = x.store.create('Another audit', x.run.url, 'offline');
+      const id = x.store.reserve(next.id, 'driver', 10000, allowed);
+      x.store.settle(id, 10000, 'completed');
+    } finally {
+      x.close();
+    }
+  }
 });

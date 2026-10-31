@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 
 // An approval is supplied privately after owner authorisation, never created by this script.
 const approved = approval();
-if (!key() || approved.maxUsd > 10 || approved.maxRunUsd > 3)
+if (!key() || (approved.maxUsd ?? Infinity) > 10 || approved.maxRunUsd > 3)
   throw Error('This controlled batch needs a private approval capped at $10 total and $3 per run.');
 const withVoiceOver = process.argv.includes('--with-voiceover');
 const correctedBuild = process.argv.includes('--verify-corrected-build');
