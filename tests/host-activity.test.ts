@@ -321,14 +321,11 @@ test('A freeform note without a model response waits for the whole input interva
         action: { kind: 'type', text: value },
         outcome: 'performed',
       });
-      const waiting = exportHostSnapshot(x.store, x.run.id).snapshot.activity!;
-      assert(
-        !waiting.entries.some((e) => e.id === note.id),
+      assert.deepEqual(
+        exportHostSnapshot(x.store, x.run.id).snapshot.activity!.entries.map((e) => e.id),
+        [initial.id],
         'The first input must not prematurely close an interval containing another input',
       );
-      // The sent input shows at once, without its typed text (owner, 31 Oct).
-      assert.equal(waiting.entries.at(-1)!.action, 'Input result');
-      assert(!JSON.stringify(waiting).includes('PRIVATE'));
     }
     x.store.snapshot(x.run.id, 'driver');
     const settled = exportHostSnapshot(x.store, x.run.id).snapshot;

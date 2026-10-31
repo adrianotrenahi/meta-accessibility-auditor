@@ -119,11 +119,8 @@ export const navigationActionSchema = z.preprocess(withoutStrayStepLabels, actio
           message:
             'Instruction completion needs its exact step and original capture, with no browser input.',
         });
-    } else if (action.stepId !== undefined || action.captureId !== undefined)
-      context.addIssue({
-        code: 'custom',
-        message: 'Instruction evidence belongs only to an explicit step completion.',
-      });
+    }
+    // Labels on any other kind were already dropped by withoutStrayStepLabels.
     if (action.kind !== 'wait' && action.waitMs !== undefined)
       context.addIssue({
         code: 'custom',

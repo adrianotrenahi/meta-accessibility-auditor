@@ -37,15 +37,24 @@ test('The navigator reads its recent steps; analysis and review still read the w
 
     const driver = ids('driver');
     const recent = actions.slice(-NAVIGATOR_RECENT_DECISIONS);
-    assert(recent.every((a) => driver.has(a.id)), 'recent key presses');
+    assert(
+      recent.every((a) => driver.has(a.id)),
+      'recent key presses',
+    );
     assert(actions.slice(0, -NAVIGATOR_RECENT_DECISIONS).every((a) => !driver.has(a.id)));
-    assert(notes.slice(-NAVIGATOR_RECENT_DECISIONS).every((n) => driver.has(n.id)), 'recent notes');
+    assert(
+      notes.slice(-NAVIGATOR_RECENT_DECISIONS).every((n) => driver.has(n.id)),
+      'recent notes',
+    );
     assert(!driver.has(notes[0]!.id), 'old notes stay out');
     assert(driver.has(plan.id) && driver.has(done.id), 'the plan and finished steps always stay');
 
     for (const role of ['analyst', 'reviewer'] as const) {
       const all = ids(role);
-      assert([...actions, ...notes].every((r) => all.has(r.id)), `${role} reads every step`);
+      assert(
+        [...actions, ...notes].every((r) => all.has(r.id)),
+        `${role} reads every step`,
+      );
     }
   } finally {
     store.close();
@@ -68,12 +77,29 @@ test('A key press with a stray step or screenshot label is still that key press'
     key: 'Enter',
     note: 'Activate focused Vuelos to open flights',
   });
+  // So is a Tab press: the labels are dropped, not refused.
+  const tab = navigationActionSchema.safeParse({
+    kind: 'press',
+    key: 'Tab',
+    stepId: 'flights',
+    captureId,
+    note: 'Next',
+  });
+  assert(tab.success);
+  assert.deepEqual(tab.data, { kind: 'press', key: 'Tab', note: 'Next' });
   // A step completion still needs both labels, and no input.
   assert(
-    navigationActionSchema.safeParse({ kind: 'step_done', stepId: 'flights', captureId, note: 'Done' })
+    navigationActionSchema.safeParse({
+      kind: 'step_done',
+      stepId: 'flights',
+      captureId,
+      note: 'Done',
+    }).success,
+  );
+  assert(
+    !navigationActionSchema.safeParse({ kind: 'step_done', stepId: 'flights', note: 'Done' })
       .success,
   );
-  assert(!navigationActionSchema.safeParse({ kind: 'step_done', stepId: 'flights', note: 'Done' }).success);
   assert(
     !navigationActionSchema.safeParse({
       kind: 'step_done',

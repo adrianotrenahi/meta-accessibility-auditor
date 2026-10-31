@@ -21,19 +21,7 @@ export function exportHostActivity(records: RecordEntry[], runId: string, runnin
   };
   let awaitingInput = false;
   const entries = intact.flatMap((record, index) => {
-    // While a note waits for its input, later notes and limits wait too: their text could
-    // name a value about to be typed. A sent key's row names only the key, never typed text,
-    // so it shows at once (owner, 31 Oct: the list sat on "Preparing…" while the robot pressed
-    // Tab nine times). The held note joins in its place when its input is finished.
-    if (
-      awaitingInput &&
-      !(
-        record.kind === 'action' &&
-        record.author === 'browser' &&
-        record.payload.method === 'actual_keyboard_or_browser'
-      )
-    )
-      return [];
+    if (awaitingInput) return [];
     let kind: 'progress' | 'action' | 'preparing' | 'limit';
     let action: 'Recorded progress' | 'Input result' | 'Preparing next action' | 'Run limit';
     let reason: string;
