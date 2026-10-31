@@ -135,8 +135,11 @@ export const LIMITS = {
   // Only a backstop: the real navigator limit is per step (DECISIONS_PER_STEP below). At most
   // 12 approved steps of 32 decisions, plus the one planning request.
   driver: 12 * 32 + 1,
-  analyst: 8,
-  reviewer: 4,
+  // Only backstops (owner, 31 Oct: "It should check all screens that go to the strip"): the
+  // analyst checks every strip screen and the reviewer reviews each check, within the audit's
+  // money shares. One final review is always kept back for the end.
+  analyst: 60,
+  reviewer: 61,
   sam: 16,
   voiceOverCheckpoints: 2,
   voiceOverCommands: 12,

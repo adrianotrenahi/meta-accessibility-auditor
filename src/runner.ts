@@ -123,6 +123,10 @@ export const showsForm = (capture: RecordEntry) =>
         String(element.role),
       ) || ['input', 'select', 'textarea'].includes(String(element.tag)),
   );
+/** Every checkpoint is reviewed (owner, 31 Oct: "It should check all screens that go to the
+ * strip"), up to the reviewer backstop, keeping the last request for the final review. */
+export const checkpointReviewAllowed = (store: Store, runId: string) =>
+  store.usage(runId).requests.filter((r) => r.role === 'reviewer').length < LIMITS.reviewer - 1;
 export class Runner {
   private readonly targetJourneyContexts = new WeakMap<BrowserWalk, Map<string, RecordEntry>>();
   active?: { run: Run; walk: BrowserWalk; probe: VoiceOverProbe; controller: AbortController };
@@ -1658,10 +1662,7 @@ export class Runner {
       for (const request of (analysis.missingEvidence ?? []) as MissingEvidenceRequest[])
         track.ask(request);
       declareCriterionScopes(this.store, run.id);
-      if (
-        !track.isCancelled &&
-        this.store.usage(run.id).requests.filter((r) => r.role === 'reviewer').length < 3
-      )
+      if (!track.isCancelled && checkpointReviewAllowed(this.store, run.id))
         await this.review(models, run, current, walk, signal, false, background.throughSeq);
       return current;
     }
@@ -1679,7 +1680,7 @@ export class Runner {
       );
     if (this.stopForDeniedPage(run, walk, next)) return next;
     declareCriterionScopes(this.store, run.id);
-    if (this.store.usage(run.id).requests.filter((r) => r.role === 'reviewer').length < 3)
+    if (checkpointReviewAllowed(this.store, run.id))
       try {
         await this.review(models, run, next, walk, signal, false);
       } catch (error) {

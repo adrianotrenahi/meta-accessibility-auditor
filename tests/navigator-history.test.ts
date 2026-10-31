@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NAVIGATOR_RECENT_DECISIONS, Store } from '../src/store.js';
 import { navigationActionSchema } from '../src/models.js';
-import { completionOnScreen } from '../src/runner.js';
+import { completionOnScreen, checkpointReviewAllowed } from '../src/runner.js';
 
 // Owner, 31 Oct: each Booking.com decision re-read every earlier key press (45 by the end),
 // so decisions grew from 6 s to 12 s. The navigator now reads its recent steps only.
@@ -185,6 +185,37 @@ test('One audit can make more than twenty navigator requests, up to the backstop
       store.settle(store.reserve(run.id, 'driver', 1, approval), 1, 'completed');
     assert(LIMITS.driver > 20 * 1 && LIMITS.driver >= 12 * DECISIONS_PER_FORM_STEP);
     assert.throws(() => store.reserve(run.id, 'driver', 1, approval), RoleAllowanceLimit);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Owner, 31 Oct: "8 at most? no. It should check all screens that go to the strip".
+test('The analyst and reviewer can check far more than eight screens in one audit', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'every-strip-screen-'));
+  const store = new Store(dir);
+  try {
+    const run = store.create('Many screens', 'https://www.booking.com/', 'offline');
+    const approval: Approval = {
+      approvedBy: 'Adriano',
+      maxRunUsd: 3,
+      approvedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    };
+    for (let i = 0; i < 30; i++) {
+      store.settle(store.reserve(run.id, 'analyst', 1, approval), 1, 'completed');
+      store.settle(store.reserve(run.id, 'reviewer', 1, approval), 1, 'completed');
+      // The robot's own gate still lets each new checkpoint be reviewed (not only the first 3).
+      assert(checkpointReviewAllowed(store, run.id), `review ${i + 2} allowed`);
+    }
+    assert(LIMITS.analyst >= 30 && LIMITS.reviewer >= 31);
+    while (
+      store.usage(run.id).requests.filter((r) => r.role === 'reviewer').length <
+      LIMITS.reviewer - 1
+    )
+      store.settle(store.reserve(run.id, 'reviewer', 1, approval), 1, 'completed');
+    assert(!checkpointReviewAllowed(store, run.id), 'the final review keeps its slot');
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
