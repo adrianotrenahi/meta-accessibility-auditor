@@ -49,7 +49,12 @@ finished step and its eight most recent decisions, each with its key presses,
 notes and limits; earlier presses made every decision slower (owner, 31 October: 6 s growing
 to 12 s per decision on Booking.com). Analysis and review still read the whole walk.
 A key press that arrives with a stray step or screenshot label is still that key
-press; those labels count only on `step_done`. A `step_done` answer names that instruction
+press; those labels count only on `step_done`. A `step_done` that names no
+screenshot means the current one, the only one the navigator sees; the freshness
+check still runs before the step is recorded. Any other answer that breaks the
+decision rules is not acted on: a `navigator_answer_refused` limit says why, and
+the navigator is asked again within its usual allowance. Three refused answers in
+a row stop navigation (owner, 31 October). A `step_done` answer names that instruction
 and the current stable original capture. The engine checks freshness and approved
 order before recording completion. This is a navigator claim, not an independent
 accessibility pass or proof of usable search results. An unfinished instruction

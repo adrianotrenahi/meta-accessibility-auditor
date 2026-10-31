@@ -2,7 +2,7 @@ import { RoleAllowanceLimit } from './role-allowance.js';
 import { walkToKeyboardTarget } from './keyboard-target.js';
 import { disposeKeyboardCycles } from './keyboard-cycle-memory.js';
 import { publicEntryLimit, PUBLIC_TRAFFIC_CHALLENGE } from './public-target.js';
-import { z } from 'zod';
+import { z, ZodError } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
 import {
   ARRIVAL_QUIET_MS,
@@ -16,6 +16,8 @@ import { documentWasReplaced } from './page-observation.js';
 const MEASUREMENT_ATTEMPTS = 3;
 /** Attempts across page reloads before banner clearing gives up. */
 const BLOCKER_ATTEMPTS = 3;
+/** Navigator answers in a row that break the decision rules before navigation stops. */
+export const MAX_REFUSED_ANSWERS = 3;
 import { VoiceOverProbe } from './voiceover.js';
 import { Store, digest, recordIsIntact } from './store.js';
 import {
@@ -73,6 +75,21 @@ import {
  * engine cannot quietly bring back the automation signal; the controlled shop keeps WebKit. */
 export const defaultEngine = (publicWebsite: boolean) =>
   publicWebsite ? ('chromium' as const) : ('webkit' as const);
+/** The navigator sees one screenshot per decision, the current one, so a "step finished"
+ * answer that names no screenshot can only mean that one (owner, 31 Oct: such an answer
+ * ended a Booking.com audit). The engine fills it in; the usual freshness check still runs
+ * before any step is recorded as finished. */
+export const completionOnScreen = (currentCaptureId: string) =>
+  z.preprocess(
+    (value) =>
+      value &&
+      typeof value === 'object' &&
+      (value as { kind?: unknown }).kind === 'step_done' &&
+      (value as { captureId?: unknown }).captureId === undefined
+        ? { ...value, captureId: currentCaptureId }
+        : value,
+    navigationActionSchema,
+  );
 export class Runner {
   private readonly targetJourneyContexts = new WeakMap<BrowserWalk, Map<string, RecordEntry>>();
   active?: { run: Run; walk: BrowserWalk; probe: VoiceOverProbe; controller: AbortController };
@@ -568,6 +585,7 @@ export class Runner {
     let unchangedTraversal = 0;
     let unreachedTargets = 0;
     let decisionAllowanceSpent = true;
+    let refusedAnswers = 0;
     let finalReviewSafe = true;
     const track = new AnalysisTrack();
     const remainingDecisions = Math.max(
@@ -587,16 +605,57 @@ export class Runner {
           break;
         }
         const snap = requestEvidence(this.store, run.id, 'driver', current);
-        const action = await models.reason(
-          run.id,
-          'driver',
-          snap.records,
-          walk.images(imageRecordsForRead(snap)),
-          navigationActionSchema,
-          false,
-          signal,
-          snap.read,
-        );
+        let action;
+        try {
+          action = await models.reason(
+            run.id,
+            'driver',
+            snap.records,
+            walk.images(imageRecordsForRead(snap)),
+            completionOnScreen(current.id),
+            false,
+            signal,
+            snap.read,
+          );
+        } catch (error) {
+          // An answer that breaks the decision rules is not acted on, and it no longer ends the
+          // audit (owner, 31 Oct: one "step finished" answer without its screenshot ended a
+          // Booking.com audit). The refusal is saved where the navigator reads it, and it is
+          // asked again within its usual decision allowance; three in a row stop navigation.
+          if (!(error instanceof ZodError || error instanceof SyntaxError)) throw error;
+          refusedAnswers++;
+          this.store.append(
+            run.id,
+            'limit',
+            'driver',
+            {
+              method: 'navigator_answer_refused',
+              reason: `The navigator's answer did not meet the decision rules and was not acted on: ${
+                error instanceof ZodError
+                  ? error.issues.map((issue) => issue.message).join(' ')
+                  : 'it was not readable.'
+              } No browser input was sent.`,
+              consecutive: refusedAnswers,
+            },
+            [current.id],
+          );
+          if (refusedAnswers >= MAX_REFUSED_ANSWERS) {
+            this.store.append(
+              run.id,
+              'limit',
+              'driver',
+              {
+                method: 'navigator_answers_refused',
+                reason: `${MAX_REFUSED_ANSWERS} navigator answers in a row broke the decision rules. Navigation stopped so the recorded evidence can be analysed; remaining instructions stay incomplete.`,
+              },
+              [current.id],
+            );
+            decisionAllowanceSpent = false;
+            break;
+          }
+          continue;
+        }
+        refusedAnswers = 0;
         this.store.append(
           run.id,
           'navigator_note',
