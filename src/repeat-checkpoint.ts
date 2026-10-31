@@ -55,3 +55,37 @@ export function earlierCheck(records: RecordEntry[], capture: RecordEntry) {
     return undefined;
   return coverage;
 }
+
+const pageOf = (url: unknown) => {
+  try {
+    const parsed = new URL(String(url));
+    return parsed.origin + parsed.pathname;
+  } catch {
+    return undefined;
+  }
+};
+
+/** A settled automatic scan of the same page, taken on an earlier screenshot. Owner, 31 Oct:
+ * the page check runs once per page, not after every step (two steps finished on Booking.com's
+ * home page each waited 12 s for it). The page is its address without the query or fragment,
+ * so Booking's changing tracking parameters do not make a new page. */
+export function earlierPageScan(records: RecordEntry[], capture: RecordEntry) {
+  const page = pageOf(capture.payload.url);
+  if (!page) return undefined;
+  return records.findLast((record) => {
+    if (
+      record.kind !== 'observation' ||
+      record.author !== 'axe-core' ||
+      record.payload.method !== 'automatic_accessibility_scan' ||
+      record.payload.stable !== true ||
+      !recordIsIntact(record)
+    )
+      return false;
+    const source = records.find((item) => item.id === record.payload.sourceCaptureId);
+    return (
+      source?.kind === 'capture' &&
+      source.hash === record.payload.sourceCaptureHash &&
+      pageOf(source.payload.url) === page
+    );
+  });
+}

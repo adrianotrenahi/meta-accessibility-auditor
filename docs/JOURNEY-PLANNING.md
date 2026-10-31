@@ -66,6 +66,13 @@ Booking.com home page otherwise spent the analyst's whole allowance on the same
 picture, leaving the next page unanalysed. Any new evidence brings a full check
 back; the final review still runs.
 
+The automatic page scan runs once per page (owner, 31 October): a later step on a
+page already measured, meaning the same address without its query or fragment,
+saves a `page_scan_reused/1` note pointing at the earlier scan instead of waiting
+for another one. Booking.com's home page took 12 s per scan. The navigator also
+reads each screenshot's page structure without the separate copy of its visible
+text, which the structure already holds; analysis and review still read both.
+
 The optional `ordered-journey-progress/1` host reply carries the exact approved
 steps and completion records, bound to the original captures. Readers reject
 unverified progress while retaining independently valid screenshots and findings.
