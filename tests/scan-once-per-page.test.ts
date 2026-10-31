@@ -9,6 +9,7 @@ import { requestEvidence, EvidenceRequestLimit } from '../src/request-evidence.j
 import { imageRecordsForRead } from '../src/image-receipt.js';
 import { MetaModels, navigationActionSchema, analysisSchema } from '../src/models.js';
 import { CAPS } from '../src/types.js';
+import { Runner } from '../src/runner.js';
 
 function seeded() {
   const dir = mkdtempSync(join(tmpdir(), 'scan-once-per-page-'));
@@ -71,6 +72,17 @@ test('The page check runs once per page: a later step on the same page reuses it
     // Booking's tracking parameters change; it is still the same page.
     const later = x.capture('https://www.booking.com/index.es.html?aid=2&label=b#top');
     assert.equal(earlierPageScan(x.store.records(x.run.id), later)?.id, first.id);
+    // A different search or page number is a different page; the order of parameters is not.
+    const search = x.capture('https://www.example.com/search?q=flights&page=1&utm_source=x');
+    x.scan(search);
+    for (const [url, same] of [
+      ['https://www.example.com/search?page=1&q=flights', true],
+      ['https://www.example.com/search?q=hotels&page=1', false],
+      ['https://www.example.com/search?q=flights&page=2', false],
+    ] as const) {
+      const shot = x.capture(url);
+      assert.equal(!!earlierPageScan(x.store.records(x.run.id), shot), same, url);
+    }
     const flights = x.capture('https://www.booking.com/flights/index.es.html?aid=2');
     assert.equal(earlierPageScan(x.store.records(x.run.id), flights), undefined, 'a new page');
     // A scan that did not settle does not count as measured.
@@ -143,5 +155,38 @@ test('The navigator is sent the page structure without the repeated visible text
     } finally {
       x.close();
     }
+  }
+});
+
+test('The runner skips a second scan of one page, and notes it only for a different screenshot', async () => {
+  const x = seeded();
+  try {
+    const runner = new Runner(x.store, 'http://127.0.0.1:4317');
+    const walk = {
+      waitForReloadsToStop: async () => true,
+      measurements: async () => {
+        throw Error('The page was scanned again.');
+      },
+    };
+    const automatic = (source: ReturnType<typeof x.capture>) =>
+      (runner as any).automaticMeasurement(x.run, walk, source, new AbortController().signal);
+    const notes = () =>
+      x.store
+        .records(x.run.id)
+        .filter((r) => r.kind === 'coverage' && r.payload.method === 'page_scan_reused/1');
+    const home = x.capture('https://www.booking.com/index.es.html?aid=1');
+    const scan = x.scan(home);
+    // New evidence on the same screenshot: still the same page, measured once, and no note
+    // claiming an earlier screenshot.
+    x.store.append(x.run.id, 'action', 'browser', { method: 'actual_keyboard_or_browser' });
+    assert.equal((await automatic(home)).scan.id, scan.id);
+    assert.equal(notes().length, 0);
+    // A later screenshot of the same page reuses the scan and says so.
+    const later = x.capture('https://www.booking.com/index.es.html?aid=2');
+    assert.equal((await automatic(later)).scan.id, scan.id);
+    assert.equal(notes().length, 1);
+    assert.equal(notes()[0]!.payload.sourceCaptureId, later.id);
+  } finally {
+    x.close();
   }
 });

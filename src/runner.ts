@@ -1092,6 +1092,8 @@ export class Runner {
     if (repeated) return { current, scan: repeated };
     // Once per page: a later step on a page already measured adds a note, not another scan.
     const samePage = earlierPageScan(records, current);
+    // The same screenshot already measured needs no note: nothing about the page is reused.
+    if (samePage?.payload.sourceCaptureId === current.id) return { current, scan: samePage };
     if (samePage) {
       this.store.append(
         run.id,
