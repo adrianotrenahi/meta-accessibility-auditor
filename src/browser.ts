@@ -54,6 +54,9 @@ export function launchAuditBrowser(
   if (!visitorChrome) return (engine === 'webkit' ? webkit : chromium).launch(options);
   return chromium
     .launch({ ...options, channel: 'chrome', args: VISITOR_CHROME_ARGS })
+    // Playwright's full Chromium, not its cut-down hidden build: that one still labels itself
+    // HeadlessChrome in the browser brands a site can read. The cut-down build is the last resort.
+    .catch(() => chromium.launch({ ...options, channel: 'chromium', args: VISITOR_CHROME_ARGS }))
     .catch(() => chromium.launch({ ...options, args: VISITOR_CHROME_ARGS }));
 }
 /** The browser's own user agent with the hidden-window word removed; nothing else changes. */
