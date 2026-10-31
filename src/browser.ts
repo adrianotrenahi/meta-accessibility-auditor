@@ -40,11 +40,13 @@ export const isCommitment = (name: string) =>
 /** Real websites often load a new document right after arrival: a robot check,
  * a consent or language redirect. The robot measures only after the page has gone
  * this long without loading a new document (owner, 30 Oct). */
+export const ARRIVAL_QUIET_MS = 2500;
 /** Controls each screenshot lists for the navigator (owner, 31 Oct: up to 500, was 60). */
 export const MAX_LISTED_CONTROLS = 500;
 /** Accessible role/name readings sent to the browser side by side. */
 const ARIA_READS_AT_ONCE = 25;
-export const ARRIVAL_QUIET_MS = 2500;
+/** How long one control's role/name read may wait before that control is left out. */
+const ARIA_READ_TIMEOUT_MS = 1000;
 /** After the journey's own steps, a shorter quiet moment; no wait when nothing loaded recently. */
 export const RELOAD_QUIET_MS = 1000;
 /** The wait never exceeds this; a page still reloading is then measured with retries. */
@@ -502,9 +504,12 @@ export class BrowserWalk {
     // screenshots). Only the accessible role and name need Playwright's own reading; those
     // run side by side instead of one control at a time.
     const details = await locators.evaluateAll(
-      (targets, { indices, identityKey }) =>
+      (targets, { indices, identityKey, key, token }) =>
         indices.map((index) => {
-          const e = targets[index]!;
+          // A control removed or shifted since it was listed is left out, never misread.
+          const e = targets[index];
+          const listedElement = (globalThis as any)[key]?.get(token)?.get('e' + index);
+          if (!e || !e.isConnected || e !== listedElement) return null;
           const rect = e.getBoundingClientRect();
           const style = getComputedStyle(e);
           if (!rect.width || !rect.height || style.visibility === 'hidden') return null;
@@ -543,22 +548,34 @@ export class BrowserWalk {
             },
           };
         }),
-      { indices: listed, identityKey: this.controlIdentityKey },
+      {
+        indices: listed,
+        identityKey: this.controlIdentityKey,
+        key: this.stampKey,
+        token: stampToken,
+      },
     );
-    const arias: string[] = [];
+    // A control that disappears before its role and name are read is skipped after a short
+    // wait instead of holding the whole screenshot to the page's default timeout.
+    const arias: (string | null)[] = [];
     for (let from = 0; from < listed.length; from += ARIA_READS_AT_ONCE)
       arias.push(
         ...(await Promise.all(
-          listed
-            .slice(from, from + ARIA_READS_AT_ONCE)
-            .map((i) => locators.nth(i).ariaSnapshot({ depth: 1 })),
+          listed.slice(from, from + ARIA_READS_AT_ONCE).map((i, offset) =>
+            details[from + offset]
+              ? locators
+                  .nth(i)
+                  .ariaSnapshot({ depth: 1, timeout: ARIA_READ_TIMEOUT_MS })
+                  .catch(() => null)
+              : null,
+          ),
         )),
       );
     for (const [position, i] of listed.entries()) {
       const detail = details[position];
-      if (!detail) continue;
+      const aria = arias[position];
+      if (!detail || aria === null || aria === undefined) continue;
       const { box, controlMarkup, controlInstance, info } = detail;
-      const aria = arias[position]!;
       const first = aria.split('\n')[0] ?? '';
       const role = first.match(/^- ([a-z]+)/)?.[1] ?? info.tag;
       const name = originalAriaName(aria);
@@ -663,7 +680,7 @@ export class BrowserWalk {
       limits: {
         ...(!identitiesStable ? { controlIdentityChanged: true } : {}),
         totalControls: await locators.count(),
-        maximumListedControls: 60,
+        maximumListedControls: MAX_LISTED_CONTROLS,
         visibleTextTruncated: visibleText.length > 16000,
         imageScope: 'viewport',
       },
