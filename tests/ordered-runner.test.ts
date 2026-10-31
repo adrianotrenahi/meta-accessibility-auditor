@@ -1,3 +1,6 @@
+import { RoleAllowanceLimit } from '../src/role-allowance.js';
+import { showsForm } from '../src/runner.js';
+import { DECISIONS_PER_FORM_STEP, DECISIONS_PER_STEP } from '../src/types.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -392,7 +395,9 @@ test('A screen changed during the model decision refreshes without completing th
   }
 });
 
-test('One charged planning request leaves at most nineteen navigation decisions', async (t) => {
+// Owner, 31 Oct: the navigator's allowance is per journey step, not twenty for the whole audit,
+// and the planning request no longer takes one from it.
+test('A step that never finishes uses its own decision allowance, not a whole-audit twenty', async (t) => {
   const x = await fixture();
   let calls = 0;
   t.mock.method(
@@ -421,13 +426,106 @@ test('One charged planning request leaves at most nineteen navigation decisions'
       x.current,
       x.controller,
     );
-    assert.equal(calls, 19);
+    const allowance = showsForm(x.current) ? DECISIONS_PER_FORM_STEP : DECISIONS_PER_STEP;
+    assert.equal(calls, allowance);
     assert.equal(
       x.app.store.usage(x.run.id).requests.filter((request) => request.role === 'driver').length,
-      20,
+      allowance + 1,
     );
     assert.equal(x.app.store.usage(x.run.id).spent, 123);
     assert.equal(readOrderedJourney(x.app.store.records(x.run.id))?.completed.length, 0);
+  } finally {
+    await x.close();
+  }
+});
+
+test('A finished step gives the next step a fresh decision allowance', async (t) => {
+  const x = await fixture();
+  let driverCalls = 0;
+  t.mock.method(
+    x.runner as any,
+    'analyseCheckpoint',
+    async (_models: any, _run: any, current: any) => current,
+  );
+  t.mock.method(x.runner as any, 'analyse', async () => {});
+  t.mock.method(x.runner as any, 'review', async () => {});
+  t.mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+    if (role !== 'driver') return { findings: [], coverage: [] };
+    driverCalls++;
+    // The first decision finishes step one; every later one names the finished step again,
+    // which is refused, so step two spends exactly its own allowance.
+    return {
+      kind: 'step_done',
+      stepId: 'open',
+      captureId: x.current.id,
+      note: driverCalls === 1 ? 'The requested page is visible.' : 'Synthetic refused completion.',
+    };
+  });
+  try {
+    await (x.runner as any).live(
+      x.run,
+      x.walk,
+      new VoiceOverProbe(x.walk),
+      x.current,
+      x.controller,
+    );
+    assert.deepEqual(
+      readOrderedJourney(x.app.store.records(x.run.id))?.completed.map((c) => c.stepId),
+      ['open'],
+    );
+    const allowance = showsForm(x.current) ? DECISIONS_PER_FORM_STEP : DECISIONS_PER_STEP;
+    assert.equal(driverCalls, 1 + allowance, 'step two starts from zero, not from step one');
+    assert(
+      x.app.store
+        .records(x.run.id)
+        .some(
+          (r) =>
+            r.kind === 'limit' &&
+            String(r.payload.reason).includes(
+              `${allowance} navigation decisions for the step "Inspect the available search."`,
+            ),
+        ),
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test('Running out of the navigator money share stops navigation cleanly and still analyses', async (t) => {
+  const x = await fixture();
+  let finalChecks = 0;
+  t.mock.method(
+    x.runner as any,
+    'analyseCheckpoint',
+    async (_models: any, _run: any, current: any) => {
+      finalChecks++;
+      return current;
+    },
+  );
+  t.mock.method(x.runner as any, 'review', async () => {});
+  t.mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+    if (role !== 'driver') return { findings: [], coverage: [] };
+    throw new RoleAllowanceLimit('driver', 'Phase spending limit reached.');
+  });
+  try {
+    await (x.runner as any).live(
+      x.run,
+      x.walk,
+      new VoiceOverProbe(x.walk),
+      x.current,
+      x.controller,
+    );
+    assert.equal(finalChecks, 1, 'the final check still runs');
+    assert(
+      x.app.store
+        .records(x.run.id)
+        .some(
+          (r) =>
+            r.kind === 'limit' &&
+            r.payload.method === 'navigation_limit' &&
+            String(r.payload.reason).includes('Phase spending limit reached.'),
+        ),
+    );
   } finally {
     await x.close();
   }

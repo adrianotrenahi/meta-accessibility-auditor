@@ -1,9 +1,9 @@
 import type { ElementHandle, Page, JSHandle } from 'playwright';
 import { createHash, randomUUID } from 'node:crypto';
 import { safeError } from './config.js';
-import { LIMITS } from './types.js';
 
-export const MAX_CYCLE_MEMORIES = LIMITS.driver;
+/** Remembered keyboard cycles per audit; once the old navigator limit, now its own number. */
+export const MAX_CYCLE_MEMORIES = 20;
 export const MAX_CYCLE_MEMBERS = 60;
 const dialog = 'dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"]';
 const controls =

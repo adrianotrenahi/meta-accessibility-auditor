@@ -1,5 +1,5 @@
 {
-  "url": "https://github.com/adrianotrenahi/meta-accessibility-auditor/releases/download/cavioo-ui-12960555beea/cavioo-ui.json",
-  "sha256": "12960555beeab7441adbb3d8eb729dd0dce194456ac4b26d14e3b76f7bc0b057",
+  "url": "https://github.com/adrianotrenahi/meta-accessibility-auditor/releases/download/cavioo-ui-393ebf23cef9/cavioo-ui.json",
+  "sha256": "393ebf23cef93c6fa971541fe82fe3870a759d38b76709fa94e98ef6c302957e",
   "notice": "Cavioo screens, prior work built from a private Cavioo checkout with tools/cavioo-ui/build.mjs. Not hackathon code."
 }

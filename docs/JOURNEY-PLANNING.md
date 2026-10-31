@@ -15,9 +15,11 @@ from the existing driver allowance, without visiting the website or supplying
 images. A proposal is intended work, not observed site information.
 
 The same saved run moves through `planning`, `prepared` and, only on explicit
-Start, `running`. Planning keeps its charge in that run. It does not reset the
-existing total, per-run or twenty-request driver ceilings. Starting after planning
-therefore leaves at most nineteen further driver requests. A repeated draft
+Start, `running`. Planning keeps its charge in that run and the per-audit spending
+ceiling. The navigator's decisions are counted per journey step (owner, 31 October):
+24 per step, or 32 once the step's page shows a form (somewhere to type, pick a date
+or choose an option). The audit-wide limits are 45 minutes and 600 key presses, with
+the approved spending ceiling as the money limit. A repeated draft
 reads the same result or uncertainty; it never silently generates again.
 If only the input-count request failed and no generation was ever sent or
 reserved, an explicit same-draft retry may resume preparation with current
@@ -129,3 +131,7 @@ fallback when Chrome is not installed. Nothing else about the visit changes: the
 robot still uses only the keyboard, never books, pays or signs in, and takes no
 data. It does not route through rented addresses or solve "prove you're human"
 checks. The controlled shop keeps Playwright's test browsers.
+
+Findings and the strip also show every screenshot that proved a finished journey
+step, marked as not analysed when Meta's analysis of it never came back, so a
+failed analysis no longer hides how far the robot got (owner, 31 October).

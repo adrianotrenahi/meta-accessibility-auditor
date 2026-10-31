@@ -1,3 +1,4 @@
+import { DECISIONS_PER_STEP } from '../src/types.js';
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -547,7 +548,7 @@ test('A stale navigation decision is discarded before input and the next decisio
   }
 });
 
-test('Repeated stale decisions consume the twenty-decision allowance and stop without input', async () => {
+test('Repeated stale decisions consume the walk decision allowance and stop without input', async () => {
   const x = setup();
   try {
     let decisions = 0,
@@ -580,15 +581,18 @@ test('Repeated stale decisions consume the twenty-decision allowance and stop wi
       original,
       new AbortController(),
     );
-    assert.equal(decisions, 20);
-    assert.equal(attempts, 20);
-    assert.equal(refreshes, 20);
+    assert.equal(decisions, DECISIONS_PER_STEP);
+    assert.equal(attempts, DECISIONS_PER_STEP);
+    assert.equal(refreshes, DECISIONS_PER_STEP);
     const records = x.store.records(x.run.id);
     assert.equal(records.filter((record) => record.kind === 'action').length, 0);
     assert(
       records.some(
         (record) =>
-          record.kind === 'limit' && record.payload.reason.includes('twenty navigation decisions'),
+          record.kind === 'limit' &&
+          record.payload.reason.includes(
+            `${DECISIONS_PER_STEP} navigation decisions for this walk`,
+          ),
       ),
     );
     assert.equal(x.store.usage().requests.length, 0);

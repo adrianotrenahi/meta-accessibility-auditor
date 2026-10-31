@@ -377,7 +377,7 @@ test('Successful checks retain original links and never create a finding or chan
         driver: LIMITS.driver,
         runMicros: LIMITS.runMicros,
       },
-      { actions: 120, minutes: 15, driver: 20, runMicros: 10_000_000 },
+      { actions: 1200, minutes: 45, driver: 385, runMicros: 10_000_000 },
     );
   } finally {
     x.close();

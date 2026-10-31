@@ -1,3 +1,5 @@
+import { LIMITS, DECISIONS_PER_FORM_STEP, type Approval } from '../src/types.js';
+import { RoleAllowanceLimit } from '../src/role-allowance.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -136,4 +138,55 @@ test('A "step finished" answer that names no screenshot means the current one', 
     key: 'Tab',
     note: 'Next',
   });
+});
+
+test('A control named both by number and by name is kept when both mean the same control', () => {
+  const current = '18fc92b1-5517-468b-ae05-f22e31a3c232';
+  const elements = [
+    { id: 'e9', role: 'menuitem', name: 'Flights' },
+    { id: 'e10', role: 'menuitem', name: 'Car rental' },
+  ];
+  // The answer refused at 63 s in the 31 Oct Booking.com audit.
+  const answer = {
+    kind: 'focus_target',
+    note: 'Reach Flights nav item to open flight search',
+    targetId: 'e9',
+    targetRole: 'menuitem',
+    targetName: 'Flights',
+    traversalKey: 'Tab',
+  };
+  assert(!navigationActionSchema.safeParse(answer).success, 'the plain rules refuse it');
+  const kept = completionOnScreen(current, elements).parse(answer);
+  assert.equal(kept.targetId, 'e9');
+  assert(!('targetRole' in kept) && !('targetName' in kept));
+  // Number and name that point to different controls stay refused.
+  assert(
+    !completionOnScreen(current, elements).safeParse({ ...answer, targetName: 'Car rental' })
+      .success,
+  );
+  // A number that is not on this screen stays refused too.
+  assert(!completionOnScreen(current, elements).safeParse({ ...answer, targetId: 'e99' }).success);
+});
+
+// Codex, PR 59: the store still refused the navigator's 21st request in an audit, so the
+// per-step allowance could never be used. Its count is now only a whole-audit backstop.
+test('One audit can make more than twenty navigator requests, up to the backstop', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'navigator-backstop-'));
+  const store = new Store(dir);
+  try {
+    const run = store.create('Many decisions', 'https://www.booking.com/', 'offline');
+    const approval: Approval = {
+      approvedBy: 'Adriano',
+      maxRunUsd: 3,
+      approvedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    };
+    for (let i = 0; i < LIMITS.driver; i++)
+      store.settle(store.reserve(run.id, 'driver', 1, approval), 1, 'completed');
+    assert(LIMITS.driver > 20 * 1 && LIMITS.driver >= 12 * DECISIONS_PER_FORM_STEP);
+    assert.throws(() => store.reserve(run.id, 'driver', 1, approval), RoleAllowanceLimit);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
