@@ -15,9 +15,9 @@ import { isCommitment } from '../src/browser.js';
 import { isPublicAddress, permittedUrl } from '../src/network.js';
 import { approval, keyFromText } from '../src/config.js';
 import { overlap, boxPrompt } from '../src/segmentation.js';
-const create = () => {
+const create = (maxRunMicros?: number) => {
   const dir = mkdtempSync(join(tmpdir(), 'access-walk-'));
-  const store = new Store(dir);
+  const store = new Store(dir, { maxRunMicros });
   const run = store.create('Test task', 'https://example.org', 'offline');
   return {
     store,
@@ -537,7 +537,7 @@ test('Each role gets its share of the audit limit, at $10 as at $3 (owner, 31 Oc
     [10, 2_200_000],
     [3, 660_000],
   ] as const) {
-    const x = create();
+    const x = create(10_000_000);
     try {
       const allowed = { ...approved, maxUsd: undefined, maxRunUsd };
       const first = x.store.reserve(x.run.id, 'analyst', analystShare, allowed);
@@ -554,5 +554,28 @@ test('Each role gets its share of the audit limit, at $10 as at $3 (owner, 31 Oc
     } finally {
       x.close();
     }
+  }
+});
+test('Only a store opened for real websites accepts more than $3 per audit', () => {
+  // A changed approval file can never lift the controlled shop above $3 (owner, 31 Oct).
+  const allowed = { ...approved, maxUsd: undefined, maxRunUsd: 10 };
+  const shop = create();
+  try {
+    assert.equal(shop.store.maxRunMicros, 3_000_000);
+    assert.throws(() => shop.store.reserve(shop.run.id, 'driver', 10000, allowed), /approval/);
+  } finally {
+    shop.close();
+  }
+  const websites = create(10_000_000);
+  try {
+    const id = websites.store.reserve(websites.run.id, 'driver', 10000, allowed);
+    websites.store.settle(id, 10000, 'completed');
+    assert.throws(
+      () =>
+        websites.store.reserve(websites.run.id, 'driver', 10000, { ...allowed, maxRunUsd: 10.01 }),
+      /approval/,
+    );
+  } finally {
+    websites.close();
   }
 });

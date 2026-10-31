@@ -131,8 +131,13 @@ test('Real-website approvals need the owner, a finite optional total, a key and 
 test('Server passes its explicit public flag to the allowance guard before opening the records', () => {
   const source = readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
   const start = source.indexOf('const hostMode = controlledHostMode(');
-  const end = source.indexOf('const store = new Store(dir);', start);
+  const end = source.indexOf('const store = new Store(dir, {', start);
   assert(start >= 0 && end > start, 'The guard must precede the original store opening.');
+  // Only the real-website host opens the store with the $10 per-audit ceiling.
+  assert.match(
+    source.slice(end, end + 200),
+    /maxRunMicros: options\.publicWebsites === true \? LIMITS\.runMicros : undefined/,
+  );
   const call = source.slice(start, end);
   assert(call.includes('options.controlledLiveProof'), 'The live-host gate must remain explicit.');
   assert.match(

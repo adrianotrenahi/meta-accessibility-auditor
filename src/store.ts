@@ -38,7 +38,14 @@ export const recordIsIntact = (record: RecordEntry) =>
 export const KEPT_ROWS = 'rows.discarded.json';
 export class Store {
   db: DatabaseSync;
-  constructor(public dir: string) {
+  /** This store's own per-audit ceiling. $3 unless the real-website host opens it with
+   * $10 (owner, 31 Oct), so a changed approval file can never lift the controlled shop. */
+  readonly maxRunMicros: number;
+  constructor(
+    public dir: string,
+    options: { maxRunMicros?: number } = {},
+  ) {
+    this.maxRunMicros = Math.min(LIMITS.runMicros, options.maxRunMicros ?? 3_000_000);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(dir, 'runs.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -364,7 +371,7 @@ export class Store {
         (options.approval.maxUsd !== undefined &&
           total.spent + total.reserved >= Math.floor(options.approval.maxUsd * 1e6)) ||
         runUsage.spent + runUsage.reserved >=
-          Math.min(LIMITS.runMicros, Math.floor(options.approval.maxRunUsd * 1e6))
+          Math.min(this.maxRunMicros, Math.floor(options.approval.maxRunUsd * 1e6))
       )
         throw Error('The remaining spending allowance is exhausted.');
       this.db.prepare('INSERT INTO host_starts VALUES(?,?)').run(requestId, view.run.id);
@@ -871,7 +878,7 @@ export class Store {
       (approval.maxUsd !== undefined &&
         (!Number.isFinite(approval.maxUsd) || approval.maxUsd <= 0)) ||
       !Number.isFinite(approval.maxRunUsd) ||
-      approval.maxRunUsd > LIMITS.runMicros / 1e6 ||
+      approval.maxRunUsd > this.maxRunMicros / 1e6 ||
       approval.maxRunUsd <= 0
     )
       throw Error('A valid, bounded owner spending approval is required.');
@@ -915,7 +922,7 @@ export class Store {
         total.spent + total.reserved + micros > Math.floor(approval.maxUsd * 1e6)
       )
         throw Error('Approved project spending limit reached.');
-      const runLimit = Math.min(LIMITS.runMicros, Math.floor(approval.maxRunUsd * 1e6));
+      const runLimit = Math.min(this.maxRunMicros, Math.floor(approval.maxRunUsd * 1e6));
       const PHASE = phaseLimits(runLimit);
       if (run.spent + run.reserved + micros > runLimit) throw Error('Run spending limit reached.');
       if (phase.length >= LIMITS[role])

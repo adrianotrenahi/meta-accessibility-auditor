@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from '../src/store.js';
+import { LIMITS } from '../src/types.js';
 import { Runner } from '../src/runner.js';
 import { dataDir, safeError, key } from '../src/config.js';
 import { voiceOverPreflight } from '../src/voiceover.js';
@@ -50,7 +51,10 @@ export async function startServer(
     undefined,
     options.publicWebsites === true,
   );
-  const store = new Store(dir);
+  // Only the real-website host may spend up to $10 per audit; every other host keeps $3.
+  const store = new Store(dir, {
+    maxRunMicros: options.publicWebsites === true ? LIMITS.runMicros : undefined,
+  });
   let release: () => void;
   try {
     release = sessionLock(dir);
