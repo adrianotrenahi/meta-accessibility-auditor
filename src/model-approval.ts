@@ -1,4 +1,4 @@
-import type { Approval } from './types.js';
+import { LIMITS, type Approval } from './types.js';
 
 const message = 'A current bounded owner approval is required before preparing any model request.';
 
@@ -26,12 +26,11 @@ export function requireCurrentModelApproval(read: () => Approval): Approval {
     approved.approvedBy !== 'Adriano' ||
     !Number.isFinite(Date.parse(approved.expiresAt)) ||
     Date.parse(approved.expiresAt) <= Date.now() ||
-    !Number.isFinite(approved.maxUsd) ||
-    approved.maxUsd <= 0 ||
-    approved.maxUsd > 110 ||
+    (approved.maxUsd !== undefined &&
+      (!Number.isFinite(approved.maxUsd) || approved.maxUsd <= 0)) ||
     !Number.isFinite(approved.maxRunUsd) ||
     approved.maxRunUsd <= 0 ||
-    approved.maxRunUsd > 3
+    approved.maxRunUsd > LIMITS.runMicros / 1e6
   )
     throw new ModelApprovalRequiredError();
   return approved;

@@ -52,9 +52,9 @@ test('Invalid initial allowances stop before key lookup, provider contact or res
     () => ({ ...valid(), expiresAt: 'invalid' }),
     () => ({ ...valid(), expiresAt: '2000-01-01T00:00:00.000Z' }),
     () => ({ ...valid(), maxUsd: 0 }),
-    () => ({ ...valid(), maxUsd: 111 }),
+    () => ({ ...valid(), maxUsd: NaN }),
     () => ({ ...valid(), maxRunUsd: 0 }),
-    () => ({ ...valid(), maxRunUsd: 3.01 }),
+    () => ({ ...valid(), maxRunUsd: 10.01 }),
   ];
   for (const read of cases) {
     const x = fixture();

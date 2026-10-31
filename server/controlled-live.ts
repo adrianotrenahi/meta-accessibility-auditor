@@ -12,8 +12,11 @@ export function controlledHostMode(
 ): 'offline' | 'live' {
   if (!enabled) return 'offline';
   const allowed = settings.readApproval();
-  // The separate public-site batch includes earlier local costs and held charges.
-  const totalLimit = publicWebsites === true ? 10 : 3;
+  // Real websites: at most $10 per audit and no project total (owner, 31 Oct). The
+  // controlled shop keeps its own $3 total and per-run proof limit.
+  const publicSite = publicWebsites === true;
+  const runLimit = publicSite ? 10 : 3;
+  const total = allowed?.maxUsd;
   if (
     !allowed ||
     typeof allowed !== 'object' ||
@@ -22,18 +25,18 @@ export function controlledHostMode(
     typeof allowed.expiresAt !== 'string' ||
     !Number.isFinite(Date.parse(allowed.expiresAt)) ||
     Date.parse(allowed.expiresAt) <= Date.now() ||
-    !Number.isFinite(allowed.maxUsd) ||
-    allowed.maxUsd <= 0 ||
-    allowed.maxUsd > totalLimit ||
+    (total === undefined
+      ? !publicSite
+      : !Number.isFinite(total) || total <= 0 || (!publicSite && total > 3)) ||
     !Number.isFinite(allowed.maxRunUsd) ||
     allowed.maxRunUsd <= 0 ||
-    allowed.maxRunUsd > allowed.maxUsd ||
-    allowed.maxRunUsd > 3 ||
+    (total !== undefined && allowed.maxRunUsd > total) ||
+    allowed.maxRunUsd > runLimit ||
     !settings.readKey()
   )
     throw Error(
       publicWebsites === true
-        ? 'Public website model testing needs a key and a current approval capped at $10 total and $3 per run.'
+        ? 'Public website model testing needs a key and a current approval of at most $10 per audit.'
         : 'Controlled model testing needs a key and a current approval capped at $3 total and per run.',
     );
   return 'live';

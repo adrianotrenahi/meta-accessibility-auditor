@@ -54,7 +54,7 @@ test('Only the separate explicitly public host accepts a cumulative batch above 
   );
 });
 
-test('Public batch ceiling never replaces current owner, finite allowance, key or three-dollar run guards', () => {
+test('Real-website approvals need the owner, a finite optional total, a key and at most $10 per audit', () => {
   const invalid: unknown[] = [
     null,
     undefined,
@@ -63,15 +63,12 @@ test('Public batch ceiling never replaces current owner, finite allowance, key o
     5,
     ...[
       { approvedBy: 'Someone else' },
-      { maxUsd: 10.000001 },
-      { maxUsd: 110 },
       { maxUsd: 0 },
       { maxUsd: -1 },
       { maxUsd: NaN },
       { maxUsd: Infinity },
       { maxUsd: '5' },
-      { maxUsd: undefined },
-      { maxRunUsd: 3.000001 },
+      { maxRunUsd: 10.000001 },
       { maxRunUsd: 0 },
       { maxRunUsd: -1 },
       { maxRunUsd: NaN },
@@ -90,9 +87,24 @@ test('Public batch ceiling never replaces current owner, finite allowance, key o
   for (const value of invalid) {
     assert.throws(
       () => controlledHostMode(true, settings(value), true),
-      /current approval capped at \$10 total and \$3 per run/,
+      /current approval of at most \$10 per audit/,
     );
   }
+  // Owner, 31 Oct: at most $10 per audit and no project total for real websites.
+  for (const allowed of [
+    { ...approved(), maxUsd: undefined, maxRunUsd: 10 },
+    { ...approved(), maxUsd: 500, maxRunUsd: 10 },
+  ])
+    assert.equal(controlledHostMode(true, settings(allowed), true), 'live');
+  // The controlled shop keeps its own $3 total and per-run limit.
+  for (const allowed of [
+    { ...approved(), maxUsd: undefined },
+    { ...approved(), maxUsd: 3, maxRunUsd: 3.01 },
+  ])
+    assert.throws(
+      () => controlledHostMode(true, settings(allowed), false),
+      /\$3 total and per run/,
+    );
   for (const key of [undefined, ''])
     assert.throws(
       () => controlledHostMode(true, { readApproval: approved, readKey: () => key }, true),
@@ -119,8 +131,13 @@ test('Public batch ceiling never replaces current owner, finite allowance, key o
 test('Server passes its explicit public flag to the allowance guard before opening the records', () => {
   const source = readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
   const start = source.indexOf('const hostMode = controlledHostMode(');
-  const end = source.indexOf('const store = new Store(dir);', start);
+  const end = source.indexOf('const store = new Store(dir, {', start);
   assert(start >= 0 && end > start, 'The guard must precede the original store opening.');
+  // Only the real-website host opens the store with the $10 per-audit ceiling.
+  assert.match(
+    source.slice(end, end + 200),
+    /maxRunMicros: options\.publicWebsites === true \? LIMITS\.runMicros : undefined/,
+  );
   const call = source.slice(start, end);
   assert(call.includes('options.controlledLiveProof'), 'The live-host gate must remain explicit.');
   assert.match(
@@ -161,18 +178,14 @@ test('Actual public startup accepts only the five-dollar synthetic approval with
     };
     assert.deepEqual(run(true), { accepted: true, runs: 0, requests: 0 });
     assert.deepEqual(run(false), { accepted: false, message: ordinaryError });
-    for (const value of [
-      null,
-      { ...approved(), maxUsd: 10.01 },
-      { ...approved(), maxRunUsd: 3.01 },
-    ]) {
+    for (const value of [null, { ...approved(), maxUsd: 0 }, { ...approved(), maxRunUsd: 10.01 }]) {
       const refused = run(true, value);
       assert.equal(refused.accepted, false);
       assert.match(
         refused.message,
         value === null
           ? /current bounded approval file/
-          : /current approval capped at \$10 total and \$3 per run/,
+          : /current approval of at most \$10 per audit/,
       );
       assert(!refused.message.includes('synthetic-local-startup-no-provider'));
     }
@@ -215,7 +228,7 @@ test('The public startup allowance retains the complete old local ledger and the
     assert.deepEqual(store.usage(old.id), before);
     store.settle(request, 10000, 'completed');
     assert.throws(
-      () => store.reserve(next.id, 'driver', 10000, { ...allowed, maxRunUsd: 3.01 }),
+      () => store.reserve(next.id, 'driver', 10000, { ...allowed, maxRunUsd: 10.01 }),
       /approval/,
     );
     assert.throws(
