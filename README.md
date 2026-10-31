@@ -67,13 +67,6 @@ The test captures actual spoken phrases separately from visited-item text and at
 
 Earlier native attempts timed out or were refused synthetic keystrokes. The supported VoiceOver commander interface and an explicit browser-focus request now pass the known-control test while retaining the strict foreground guard. No security restrictions were disabled. A copied per-command speech delta prevents a later announcement from appearing in an earlier command record.
 
-## Paid tests require a bounded approval
-
-Put a future Meta API key only in private `.env` as `META_API_KEY=…`; `MODEL_API_KEY` is also recognised. Never commit keys, run records or provider responses. Adding a key alone does not authorise spending.
-
-The first one-off approval is consumed. On 27 October the owner authorised further tightly budgeted Meta tests; the current Day 2 batch is capped at $10 total and $3 per run on controlled local records. The dedicated `scripts/day-two-proof.ts` requires a private expiring approval and records all attempts in the same durable ledger. It normally allows three attempts; the explicit corrected-build check allows three validation attempts after the two retained investigation failures, with a fixed source fingerprint and at most five attempts overall. One explicit outline-provenance regression can be the sixth attempt. The $10 aggregate ceiling remains unchanged. It stops a failed journey or unconfirmed charge for inspection and does not create its own approval. Ordinary paid launch remains refused by the interface and default command, and each model request reserves spending before it is sent. Temporary approval files are removed when the batch ends.
-
-The planned limits remain $3 per run, $110 routine project spend and $40 held back from the $150 Meta allowance. Spark uses Standard mode. Unknown charges retain their reservation. No application credentials, database or code from Cavioo are used.
 
 ## Scope and remaining proof
 
