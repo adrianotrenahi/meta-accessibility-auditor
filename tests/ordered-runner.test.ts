@@ -11,7 +11,7 @@ import { VoiceOverProbe } from '../src/voiceover.js';
 import { MetaModels } from '../src/models.js';
 import { startServer } from '../server/index.js';
 import { ORDERED_JOURNEY_VERSION, readOrderedJourney } from '../src/journey-steps.js';
-import type { Approval } from '../src/types.js';
+import type { Approval, RecordEntry } from '../src/types.js';
 
 const steps = [
   {
@@ -446,6 +446,77 @@ test('Legacy controlled walks keep their every-third-decision checkpoint', async
     );
     assert.equal(analyses, 2);
     assert.equal(readOrderedJourney(x.app.store.records(x.run.id)), null);
+  } finally {
+    await x.close();
+  }
+});
+
+test('Two instructions finished on one unchanged screenshot get one scan and one paid check', async (t) => {
+  // Owner, 30 Oct: Booking.com's home page was scanned, analysed and reviewed twice.
+  // The real analysis runs here, including its own journey-context read of the page.
+  const x = await fixture();
+  let decisions = 0,
+    analyses = 0,
+    scans = 0;
+  const realScan = x.walk.measurements.bind(x.walk);
+  x.walk.measurements = async (source) => {
+    scans++;
+    return realScan(source);
+  };
+  t.mock.method(MetaModels.prototype, 'reason', async (...args: any[]) => {
+    const [, role, records] = args as [string, string, RecordEntry[]];
+    if (role === 'analyst') {
+      analyses++;
+      const capture = records.findLast((record) => record.kind === 'capture')!;
+      assert.equal(capture.id, x.current.id);
+      return {
+        findings: [],
+        coverage: [
+          { captureId: capture.id, topic: 'content', state: 'examined', reason: 'Synthetic.' },
+        ],
+      };
+    }
+    if (role !== 'driver') throw Error(`Unexpected ${role} request.`);
+    decisions++;
+    return {
+      kind: 'step_done',
+      stepId: decisions === 1 ? 'open' : 'check',
+      captureId: x.current.id,
+      note: 'Synthetic completion on the same screenshot.',
+    };
+  });
+  try {
+    await (x.runner as any).live(
+      x.run,
+      x.walk,
+      new VoiceOverProbe(x.walk),
+      x.current,
+      x.controller,
+    );
+    const records = x.app.store.records(x.run.id);
+    assert.equal(readOrderedJourney(records)?.completed.length, 2);
+    assert(
+      records.some(
+        (record) =>
+          record.kind === 'observation' &&
+          record.payload.method === 'journey_context' &&
+          record.payload.stable === true,
+      ),
+      'the analysis read the journey context for real',
+    );
+    assert.equal(scans, 1, 'the second completion reuses the scan of the same screenshot');
+    assert.equal(analyses, 1, 'the final checkpoint does not resend the same screenshot');
+    const skipped = records.filter(
+      (record) => record.kind === 'coverage' && record.payload.method === 'repeat_checkpoint/1',
+    );
+    assert.equal(skipped.length, 1);
+    assert.equal(skipped[0]!.payload.captureId, x.current.id);
+    assert.equal(skipped[0]!.payload.state, 'ALREADY_CHECKED');
+    const reads = records.filter((record) => record.kind === 'read_snapshot');
+    assert(
+      reads.every((read) => read.payload.records.every((pin: any) => pin.id !== skipped[0]!.id)),
+      'the note is never sent to a model as evidence',
+    );
   } finally {
     await x.close();
   }

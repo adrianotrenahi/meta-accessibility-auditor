@@ -613,7 +613,9 @@ export class Store {
       (r) =>
         !['read_snapshot', 'model_response'].includes(r.kind) &&
         r.kind !== 'visual_coverage' &&
-        !(r.kind === 'coverage' && ['analyst', 'reviewer'].includes(r.author)),
+        !(r.kind === 'coverage' && ['analyst', 'reviewer'].includes(r.author)) &&
+        // A note that an earlier check stands is bookkeeping, not evidence about the page.
+        !(r.kind === 'coverage' && r.payload.method === 'repeat_checkpoint/1'),
     );
     const wanted = new Set(ids ?? records.map((r) => r.id));
     // The walk and navigator notes are always original records, not another role's digest.
