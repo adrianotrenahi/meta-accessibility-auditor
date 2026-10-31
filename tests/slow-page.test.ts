@@ -53,3 +53,56 @@ test('A page slow to become readable is read again, within a bounded wait', asyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Codex and Loca, PR 64: the wait is one budget per page reading, checked before every new read.
+test('One page reading shares one bounded wait, and the stop names the real error', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'slow-page-budget-'));
+  const app = await startServer(0, dir, false);
+  const run = app.store.create('Slow page budget', app.origin + '/shop/', 'offline');
+  const walk = new BrowserWalk(app.store, run.id, app.origin, true, 'chromium');
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  try {
+    await walk.start(run.url);
+    const real = (walk as any).captureOrWait.bind(walk);
+    walk.slowPageWaitMs = 1200;
+    // Each read takes 800 ms and runs out of time: no read starts once the wait is used up.
+    let starts: number[] = [];
+    let begun = performance.now();
+    (walk as any).captureOrWait = async () => {
+      starts.push(performance.now() - begun);
+      await pause(800);
+      throw timedOut();
+    };
+    const stopped = await walk.capture().catch((error) => error);
+    assert(stopped instanceof PageUnreadable);
+    assert.match(stopped.message, /locator\.ariaSnapshot: Timeout 8000ms exceeded/);
+    assert(starts.every((at) => at < 1200), `reads started at ${starts.join(', ')} ms`);
+    assert(performance.now() - begun < 1200 + 800, 'at most the read already under way overruns');
+    const note = app.store.records(run.id).find((r) => r.payload.method === 'slow_page_wait')!;
+    assert(note.payload.maximumWaitMs < 1200, 'the note states the wait that was actually left');
+
+    // The settling check's readings share one wait: a slow, still-changing first reading
+    // leaves the next reading only what is left, and that reading still gets its one try.
+    walk.slowPageWaitMs = 1500;
+    const changing = await real();
+    changing.payload.stable = false;
+    let call = 0;
+    starts = [];
+    begun = performance.now();
+    (walk as any).captureOrWait = async () => {
+      starts.push(performance.now() - begun);
+      if (call++ === 0) {
+        await pause(1000);
+        return changing;
+      }
+      throw timedOut();
+    };
+    await assert.rejects(walk.captureSettled(), PageUnreadable);
+    assert(starts.length >= 2, 'the second reading still made one read');
+    assert(performance.now() - begun < 1500 + 1000, 'one wait for the whole check, not one each');
+  } finally {
+    await walk.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

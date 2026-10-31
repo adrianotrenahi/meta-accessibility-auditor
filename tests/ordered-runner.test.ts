@@ -552,7 +552,7 @@ test('A page that stays unreadable after an input stops navigation cleanly and s
   });
   t.mock.method(x.walk, 'captureSettled', async () => {
     reads++;
-    throw new PageUnreadable('The page did not become readable within 30 seconds of waiting.');
+    throw new PageUnreadable('The page did not become readable within about 30 seconds of waiting.');
   });
   try {
     await (x.runner as any).live(
