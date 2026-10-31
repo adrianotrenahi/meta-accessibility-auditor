@@ -287,14 +287,31 @@ export async function walkToKeyboardTarget(
         .catch(() => false);
     const focused = async () =>
       handle.evaluate((element) => document.activeElement === element).catch(() => false);
-    const requestedKey = decision.traversalKey ?? 'Tab';
-    const arrow = requestedKey.startsWith('Arrow');
     const rovingTarget = await readTarget(() =>
       handle.evaluate((element) =>
         ['menuitem', 'tab'].includes(element.getAttribute('role') ?? ''),
       ),
     );
-    const canTraverseGrid = !arrow || (await sameNativeArrowGroup(handle));
+    const askedKey = decision.traversalKey ?? 'Tab';
+    const outsideGroup = askedKey.startsWith('Arrow') && !(await sameNativeArrowGroup(handle));
+    // Arrows cannot enter a menu or tab list from outside it. Its item is reached the way a
+    // keyboard user does: Tab into the group, then arrows within it (nativeTraversalKey).
+    // Owner, 31 Oct: Booking.com's "Flights" menu item was refused twice and the walk ended.
+    // Only from outside every arrow group: focus inside another menu stays a refusal, so an
+    // arrow request never turns into a jump between groups.
+    const focusInNoGroup =
+      outsideGroup &&
+      (await readTarget(() =>
+        handle.evaluate(
+          () =>
+            !document.activeElement?.closest(
+              'table,[role=grid],[role=listbox],[role=menubar],[role=menu],[role=tablist]',
+            ),
+        ),
+      ));
+    const requestedKey = focusInNoGroup && rovingTarget ? 'Tab' : askedKey;
+    const arrow = requestedKey.startsWith('Arrow');
+    const canTraverseGrid = !arrow || !outsideGroup;
     if (!canTraverseGrid) {
       return stop(
         'unavailable',

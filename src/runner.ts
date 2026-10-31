@@ -677,10 +677,15 @@ export class Runner {
                 : await walk.captureSettled();
             // Two requested controls in a row that keys could not reach: further
             // decisions would only repeat the attempt, so navigation ends here and
-            // the final analysis reads the recorded keyboard evidence.
-            unreachedTargets = ['cycle', 'unavailable'].includes(traversed.outcome)
-              ? unreachedTargets + 1
-              : 0;
+            // the final analysis reads the recorded keyboard evidence. A request refused
+            // before any key was sent proves nothing about the page and does not count
+            // (owner, 31 Oct); the navigator's own decision limit still bounds retries.
+            const refusedUnsent = traversed.outcome === 'unavailable' && !traversed.actions.length;
+            unreachedTargets = refusedUnsent
+              ? unreachedTargets
+              : ['cycle', 'unavailable'].includes(traversed.outcome)
+                ? unreachedTargets + 1
+                : 0;
             if (unreachedTargets >= 2) {
               this.store.append(
                 run.id,
