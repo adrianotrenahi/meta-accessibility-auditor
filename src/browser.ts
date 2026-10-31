@@ -41,6 +41,12 @@ export const isCommitment = (name: string) =>
  * a consent or language redirect. The robot measures only after the page has gone
  * this long without loading a new document (owner, 30 Oct). */
 export const ARRIVAL_QUIET_MS = 2500;
+/** Controls each screenshot lists for the navigator (owner, 31 Oct: up to 500, was 60). */
+export const MAX_LISTED_CONTROLS = 500;
+/** Accessible role/name readings sent to the browser side by side. */
+const ARIA_READS_AT_ONCE = 25;
+/** How long one control's role/name read may wait before that control is left out. */
+const ARIA_READ_TIMEOUT_MS = 1000;
 /** After the journey's own steps, a shorter quiet moment; no wait when nothing loaded recently. */
 export const RELOAD_QUIET_MS = 1000;
 /** The wait never exceeds this; a page still reloading is then measured with retries. */
@@ -462,11 +468,11 @@ export class BrowserWalk {
     });
     const elements = [];
     const locators = this.page.locator(controls);
-    // Real sites put many hidden menu links before their search form. Choose the
-    // first 60 visible controls, those on screen first; ids keep the page position.
+    // Real sites put many hidden menu links before their search form. Choose the first
+    // MAX_LISTED_CONTROLS visible controls, those on screen first; ids keep the page position.
     const stampToken = randomUUID();
     const listed = await locators.evaluateAll(
-      (targets, { key, token }) => {
+      (targets, { key, token, limit }) => {
         const onScreen: number[] = [];
         const offScreen: number[] = [];
         targets.forEach((target, index) => {
@@ -483,7 +489,7 @@ export class BrowserWalk {
             box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth;
           (shown ? onScreen : offScreen).push(index);
         });
-        const chosen = [...onScreen, ...offScreen].slice(0, 60).sort((a, b) => a - b);
+        const chosen = [...onScreen, ...offScreen].slice(0, limit).sort((a, b) => a - b);
         // Each original keeps live references to the exact controls it listed, so a
         // decision naming e69 reaches that element even when its name is repeated.
         const registry: Map<string, Map<string, Element>> = ((globalThis as any)[key] ??=
@@ -492,15 +498,21 @@ export class BrowserWalk {
         for (const old of [...registry.keys()].slice(0, -8)) registry.delete(old);
         return chosen;
       },
-      { key: this.stampKey, token: stampToken },
+      { key: this.stampKey, token: stampToken, limit: MAX_LISTED_CONTROLS },
     );
-    for (const i of listed) {
-      const locator = locators.nth(i);
-      if (!(await locator.isVisible().catch(() => false))) continue;
-      const box = await locator.boundingBox();
-      if (!box) continue;
-      const { controlMarkup, controlInstance, ...info } = await locator.evaluate(
-        (e, identityKey) => {
+    // One read for every listed control (owner, 31 Oct: up to 500 controls without slower
+    // screenshots). Only the accessible role and name need Playwright's own reading; those
+    // run side by side instead of one control at a time.
+    const details = await locators.evaluateAll(
+      (targets, { indices, identityKey, key, token }) =>
+        indices.map((index) => {
+          // A control removed or shifted since it was listed is left out, never misread.
+          const e = targets[index];
+          const listedElement = (globalThis as any)[key]?.get(token)?.get('e' + index);
+          if (!e || !e.isConnected || e !== listedElement) return null;
+          const rect = e.getBoundingClientRect();
+          const style = getComputedStyle(e);
+          if (!rect.width || !rect.height || style.visibility === 'hidden') return null;
           let controlInstance: string | undefined;
           const identityEligible = e.tagName === 'BUTTON' && !!e.id;
           try {
@@ -509,37 +521,61 @@ export class BrowserWalk {
           } catch {
             // Missing optional identity only disables cross-screen grouping.
           }
+          const parts: string[] = [];
+          let current: Element | null = e;
+          while (current) {
+            if (current.id) {
+              parts.unshift('#' + CSS.escape(current.id));
+              break;
+            }
+            const tag = current.tagName.toLowerCase();
+            const siblings = current.parentElement
+              ? [...current.parentElement.children].filter((s) => s.tagName === current!.tagName)
+              : [current];
+            parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')');
+            current = current.parentElement;
+          }
           return {
+            box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
             controlInstance,
             controlMarkup: identityEligible ? e.outerHTML : undefined,
-            selector: (() => {
-              const parts: string[] = [];
-              let current: Element | null = e;
-              while (current) {
-                if (current.id) {
-                  parts.unshift('#' + CSS.escape(current.id));
-                  break;
-                }
-                const tag = current.tagName.toLowerCase();
-                const siblings = current.parentElement
-                  ? [...current.parentElement.children].filter(
-                      (s) => s.tagName === current!.tagName,
-                    )
-                  : [current];
-                parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')');
-                current = current.parentElement;
-              }
-              return parts.join(' > ');
-            })(),
-            tag: e.tagName.toLowerCase(),
-            text: (e.textContent ?? '').trim().slice(0, 200),
-            type: e.getAttribute('type') ?? '',
-            disabled: e.hasAttribute('disabled'),
+            info: {
+              selector: parts.join(' > '),
+              tag: e.tagName.toLowerCase(),
+              text: (e.textContent ?? '').trim().slice(0, 200),
+              type: e.getAttribute('type') ?? '',
+              disabled: e.hasAttribute('disabled'),
+            },
           };
-        },
-        this.controlIdentityKey,
+        }),
+      {
+        indices: listed,
+        identityKey: this.controlIdentityKey,
+        key: this.stampKey,
+        token: stampToken,
+      },
+    );
+    // A control that disappears before its role and name are read is skipped after a short
+    // wait instead of holding the whole screenshot to the page's default timeout.
+    const arias: (string | null)[] = [];
+    for (let from = 0; from < listed.length; from += ARIA_READS_AT_ONCE)
+      arias.push(
+        ...(await Promise.all(
+          listed.slice(from, from + ARIA_READS_AT_ONCE).map((i, offset) =>
+            details[from + offset]
+              ? locators
+                  .nth(i)
+                  .ariaSnapshot({ depth: 1, timeout: ARIA_READ_TIMEOUT_MS })
+                  .catch(() => null)
+              : null,
+          ),
+        )),
       );
-      const aria = await locator.ariaSnapshot({ depth: 1 });
+    for (const [position, i] of listed.entries()) {
+      const detail = details[position];
+      const aria = arias[position];
+      if (!detail || aria === null || aria === undefined) continue;
+      const { box, controlMarkup, controlInstance, info } = detail;
       const first = aria.split('\n')[0] ?? '';
       const role = first.match(/^- ([a-z]+)/)?.[1] ?? info.tag;
       const name = originalAriaName(aria);
@@ -644,7 +680,7 @@ export class BrowserWalk {
       limits: {
         ...(!identitiesStable ? { controlIdentityChanged: true } : {}),
         totalControls: await locators.count(),
-        maximumListedControls: 60,
+        maximumListedControls: MAX_LISTED_CONTROLS,
         visibleTextTruncated: visibleText.length > 16000,
         imageScope: 'viewport',
       },

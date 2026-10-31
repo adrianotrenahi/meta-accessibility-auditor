@@ -32,7 +32,20 @@ function seeded() {
       height: 1,
       aria: '- link "Vuelos"\n- text: Compara y reserva vuelos',
       text: 'Compara y reserva vuelos',
-      elements: [],
+      elements: [
+        {
+          id: 'e12',
+          role: 'link',
+          name: 'Vuelos',
+          tag: 'a',
+          text: 'Vuelos',
+          type: '',
+          disabled: false,
+          box: { x: 10, y: 20, width: 80, height: 30 },
+          selector: 'html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1) > a:nth-of-type(2)',
+          contextFingerprint: 'c'.repeat(64),
+        },
+      ],
       limits: { imageScope: 'viewport', visibleTextTruncated: false },
       imageProvenance: { source: 'Browser-rendered page viewport', engineAddedAnnotations: false },
     });
@@ -150,8 +163,17 @@ test('The navigator is sent the page structure without the repeated visible text
       );
       const page = sent.find((record: any) => record.id === current.id).payload;
       assert.equal(page.aria, current.payload.aria, `${role} reads the page structure`);
-      if (role === 'driver') assert(!('text' in page), 'the navigator skips the repeated text');
-      else assert.equal(page.text, current.payload.text, 'the analyst still reads it');
+      const control = page.elements[0];
+      assert.deepEqual([control.id, control.role, control.name], ['e12', 'link', 'Vuelos']);
+      if (role === 'driver') {
+        assert(!('text' in page), 'the navigator skips the repeated text');
+        // Owner, 31 Oct: the navigator acts by id or name; it never uses these two.
+        assert(!('selector' in control) && !('contextFingerprint' in control));
+        assert.deepEqual(control.box, current.payload.elements[0].box);
+      } else {
+        assert.equal(page.text, current.payload.text, 'the analyst still reads it');
+        assert.deepEqual(control, current.payload.elements[0], 'the analyst reads every field');
+      }
     } finally {
       x.close();
     }

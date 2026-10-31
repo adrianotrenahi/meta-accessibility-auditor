@@ -222,18 +222,33 @@ const instructions = {
   reviewer:
     'Independently review every analyst claim against the original walk, navigator notes, full original screenshots, keyboard and actual VoiceOver records. Read the exact candidate and hash; the analyst is not your only source. Check visiblePremise against the actual image and all supplied context. Treat prior coverage and model notes as interpretations, not original proof. Check capture imageProvenance and recorded focus.appearance. The engine adds no overlays to saved website screenshots; reject unsupported test-overlay or test-rectangle attribution even if the central focus observation is true. Every displayed detail needs its own support. Product name, description or price beside a control contradicts a blanket claim of no visible context. An ambiguous icon can be a bounded expert judgement, but does not establish missing surrounding content or user confusion. Check title, detail, recommendation, severity, consequence, exact element and scope together. Mark premise supported, contradicted or unverified. Keep is allowed only when the entire unchanged claim is supported: return its exact existing title. Return rewrite, reject or unresolved otherwise. Changing the title alone never approves unsupported details. Reject robot-caused misunderstandings, invented behaviour/speech and screenshot-only keyboard claims; retain supported expert visual judgement. Source links must point to originals you read. No quota. Use return_result.',
 } as const;
-/** The navigator reads a screenshot's page structure (`aria`), which already holds the words
- * on the page; the separate copy of its visible text only made each decision longer (owner,
- * 31 Oct: about 10 KB per Booking.com decision). Analysis and review still read both. */
-const withoutVisibleText = (record: any) =>
-  record?.kind === 'capture' && record.payload && 'text' in record.payload
-    ? {
-        ...record,
-        payload: Object.fromEntries(
-          Object.entries(record.payload).filter(([key]) => key !== 'text'),
-        ),
-      }
-    : record;
+/** What the navigator reads of a screenshot (owner, 31 Oct). Its page structure (`aria`)
+ * already holds the words on the page, so the separate copy of the visible text is left out
+ * (about 10 KB per Booking.com decision). Each listed control keeps what the navigator acts on
+ * (its id, role, name, words, kind, state and box) without its internal page address and
+ * fingerprints, about half of each entry, which only the engine's own checks use. Analysis,
+ * review and the saved record keep everything. */
+const NAVIGATOR_UNUSED_CONTROL_FIELDS = new Set([
+  'selector',
+  'contextFingerprint',
+  'controlFingerprint',
+  'controlInstance',
+]);
+const navigatorView = (record: any) => {
+  if (record?.kind !== 'capture' || !record.payload) return record;
+  const payload = Object.fromEntries(
+    Object.entries(record.payload).filter(([key]) => key !== 'text'),
+  );
+  if (Array.isArray(payload.elements))
+    payload.elements = payload.elements.map((element: any) =>
+      element && typeof element === 'object'
+        ? Object.fromEntries(
+            Object.entries(element).filter(([key]) => !NAVIGATOR_UNUSED_CONTROL_FIELDS.has(key)),
+          )
+        : element,
+    );
+  return { ...record, payload };
+};
 const jobInstructions = {
   driver:
     instructions.driver +
@@ -427,7 +442,7 @@ export class MetaModels {
           content: [
             {
               type: 'input_text',
-              text: JSON.stringify(role === 'driver' ? records.map(withoutVisibleText) : records),
+              text: JSON.stringify(role === 'driver' ? records.map(navigatorView) : records),
             },
             ...(journey
               ? [
