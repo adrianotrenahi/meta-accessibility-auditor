@@ -112,3 +112,15 @@ reference; the public planning and execution code was written for this engine.
   with the requested route and dates. It must stop before selection or booking.
 - Customer dispatch, billing, wider native-reader acceptance, human finding
   quality and the submission video retain their separate outstanding scope.
+
+## The browser a real-website audit uses
+
+Real-website audits run in the installed Google Chrome app, hidden, with Chrome's
+"controlled by automated software" signal switched off and its own name without
+the hidden-window word (owner, 31 October). The audit is meant to read the page a
+real visitor gets; a site that serves robots a different page, or refuses them,
+would otherwise be audited on the wrong page. Playwright's own Chromium is the
+fallback when Chrome is not installed. Nothing else about the visit changes: the
+robot still uses only the keyboard, never books, pays or signs in, and takes no
+data. It does not route through rented addresses or solve "prove you're human"
+checks. The controlled shop keeps Playwright's test browsers.
