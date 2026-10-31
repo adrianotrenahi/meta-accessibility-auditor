@@ -72,6 +72,10 @@ saves a `page_scan_reused/1` note pointing at the earlier scan instead of waitin
 for another one. Booking.com's home page took 12 s per scan. The navigator also
 reads each screenshot's page structure without the separate copy of its visible
 text, which the structure already holds; analysis and review still read both.
+Each screenshot lists up to 500 visible controls (was 60), read in one pass so a
+Booking.com screenshot still takes about 2 s with 261 controls. The navigator's
+copy of each control keeps its id, role, name, words, kind, state and box, and
+leaves out the internal page address and fingerprints only the engine uses.
 
 The optional `ordered-journey-progress/1` host reply carries the exact approved
 steps and completion records, bound to the original captures. Readers reject
