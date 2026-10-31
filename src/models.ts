@@ -222,11 +222,24 @@ const instructions = {
   reviewer:
     'Independently review every analyst claim against the original walk, navigator notes, full original screenshots, keyboard and actual VoiceOver records. Read the exact candidate and hash; the analyst is not your only source. Check visiblePremise against the actual image and all supplied context. Treat prior coverage and model notes as interpretations, not original proof. Check capture imageProvenance and recorded focus.appearance. The engine adds no overlays to saved website screenshots; reject unsupported test-overlay or test-rectangle attribution even if the central focus observation is true. Every displayed detail needs its own support. Product name, description or price beside a control contradicts a blanket claim of no visible context. An ambiguous icon can be a bounded expert judgement, but does not establish missing surrounding content or user confusion. Check title, detail, recommendation, severity, consequence, exact element and scope together. Mark premise supported, contradicted or unverified. Keep is allowed only when the entire unchanged claim is supported: return its exact existing title. Return rewrite, reject or unresolved otherwise. Changing the title alone never approves unsupported details. Reject robot-caused misunderstandings, invented behaviour/speech and screenshot-only keyboard claims; retain supported expert visual judgement. Source links must point to originals you read. No quota. Use return_result.',
 } as const;
+/** The navigator reads a screenshot's page structure (`aria`), which already holds the words
+ * on the page; the separate copy of its visible text only made each decision longer (owner,
+ * 31 Oct: about 10 KB per Booking.com decision). Analysis and review still read both. */
+const withoutVisibleText = (record: any) =>
+  record?.kind === 'capture' && record.payload && 'text' in record.payload
+    ? {
+        ...record,
+        payload: Object.fromEntries(
+          Object.entries(record.payload).filter(([key]) => key !== 'text'),
+        ),
+      }
+    : record;
 const jobInstructions = {
   driver:
     instructions.driver +
     ' Prefer focus_target to reach a named control through several real keyboard steps in one decision. Use its exact targetId from the supplied controls, or targetRole plus exact targetName from the current original accessible page. Use traversalKey Tab or Shift+Tab for ordinary controls. When the target belongs to a menubar, menu or tablist, Tab reaches its active entry and the local keyboard path uses real orientation-aware arrows within that same group; inactive items are not necessarily Tab-reachable. To reach a menu or tab item from outside its group, use traversalKey Tab: the robot enters the group and then uses the arrows. Do not Tab past an active menu item to seek another item in that same menu. For a calendar with a current date cell, use an arrow key to move within that same native grid; first bring the desired month into the first visible calendar if necessary. Dates may not be individually Tab-reachable. The robot uses real keys until that same unique control is focused and stops on a meaningful page change or cycle. Optional activation Enter or Space is an explicit request applied only after the target is reached and freshly checked against the original control, with the ordinary no-booking/payment/login guards. Without activation it only reaches focus; it never types during traversal. Previously unseen descriptions require a fresh decision before any inherited activation, and changed descriptions stop traversal. If the requested control is now focused, read the fresh original and choose a separate press only when the intent still holds. Use a new type action after reaching an input. Never repeat an exhausted or refused target unchanged. A wait action may use waitMs up to10000 while a real results page loads; loading alone is not task completion. Do not request focus_target again when the requested control is already focused. Single press remains available for one key or widget-specific arrow keys. ' +
     ' If a search box already holds a different entry (a pre-filled airport chip, for example), remove that entry by keyboard before typing, then type the requested value once. ' +
+    ' Typing into a search box that offers a suggestion list does not choose anything: when the list appears, choose the option that matches the request (London, for example: an all-airports option or the named airport the task asks for) with ArrowDown and Enter, or focus_target that option with activation Enter, and check that the box now shows it. ' +
     ' When the site answers your input with its own error (for example "something went wrong", "try again" or "refresh the page"), the site refused or failed that request. Do not activate its refresh, reload or retry links, do not leave the page and do not repeat the same input: choose finish with a short note quoting the site\'s message. A site refusal is a recorded limit, not a website defect and not task completion. ' +
     ' Missing-fact checks share the existing two native/focused slots. Do not repeat an exhausted or refused check or revisit an unavailable state to force a result.',
   analyst:
@@ -412,7 +425,10 @@ export class MetaModels {
         {
           role: 'user',
           content: [
-            { type: 'input_text', text: JSON.stringify(records) },
+            {
+              type: 'input_text',
+              text: JSON.stringify(role === 'driver' ? records.map(withoutVisibleText) : records),
+            },
             ...(journey
               ? [
                   {

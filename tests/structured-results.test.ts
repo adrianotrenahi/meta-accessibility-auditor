@@ -351,7 +351,15 @@ test('Simulated counts above the old role ceilings retain full selected original
       );
       assert.equal(x.requests.length, 2);
       assert.deepEqual(x.requests[0].body, x.requests[1].body);
-      assert.equal(x.requests[1].body.input[0].content[0].text, originalText);
+      // Owner, 31 Oct: the navigator skips the page's visible text, which its page structure
+      // already holds; every other field and record reaches it unchanged.
+      const { text: _text, ...withoutText } = capture.payload;
+      assert.equal(
+        x.requests[1].body.input[0].content[0].text,
+        role === 'driver'
+          ? JSON.stringify([plan, { ...capture, payload: withoutText }, note])
+          : originalText,
+      );
       assert.equal(JSON.stringify(x.store.records(x.run.id).slice(0, 3)), originalText);
       assert.equal(x.store.usage(x.run.id).reserved, 0);
     } finally {

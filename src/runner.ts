@@ -18,7 +18,12 @@ const MEASUREMENT_ATTEMPTS = 3;
 const BLOCKER_ATTEMPTS = 3;
 import { VoiceOverProbe } from './voiceover.js';
 import { Store, digest, recordIsIntact } from './store.js';
-import { earlierCheck, earlierScan, walkEvidenceSince } from './repeat-checkpoint.js';
+import {
+  earlierCheck,
+  earlierPageScan,
+  earlierScan,
+  walkEvidenceSince,
+} from './repeat-checkpoint.js';
 import { AnalysisTrack } from './analysis-track.js';
 import {
   MetaModels,
@@ -1082,8 +1087,29 @@ export class Runner {
     // Measure only once the page has stopped reloading; if it reloads mid-scan anyway,
     // wait, observe the new page and measure again (owner, 30 Oct). A scan sends no input.
     if (signal.aborted) throw Error('The run stopped before the automatic measurement.');
-    const repeated = earlierScan(this.store.records(run.id), current);
+    const records = this.store.records(run.id);
+    const repeated = earlierScan(records, current);
     if (repeated) return { current, scan: repeated };
+    // Once per page: a later step on a page already measured adds a note, not another scan.
+    const samePage = earlierPageScan(records, current);
+    // The same screenshot already measured needs no note: nothing about the page is reused.
+    if (samePage?.payload.sourceCaptureId === current.id) return { current, scan: samePage };
+    if (samePage) {
+      this.store.append(
+        run.id,
+        'coverage',
+        'runner',
+        {
+          method: 'page_scan_reused/1',
+          reason:
+            'This page was already measured by the automatic scan on an earlier screenshot. Its measured results stay with that screenshot; this screenshot was not measured again.',
+          sourceCaptureId: current.id,
+          scanId: samePage.id,
+        },
+        [current.id, samePage.id],
+      );
+      return { current, scan: samePage };
+    }
     let observeAgain = false;
     for (let attempt = 1; ; attempt++) {
       if (signal.aborted) throw Error('The run stopped before the automatic measurement.');
