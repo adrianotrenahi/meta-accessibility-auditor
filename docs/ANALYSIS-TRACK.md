@@ -64,8 +64,15 @@ strip.
   screenshot only when the screen visibly changes, on pages with prices or choices too,
   whenever their prices and choices were read cleanly.
 - **Prices and choices are read as text after each Tab** on such pages. If they differ from
-  the last real screenshot, a screenshot is taken and a `journey_change/1` note saves the
-  before and after prices; the analyst then reads both screens (a recorded change).
+  the last real screenshot, or cannot be read, a screenshot is taken. Within a run of Tabs
+  there is no picture of the moment before, so the change is saved as an unconfirmed
+  `tab_price_change/1` note with the before and after prices; it never counts as a price
+  comparison (C11 stays unknown for it).
+- **Pages that do not declare all their prices and choices** (Booking.com) save one
+  `tab_prices_unread/1` note per page address: price changes during its Tab steps were not
+  checked. The strict path could not read those prices either.
+- **Pages that declare every price and choice** (the controlled shops) keep the strict
+  before/after screenshots for Tab, so a price result there can still be proved.
 - **A Tab from a real screenshot that changes the screen** keeps the full price and choice
   comparison, as before.
 - **Space, Enter, typing and every other input** keep their before-and-after screenshots,

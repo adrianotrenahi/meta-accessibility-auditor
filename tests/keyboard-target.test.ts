@@ -652,11 +652,11 @@ test('Tab steps on a page with prices save where focus landed, not a screenshot 
   }
 });
 
-test('A Tab that quietly changes a price takes a real screenshot and saves the change', async () => {
+test('A Tab that quietly changes a price takes a real screenshot and saves both prices as an unconfirmed note', async () => {
   const x = await setup('chromium', pricedPage(true));
   const runner = new Runner(x.app.store, x.app.origin);
   try {
-    const result = await walkToKeyboardTarget(
+    await walkToKeyboardTarget(
       x.walk,
       x.app.store,
       x.run.id,
@@ -667,20 +667,113 @@ test('A Tab that quietly changes a price takes a real screenshot and saves the c
         (runner as any).targetKeyboardStep(x.run, x.walk, start, action, guard),
     );
     const records = x.app.store.records(x.run.id);
-    const change = records.find((r) => r.payload.method === 'journey_change/1');
-    assert(change, 'the price change is saved as a note');
-    const after = records.find((r) => r.id === change.payload.afterContextId)!;
-    const before = records.find((r) => r.id === change.payload.beforeContextId)!;
-    assert.equal(before.payload.data.choices[0].extra.price, 5);
-    assert.equal(after.payload.data.choices[0].extra.price, 7, 'the new price is saved as text');
-    const screen = records.find((r) => r.id === after.payload.sourceCaptureId)!;
+    const notes = records.filter((r) => r.payload.method === 'tab_price_change/1');
+    assert.equal(notes.length, 1, 'the price change is saved once');
+    const note = notes[0]!;
+    assert.equal(note.kind, 'limit', 'an unconfirmed note, not a price comparison');
+    assert.equal(note.payload.before.choices[0].extra.price, 5);
+    assert.equal(note.payload.after.choices[0].extra.price, 7);
+    const screen = records.find((r) => r.id === note.payload.capturedId)!;
     assert.equal(screen.kind, 'capture', 'a real screenshot was taken when the price changed');
-    // The analyst reads both screens for this recorded change.
-    const { requestEvidence } = await import('../src/request-evidence.js');
-    const { suppliedImageIds } = await import('../src/image-receipt.js');
-    const latest = result.current.kind === 'capture' ? result.current : screen;
-    const read = requestEvidence(x.app.store, x.run.id, 'analyst', latest);
-    assert(suppliedImageIds(read.read, read.records).includes(x.current.id));
+    assert(
+      !records.some(
+        (r) => r.payload.method === 'comparable_totals' && r.sources.includes(screen.id),
+      ),
+      'no comparison is claimed without a picture of the moment before',
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test('Pages whose prices cannot be fully read save one unchecked-prices note, not one per Tab', async () => {
+  const x = await setup('chromium', pricedPage(false));
+  const runner = new Runner(x.app.store, x.app.origin);
+  try {
+    await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      (start, action, guard) =>
+        (runner as any).targetKeyboardStep(x.run, x.walk, start, action, guard),
+    );
+    const notes = x.app.store
+      .records(x.run.id)
+      .filter((r) => r.payload.method === 'tab_prices_unread/1');
+    assert.equal(notes.length, 1);
+    assert.match(notes[0]!.payload.reason, /not a website defect/);
+  } finally {
+    await x.close();
+  }
+});
+
+test('A failed price read after a Tab takes a screenshot instead of ending the audit', async () => {
+  const x = await setup('chromium', pricedPage(false));
+  const runner = new Runner(x.app.store, x.app.origin);
+  const evaluate = x.walk.page.evaluate.bind(x.walk.page);
+  let failed = 0;
+  (x.walk.page as any).evaluate = async (fn: any, ...rest: any[]) => {
+    if (
+      String(fn).includes('unrecognisedBundleLimit') &&
+      x.app.store.records(x.run.id).some((r) => r.kind === 'action') &&
+      failed++ === 0
+    )
+      throw Error(
+        'page.evaluate: Execution context was destroyed, most likely because of a navigation',
+      );
+    return (evaluate as any)(fn, ...rest);
+  };
+  try {
+    const shots = () => x.app.store.records(x.run.id).filter((r) => r.kind === 'capture').length;
+    const before = shots();
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      (start, action, guard) =>
+        (runner as any).targetKeyboardStep(x.run, x.walk, start, action, guard),
+    );
+    assert.equal(failed > 0, true, 'the price read failed once');
+    assert.equal(result.outcome, 'reached', 'the walk carried on');
+    assert(shots() > before, 'a real screenshot replaced the unreadable prices');
+  } finally {
+    await x.close();
+  }
+});
+
+test('A stopped run during the price read after a Tab still stops', async () => {
+  const x = await setup('chromium', pricedPage(false));
+  const runner = new Runner(x.app.store, x.app.origin);
+  const evaluate = x.walk.page.evaluate.bind(x.walk.page);
+  (x.walk.page as any).evaluate = async (fn: any, ...rest: any[]) => {
+    if (
+      String(fn).includes('unrecognisedBundleLimit') &&
+      x.app.store.records(x.run.id).some((r) => r.kind === 'action')
+    ) {
+      x.app.store.finish(x.run.id, 'stopped', 'Stopped by owner.');
+      throw Error('Synthetic read failure during a stop.');
+    }
+    return (evaluate as any)(fn, ...rest);
+  };
+  try {
+    await assert.rejects(
+      walkToKeyboardTarget(
+        x.walk,
+        x.app.store,
+        x.run.id,
+        x.current,
+        seek,
+        x.signal.signal,
+        (start, action, guard) =>
+          (runner as any).targetKeyboardStep(x.run, x.walk, start, action, guard),
+      ),
+    );
   } finally {
     await x.close();
   }

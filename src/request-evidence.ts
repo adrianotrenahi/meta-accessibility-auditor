@@ -226,9 +226,8 @@ export function requestEvidence(
         .filter(
           (r) =>
             r.kind === 'observation' &&
-            ((r.payload.method === 'comparable_totals' &&
-              !emptyEarlierTraversal(r, null, records, true)) ||
-              r.payload.method === 'journey_change/1'),
+            r.payload.method === 'comparable_totals' &&
+            !emptyEarlierTraversal(r, null, records, true),
         )
         .slice(-2)
         .map((r) => r.id),
