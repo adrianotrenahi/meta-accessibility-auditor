@@ -144,3 +144,13 @@ pickers, day and month selectors, dropdowns and option lists are chosen with the
 keys and Enter or Space, not typed into (owner, 31 October). Each navigator decision
 is one request to Meta: audits estimate its size locally and generously instead of
 asking Meta first; the estimate counts text bytes (very likely an upper bound), asks Meta when it looks too big, and records a `reservation_exceeded` warning if a charge ever exceeds what was set aside.
+
+One navigator decision can choose an option in any website's ordinary dropdown
+(`choose_option` with the option's exact text, after `focus_target` has reached the
+dropdown), for example a day or month of travel, a country or a size (owner,
+31 October). On a Mac the arrow keys open a closed dropdown instead of stepping
+through it, so the robot presses the option's first character; each press moves to
+the next option starting with it, and the robot checks after every press and stops on
+the wanted one. Every press is a counted keyboard input; nothing is typed into a text
+box. An option the dropdown does not offer, or no focused dropdown, is a refused input:
+nothing is pressed and the navigator is asked again.
