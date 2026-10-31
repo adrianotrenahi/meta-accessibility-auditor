@@ -59,6 +59,8 @@ import { clearPageBlockers } from './page-blockers.js';
 import {
   readJourneyContext,
   compareJourneyTotals,
+  journeyDataChanged,
+  journeyDataNow,
   recordOptOutContext,
   ReturnEvidence,
 } from './journey-evidence.js';
@@ -933,17 +935,70 @@ export class Runner {
       beforeContext?.payload.stable === true &&
       beforeContext.payload.data?.commerce === null &&
       beforeContext.payload.data?.choices?.length === 0;
-    if (focusMovement && simplePage) {
+    // Every declared price and choice was read: the strict before/after screenshots can
+    // prove a price result (C11), so they stay. Booking.com never declares its prices.
+    const fullyDeclared =
+      beforeContext?.payload.data?.commerce != null &&
+      beforeContext.payload.data.choicesComplete === true;
+    // A Tab only moves focus. It saves where focus landed and takes a real screenshot only
+    // when the screen visibly changed, on pages with prices or choices too (owner, 31 Oct:
+    // one Booking.com screenshot per Tab cost about 7 s each and none reached the strip).
+    if (focusMovement && beforeContext?.payload.stable === true && !fullyDeclared) {
+      let performed: RecordEntry;
       try {
-        const performed = await walk.act(action, before, expectedTarget);
-        return { current: await walk.observeKeyboardMovement(before, performed), performed };
+        performed = await walk.act(action, before, expectedTarget);
       } catch (error) {
         if (!(error instanceof ActionStateChanged)) throw error;
         return { current: await walk.captureSettled() };
       }
+      let current = await walk.observeKeyboardMovement(before, performed);
+      if (simplePage) return { current, performed };
+      this.uncheckedTabPrices(run, beforeContext);
+      // No visible change, but a declared price or choice could still change quietly: they
+      // are read as text after the Tab, and a real screenshot is taken if they differ or
+      // cannot be read.
+      if (current.kind !== 'capture') {
+        let changed = true;
+        try {
+          changed = journeyDataChanged(beforeContext.payload.data, await journeyDataNow(walk));
+        } catch (error) {
+          walk.assertActive();
+          if (error instanceof DOMException && error.name === 'AbortError') throw error;
+        }
+        if (changed) current = await walk.captureSettled();
+      }
+      if (current.kind !== 'capture') return { current, performed };
+      if (before.kind === 'capture')
+        // A Tab from a real screenshot keeps the full before/after comparison.
+        await this.compareAcross(run, walk, beforeContext, performed, current);
+      else {
+        // Within a run of Tabs there is no picture of the moment before, so a change since
+        // the last real screenshot is saved as text and stays unconfirmed ("save uncertainty").
+        const afterContext = await readContext(current);
+        if (
+          afterContext?.payload.stable !== true ||
+          journeyDataChanged(beforeContext.payload.data, afterContext.payload.data)
+        )
+          this.store.append(
+            run.id,
+            'limit',
+            'browser',
+            {
+              method: 'tab_price_change/1',
+              reason:
+                'By this Tab press the declared prices or choices differed from the last real screenshot, or could not be read. A new screenshot was taken. This is not a validated price comparison, no cause is inferred, and it is not a website defect.',
+              before: beforeContext.payload.data,
+              after: afterContext?.payload.stable === true ? afterContext.payload.data : null,
+              sourceCaptureId: beforeContext.payload.sourceCaptureId,
+              capturedId: current.id,
+            },
+            [current.id, performed.id],
+          );
+      }
+      return { current, performed };
     }
-    // Declared commerce/choices and unknown context keep their strict original
-    // before/action/after comparison. Lightweight facts never replace those images.
+    // Other inputs and unknown context keep their strict original before/action/after
+    // comparison. Lightweight facts never replace those images.
     if (before.kind !== 'capture') {
       before = await walk.captureSettled();
       beforeContext = await readContext(before);
@@ -956,6 +1011,48 @@ export class Runner {
       return { current: await walk.captureSettled() };
     }
     const current = await walk.captureSettled();
+    await this.compareAcross(run, walk, beforeContext, performed, current);
+    return { current, performed };
+  }
+  /** Once per page address: its prices or choices could not be fully read, so a price
+   * change during its Tab steps is not checked (save uncertainty, not a website defect). */
+  private uncheckedTabPrices(run: Run, beforeContext: RecordEntry) {
+    const data = beforeContext.payload.data;
+    if (data?.commerce != null && data.choicesComplete === true) return;
+    const original = this.store.record(run.id, beforeContext.payload.sourceCaptureId);
+    const url = original?.payload.url ?? null;
+    if (
+      this.store
+        .records(run.id)
+        .some(
+          (record) =>
+            record.kind === 'limit' &&
+            record.payload.method === 'tab_prices_unread/1' &&
+            record.payload.url === url,
+        )
+    )
+      return;
+    this.store.append(
+      run.id,
+      'limit',
+      'browser',
+      {
+        method: 'tab_prices_unread/1',
+        url,
+        reason:
+          'This page does not declare all its prices and choices in a readable form, so a price change during Tab steps here was not checked. This is not a website defect.',
+      },
+      original ? [original.id] : [],
+    );
+  }
+  /** Compares prices and choices before and after one input on two real screenshots. */
+  private async compareAcross(
+    run: Run,
+    walk: BrowserWalk,
+    beforeContext: RecordEntry | undefined,
+    performed: RecordEntry,
+    current: RecordEntry,
+  ) {
     try {
       const afterContext = await readJourneyContext(walk, current);
       if (beforeContext?.payload.stable === true && afterContext.payload.stable === true) {
@@ -975,7 +1072,6 @@ export class Runner {
         [performed.id, current.id],
       );
     }
-    return { current, performed };
   }
   private async automaticMeasurement(
     run: Run,
