@@ -145,15 +145,46 @@ export const phaseLimits = (runLimitMicros: number) =>
   ) as Record<keyof typeof PHASE_SHARE, number>;
 /** The role limits of a $3 audit, the amount the controlled tests approve. */
 export const PHASE = phaseLimits(3_000_000);
-// Configured capacity for the fixed muse-spark-1.3 model, verified 28 October 2026.
+// Configured capacity shared by every Muse Spark 1.3 model ID, verified 28 October 2026.
 // https://dev.meta.ai/docs/models — input and reserved output share this window.
 // This is documented configuration, not automatic provider-capability discovery.
 export const MODEL_CONTEXT_TOKENS = 1_048_576;
 // Preserve the legacy final-review money reserve independently of model capacity.
 // It does not guarantee that a full-context final review fits the remaining budget.
 export const FINAL_REVIEW_RESERVE_MICROS = 109_816;
-export const CAPS = {
-  driver: { input: MODEL_CONTEXT_TOKENS - 4096, output: 4096, effort: 'low' },
-  analyst: { input: MODEL_CONTEXT_TOKENS - 8192, output: 8192, effort: 'low' },
-  reviewer: { input: MODEL_CONTEXT_TOKENS - 8192, output: 8192, effort: 'medium' },
+// Pay-as-you-go prices in billionths of a dollar per token, verified 31 October 2026 at
+// https://dev.meta.ai/docs/pricing-rate-limits. Contributor mode is the same model at a
+// lower price, in exchange for Meta being allowed to train on what is sent and returned.
+export const MODEL_PRICES = {
+  'muse-spark-1.3': { input: 1250, output: 4250 },
+  'muse-spark-1.3-contributor': { input: 100, output: 200 },
 } as const;
+export type ReasoningModel = keyof typeof MODEL_PRICES;
+/** Integer millionths of a dollar, rounded up, for one request's tokens. */
+export const tokenCostMicros = (model: ReasoningModel, input: number, output: number) =>
+  Math.ceil((input * MODEL_PRICES[model].input + output * MODEL_PRICES[model].output) / 1000);
+// Each role names its own model (owner, 31 Oct: Contributor mode for all three).
+// Journey planning is a navigator request and uses the navigator's model.
+export const CAPS = {
+  driver: {
+    model: 'muse-spark-1.3-contributor',
+    input: MODEL_CONTEXT_TOKENS - 4096,
+    output: 4096,
+    effort: 'low',
+  },
+  analyst: {
+    model: 'muse-spark-1.3-contributor',
+    input: MODEL_CONTEXT_TOKENS - 8192,
+    output: 8192,
+    effort: 'low',
+  },
+  reviewer: {
+    model: 'muse-spark-1.3-contributor',
+    input: MODEL_CONTEXT_TOKENS - 8192,
+    output: 8192,
+    effort: 'medium',
+  },
+} as const satisfies Record<
+  Exclude<Role, 'sam'>,
+  { model: ReasoningModel; input: number; output: number; effort: string }
+>;

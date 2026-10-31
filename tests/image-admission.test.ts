@@ -251,7 +251,9 @@ test('All fifty actual image attachments still pass exact counting and unchanged
         () => ({
           approvedBy: 'Adriano',
           maxUsd: 3,
-          maxRunUsd: 3,
+          // At the Contributor price 700,000 counted tokens cost about $0.07: beyond the
+          // analyst's $0.066 share of a $0.30 run, but within the run itself.
+          maxRunUsd: 0.3,
           approvedAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() + 60000).toISOString(),
         }),

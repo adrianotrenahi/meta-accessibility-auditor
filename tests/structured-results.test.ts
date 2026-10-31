@@ -6,7 +6,13 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { Store, digest } from '../src/store.js';
 import { EvidenceRequestLimit } from '../src/request-evidence.js';
-import { CAPS, MODEL_CONTEXT_TOKENS, FINAL_REVIEW_RESERVE_MICROS, PHASE } from '../src/types.js';
+import {
+  CAPS,
+  MODEL_CONTEXT_TOKENS,
+  FINAL_REVIEW_RESERVE_MICROS,
+  PHASE,
+  tokenCostMicros,
+} from '../src/types.js';
 import {
   MetaModels,
   IncompleteModelResult,
@@ -24,7 +30,8 @@ const analysisResult = {
 };
 const reviewerResult = { decisions: [], criterionDecisions: [] };
 const usage = { input_tokens: 100, output_tokens: 20 };
-const expectedCost = Math.ceil(usage.input_tokens * 1.25 + usage.output_tokens * 4.25);
+const expectedCost = (role: 'driver' | 'analyst' | 'reviewer') =>
+  tokenCostMicros(CAPS[role].model, usage.input_tokens, usage.output_tokens);
 const message = (text: string) => ({
   id: 'msg_mock_result',
   type: 'message',
@@ -100,6 +107,7 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
       assert.equal(Object.hasOwn(body, 'tools'), false);
       assert.equal(Object.hasOwn(body, 'tool_choice'), false);
       assert.equal(Object.hasOwn(body, 'parallel_tool_calls'), false);
+      assert.equal(body.model, CAPS[role].model);
       assert.equal(body.reasoning.effort, role === 'analyst' ? 'low' : 'medium');
       assert.equal(body.max_output_tokens, 8192);
       assert.equal(body.store, false);
@@ -108,7 +116,7 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
       const record = x.store.records(x.run.id).find((entry) => entry.kind === 'model_response')!;
       assert.equal(record.payload.instructionHash, digest(body.instructions));
       assert.deepEqual(record.payload.output, output, 'Original provider messages remain intact.');
-      assert.equal(x.store.usage(x.run.id).spent, expectedCost);
+      assert.equal(x.store.usage(x.run.id).spent, expectedCost(role));
       assert.equal(x.store.usage(x.run.id).reserved, 0);
       assert.equal(x.store.usage(x.run.id).requests[0].status, 'completed');
     } finally {
@@ -179,7 +187,7 @@ test('An incomplete response is never parsed even when its text is valid schema 
         'Incomplete content cannot enter result validation or publication.',
       );
       assert.equal(x.requests.length, 2, 'No automatic request retry.');
-      assert.equal(x.store.usage(x.run.id).spent, expectedCost);
+      assert.equal(x.store.usage(x.run.id).spent, expectedCost(role));
       assert.equal(x.store.usage(x.run.id).reserved, 0);
       assert.equal(x.store.usage(x.run.id).requests[0].status, 'incomplete');
       assert.deepEqual(x.store.published(x.run.id), []);
@@ -212,7 +220,7 @@ test('Malformed, schema-invalid and refusal results retain known charges without
       await assert.rejects(() => x.model.reason(x.run.id, 'analyst', [], [], analysisSchema));
       assert.equal(x.requests.length, 2, 'A failed constrained result is not silently retried.');
       const recorded = x.store.usage(x.run.id);
-      assert.equal(recorded.spent, expectedCost);
+      assert.equal(recorded.spent, expectedCost('analyst'));
       assert.equal(recorded.reserved, 0);
       assert.equal(recorded.requests[0].status, 'invalid_result');
       assert.deepEqual(x.store.published(x.run.id), []);
@@ -362,8 +370,9 @@ test('Simulated counts above the old role ceilings retain full selected original
 
 test('A request inside the model window cannot exceed owner run or aggregate money limits', async () => {
   for (const spending of [
-    { maxUsd: 2, maxRunUsd: 0.05 },
-    { maxUsd: 0.05, maxRunUsd: 1 },
+    // The 34,655-token navigator request reserves $0.004286 at the Contributor price.
+    { maxUsd: 2, maxRunUsd: 0.004 },
+    { maxUsd: 0.004, maxRunUsd: 1 },
   ]) {
     const x = setup({ status: 'completed', usage, output: [] }, 34655, spending);
     try {
@@ -382,7 +391,12 @@ test('A request inside the model window cannot exceed owner run or aggregate mon
 
 test('The complete context still refuses a request beyond its unchanged phase money allowance', async () => {
   for (const role of ['analyst', 'reviewer'] as const) {
-    const x = setup({ status: 'completed', usage, output: [] }, CAPS[role].input);
+    // A full-context Contributor request costs about $0.106: inside a $0.30 run, beyond the
+    // analyst's or reviewer's $0.066 share of it.
+    const x = setup({ status: 'completed', usage, output: [] }, CAPS[role].input, {
+      maxUsd: 10,
+      maxRunUsd: 0.3,
+    });
     try {
       await assert.rejects(
         () =>
@@ -451,7 +465,8 @@ test('A driver request at the exact context boundary is admitted only when its m
   const output = [
     { type: 'function_call', name: 'return_result', arguments: JSON.stringify(result) },
   ];
-  for (const maxRunUsd of [3, 1]) {
+  // The full-context Contributor request costs $0.105268: inside $3, outside $0.10.
+  for (const maxRunUsd of [3, 0.1]) {
     const x = setup(
       { status: 'completed', usage: { input_tokens: count, output_tokens: 20 }, output },
       count,
@@ -463,8 +478,8 @@ test('A driver request at the exact context boundary is admitted only when its m
         assert.equal(x.requests.length, 2);
         assert.equal(x.requests[1].body.max_output_tokens + count, MODEL_CONTEXT_TOKENS);
         const charge = x.store.usage(x.run.id);
-        assert.equal(charge.requests[0].reserved, 1323008);
-        assert.equal(charge.spent, Math.ceil(count * 1.25 + 20 * 4.25));
+        assert.equal(charge.requests[0].reserved, 105268);
+        assert.equal(charge.spent, tokenCostMicros(CAPS.driver.model, count, 20));
         assert.equal(charge.reserved, 0);
       } else {
         await assert.rejects(
@@ -478,6 +493,36 @@ test('A driver request at the exact context boundary is admitted only when its m
         );
         assert.deepEqual(x.store.usage().requests, []);
       }
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('Navigator, analyst and reviewer each call Contributor mode and are charged its price', async () => {
+  // Owner decision, 31 October: all three roles use muse-spark-1.3-contributor.
+  for (const role of ['driver', 'analyst', 'reviewer'] as const) {
+    assert.equal(CAPS[role].model, 'muse-spark-1.3-contributor');
+    const output =
+      role === 'driver'
+        ? [
+            {
+              type: 'function_call',
+              name: 'return_result',
+              arguments: JSON.stringify({ kind: 'finish', note: 'Done.' }),
+            },
+          ]
+        : [message(JSON.stringify(role === 'analyst' ? analysisResult : reviewerResult))];
+    const schema =
+      role === 'driver' ? actionSchema : role === 'analyst' ? analysisSchema : reviewSchema;
+    const x = setup({ status: 'completed', usage, output });
+    try {
+      await x.model.reason<unknown>(x.run.id, role, [], [], schema);
+      for (const request of x.requests)
+        assert.equal(request.body.model, 'muse-spark-1.3-contributor');
+      // 100 input tokens at $0.10 and 20 output tokens at $0.20 per million: 14 millionths
+      // of a dollar, where the Standard price would have charged 210.
+      assert.equal(x.store.usage(x.run.id).spent, 14);
     } finally {
       x.close();
     }

@@ -7,7 +7,9 @@ import { randomUUID } from 'node:crypto';
 import { Store, digest } from '../src/store.js';
 import { MetaModels } from '../src/models.js';
 import { JourneyPlanner, journeyPlanView } from '../src/journey-planner.js';
-import type { Approval } from '../src/types.js';
+import { CAPS, tokenCostMicros, type Approval } from '../src/types.js';
+// The planner's 10 counted input and 20 output tokens, at the navigator model's price.
+const planCharge = tokenCostMicros(CAPS.driver.model, 10, 20);
 
 const planned = {
   steps: [
@@ -113,7 +115,7 @@ test('parallel identical planning requests buy one proposal and retain the same 
     assert.equal(charge.requests.length, 1);
     assert.equal(charge.requests[0].role, 'driver');
     assert.equal(charge.requests[0].status, 'completed');
-    assert.equal(charge.spent, 98);
+    assert.equal(charge.spent, planCharge);
     assert.equal(charge.reserved, 0);
     assert.equal(f.calls[1].body.text.format.name, 'driver_result');
     assert.equal(f.calls[1].body.tools, undefined);
@@ -153,7 +155,7 @@ test('invalid returned steps retain the charge and never become a fallback plan'
     assert.equal(again.plan, null);
     assert.equal(journeyPlanView(again).state, 'unavailable');
     assert.equal(f.calls.length, 2);
-    assert.equal(f.store.usage(again.run.id).spent, 98);
+    assert.equal(f.store.usage(again.run.id).spent, planCharge);
     assert.equal(
       f.store.records(again.run.id).some((r) => r.kind === 'plan'),
       false,
@@ -228,7 +230,7 @@ test('an explicit same-draft retry recovers a failed count only when no generati
       'Only the explicit retry sends another count and one generation.',
     );
     assert.equal(f.store.usage(ready.run.id).requests.length, 1);
-    assert.equal(f.store.usage(ready.run.id).spent, 98);
+    assert.equal(f.store.usage(ready.run.id).spent, planCharge);
     assert.deepEqual(f.store.records(ready.run.id).slice(0, failedRecords.length), failedRecords);
     assert.throws(() => f.store.retryUnsentJourneyDraft(f.binding));
     await f.planner.stop(ready.run.id);

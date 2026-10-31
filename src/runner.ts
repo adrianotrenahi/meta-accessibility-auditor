@@ -28,7 +28,7 @@ import {
   reviewSchema,
   type Action,
 } from './models.js';
-import { LIMITS, type Approval, type RecordEntry, type Run } from './types.js';
+import { CAPS, LIMITS, type Approval, type RecordEntry, type Run } from './types.js';
 import {
   ORDERED_JOURNEY_VERSION,
   approvedJourneyPlanSchema,
@@ -270,7 +270,14 @@ export class Runner {
             : {}),
           mode: run.mode,
           model:
-            run.mode === 'offline' ? 'Saved offline examples; no AI inference' : 'muse-spark-1.3',
+            run.mode === 'offline'
+              ? 'Saved offline examples; no AI inference'
+              : {
+                  driver: CAPS.driver.model,
+                  analyst: CAPS.analyst.model,
+                  reviewer: CAPS.reviewer.model,
+                  sam: 'sam-3.1',
+                },
           stopBoundary: 'No orders, payments, account creation or bookings.',
           ...(walk.publicWebsite
             ? {
