@@ -7,7 +7,7 @@ import { classifyDeviceScope } from './deviceScope';
 import { railGroupKey } from '@/components/audits/railGroupKey';
 import { metaActivitySchema, metaActivityThoughts } from './metaActivity';
 import { metaAnalysisSchema, metaAnalysisAttribution } from './metaAnalysis';
-import { normalizeMetaScreenStates, metaScreenGroups } from './metaScreenState';
+import { normalizeMetaScreenStates, metaReportScreens } from './metaScreenState';
 import { metaJourneySchema, metaJourneyFits } from './metaJourney';
 
 const id = z.string().min(1).max(200);
@@ -263,22 +263,27 @@ export function projectMetaWalk(snapshot: HostSnapshot, host?: {sessionId: strin
       snapshot.run.stopReason === "The website presented an access-denied entry page. The requested journey was not reached; no model request was made."
       ? "access_denied" : "skipped", aiAnalysisError: null, source: "autonomous",
   }));
-  const groups = metaScreenGroups(snapshot.captures);
   const originalsById = new Map(originals.map((step) => [step.id, step]));
-  const screenForCapture = new Map(groups.flatMap((group) =>
-    group.originals.map((capture) => [capture.id, group.primary.id] as const)));
-  const steps: AuditStep[] = groups.map((group, order) => {
-    const primary = originalsById.get(group.primary.id)!;
+  const screens = metaReportScreens(snapshot, (capture) => {
+    const step = originalsById.get(capture.id)!;
+    return railGroupKey(step, step.pageTitle || 'Untitled');
+  });
+  const screenForCapture = new Map(screens.flatMap((screen) =>
+    screen.captures.map((capture) => [capture.id, screen.primary.id] as const)));
+  const steps: AuditStep[] = screens.map((screen, order) => {
+    const primary = originalsById.get(screen.primary.id)!;
     return {
       ...primary, order,
-      showOriginalVariants: group.originals.length > 1,
-      screenshotVariants: group.originals.flatMap((capture, index) =>
+      aiAnalysisStatus: primary.aiAnalysisStatus === "access_denied" ? primary.aiAnalysisStatus
+        : screen.analysed ? "analyzed" : live && snapshot.run.state === "running" ? "pending" : "skipped",
+      showOriginalVariants: screen.originals.length > 1,
+      screenshotVariants: screen.originals.flatMap((capture, index) =>
         originalsById.get(capture.id)!.screenshotVariants.map((variant) => ({
           ...variant,
-          label: group.originals.length > 1 ? `Original ${index + 1}` : variant.label,
+          label: screen.originals.length > 1 ? `Original ${index + 1}` : variant.label,
         }))),
-      notes: group.originals.length > 1
-        ? `${primary.notes} ${group.originals.length} original pictures are retained for this screen state. Their focus and evidence checks remain separate; grouping does not establish that any check passed.`
+      notes: screen.originals.length > 1
+        ? `${primary.notes} ${screen.originals.length} original pictures are shown for this screen. Their focus and evidence checks remain separate; grouping does not establish that any check passed.`
         : primary.notes,
     };
   });
@@ -309,18 +314,6 @@ export function projectMetaWalk(snapshot: HostSnapshot, host?: {sessionId: strin
     };
   });
   const latest = snapshot.captures.at(-1);
-  // New explicit state receipts retain a row for a modal/menu/viewport change.
-  // Legacy originals keep their previous consecutive page-visit preview only.
-  const pageVisits: AuditStep[] = [];
-  const explicitStates = new Set(snapshot.captures.filter((capture) => capture.screenState).map((capture) => capture.id));
-  for (const step of steps) {
-    const previous = pageVisits.at(-1);
-    const key = railGroupKey(step, step.pageTitle || 'Untitled');
-    if (!explicitStates.has(step.id) && previous && !explicitStates.has(previous.id) &&
-      railGroupKey(previous, previous.pageTitle || 'Untitled') === key)
-      pageVisits[pageVisits.length - 1] = step;
-    else pageVisits.push(step);
-  }
   const scope: AuditScope = { siteHost: new URL(snapshot.run.url).host,
     entryUrl: snapshot.run.url, journey: snapshot.run.goal, flowSteps: [],
     devices: ["desktop"], source: "autonomous", recordedAnalysis: metaAnalysisAttribution(snapshot, sessionId) };
@@ -329,7 +322,7 @@ export function projectMetaWalk(snapshot: HostSnapshot, host?: {sessionId: strin
     currentUrl: latest?.url, pageTitle: latest?.title,
     screenshotUrl: latest?.imageAvailable ? imageUrl(latest.imageHash) : undefined,
     screensFinal: snapshot.run.state !== "running",
-    screens: pageVisits.map((step, index) => ({ order: index, label: step.pageTitle || `Screen ${index + 1}`,
+    screens: steps.map((step, index) => ({ order: index, label: step.pageTitle || `Screen ${index + 1}`,
       url: step.url!, screenshotUrl: step.screenshotUrl ?? undefined, status: "captured", kind: "screen" })),
     tasks: [],
     thoughts: metaActivityThoughts(snapshot),
@@ -353,7 +346,7 @@ export function projectMetaWalk(snapshot: HostSnapshot, host?: {sessionId: strin
     priceWalk: [], rootCauses: [], dimensionNotes: {}, featureNotes: [], promptHash: null,
     generatedAt: snapshot.run.createdAt,
   };
-  return { steps, issues, scope, progress, synthesis, rubric: null,
+  return { steps, screens, issues, scope, progress, synthesis, rubric: null,
     sources: new Map(snapshot.findings.map((finding) => [finding.id, {
       candidateHash: finding.candidateHash, reviewHash: finding.reviewHash,
       provenance: finding.reviewProvenance, captureIds: finding.captureIds, sourceIds: finding.sourceIds,
