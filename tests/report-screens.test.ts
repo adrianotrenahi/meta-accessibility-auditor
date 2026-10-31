@@ -119,3 +119,29 @@ test('Two analysed pictures of one page are two screens: the cookie banner and t
     ],
   );
 });
+
+test('A screen that proved a finished step still shows when its analysis never came back', () => {
+  // 31 Oct: Meta's analysis of the home page and of the Barcelona to London screen failed.
+  const screens = metaReportScreens(
+    {
+      captures: [capture(1, home), capture(2, flights), capture(3, flights), capture(4, flights)],
+      analysis: {
+        completed: [
+          { role: 'analyst', captureIds: ['c2'] },
+          { role: 'reviewer', captureIds: ['c2'] },
+        ],
+      },
+      findings: [],
+      journey: { completed: [{ captureId: 'c1' }, { captureId: 'c2' }, { captureId: 'c4' }] },
+    },
+    key,
+  );
+  assert.deepEqual(
+    screens.map((s) => [s.primary.id, s.analysed]),
+    [
+      ['c1', false],
+      ['c2', true],
+      ['c4', false],
+    ],
+  );
+});

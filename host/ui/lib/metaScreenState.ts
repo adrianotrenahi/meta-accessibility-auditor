@@ -65,20 +65,28 @@ export function metaScreenGroups<T extends StateCapture>(captures: readonly T[])
  * one page visit, as the strip always did; a modal, menu or viewport change starts its own.
  * Every picture the analyst read, or a finding points to, is its own screen, so the Booking.com
  * cookie banner and the home page behind it both show and pins stay on their own image. A
- * visit nobody analysed shows its latest picture. Every original stays in `captures`. */
+ * picture that proved a finished journey step is also its own
+ * screen even when its analysis never came back (owner, 31 Oct: a failed analysis hid the
+ * Barcelona to London screen the robot had reached); it is marked as not analysed. A visit
+ * nobody checked shows its latest picture. Every original stays in `captures`. */
 export function metaReportScreens<T extends StateCapture>(
   snapshot: {
     captures: readonly T[];
     analysis?: { completed: { role: string; captureIds: string[] }[] };
     findings: readonly { captureIds: string[]; anchor: { captureId: string } | null }[];
+    journey?: { completed: readonly { captureId: string }[] };
   },
   pageKey: (capture: T) => string,
 ) {
-  const read = new Set([
+  const analysed = new Set([
     ...(snapshot.analysis?.completed ?? [])
       .filter((row) => row.role === 'analyst')
       .flatMap((row) => row.captureIds),
     ...snapshot.findings.map((finding) => finding.anchor?.captureId ?? finding.captureIds[0]!),
+  ]);
+  const shown = new Set([
+    ...analysed,
+    ...(snapshot.journey?.completed ?? []).map((row) => row.captureId),
   ]);
   const explicit = (capture: T) => capture.screenState !== undefined;
   const visits: { first: T; captures: T[] }[] = [];
@@ -90,15 +98,20 @@ export function metaReportScreens<T extends StateCapture>(
     else visits.push({ first: group.primary, captures: [...group.originals] });
   }
   return visits.flatMap(({ captures }) => {
-    if (!captures.some((capture) => read.has(capture.id)))
+    if (!captures.some((capture) => shown.has(capture.id)))
       return [{ primary: captures.at(-1)!, originals: [captures.at(-1)!], captures, analysed: false }];
-    // Unread pictures belong to the analysed screen they lead up to, or else the last one.
+    // Unshown pictures belong to the screen they lead up to, or else the last one.
     const screens: { primary: T; originals: T[]; captures: T[]; analysed: boolean }[] = [];
     let waiting: T[] = [];
     for (const capture of captures) {
       waiting.push(capture);
-      if (!read.has(capture.id)) continue;
-      screens.push({ primary: capture, originals: [capture], captures: waiting, analysed: true });
+      if (!shown.has(capture.id)) continue;
+      screens.push({
+        primary: capture,
+        originals: [capture],
+        captures: waiting,
+        analysed: analysed.has(capture.id),
+      });
       waiting = [];
     }
     screens.at(-1)!.captures.push(...waiting);

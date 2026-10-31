@@ -36,7 +36,15 @@ import {
   reviewSchema,
   type Action,
 } from './models.js';
-import { CAPS, LIMITS, type Approval, type RecordEntry, type Run } from './types.js';
+import {
+  CAPS,
+  DECISIONS_PER_FORM_STEP,
+  DECISIONS_PER_STEP,
+  LIMITS,
+  type Approval,
+  type RecordEntry,
+  type Run,
+} from './types.js';
 import {
   ORDERED_JOURNEY_VERSION,
   approvedJourneyPlanSchema,
@@ -79,17 +87,39 @@ export const defaultEngine = (publicWebsite: boolean) =>
 /** The navigator sees one screenshot per decision, the current one, so a "step finished"
  * answer that names no screenshot can only mean that one (owner, 31 Oct: such an answer
  * ended a Booking.com audit). The engine fills it in; the usual freshness check still runs
- * before any step is recorded as finished. */
-export const completionOnScreen = (currentCaptureId: string) =>
-  z.preprocess(
-    (value) =>
-      value &&
-      typeof value === 'object' &&
-      (value as { kind?: unknown }).kind === 'step_done' &&
-      (value as { captureId?: unknown }).captureId == null
-        ? { ...value, captureId: currentCaptureId }
-        : value,
-    navigationActionSchema,
+ * before any step is recorded as finished. A control named both by its number and by its
+ * role and name is kept by number when both describe the same listed control on this screen;
+ * if they disagree, the answer is still refused and the navigator is asked again. */
+export const completionOnScreen = (
+  currentCaptureId: string,
+  elements: readonly { id?: unknown; role?: unknown; name?: unknown }[] = [],
+) =>
+  z.preprocess((value) => {
+    if (!value || typeof value !== 'object') return value;
+    const answer = value as Record<string, unknown>;
+    if (answer.kind === 'step_done' && answer.captureId == null)
+      return { ...answer, captureId: currentCaptureId };
+    if (
+      answer.kind === 'focus_target' &&
+      answer.targetId &&
+      (answer.targetRole || answer.targetName)
+    ) {
+      const listed = elements.find((element) => element.id === answer.targetId);
+      if (listed && listed.role === answer.targetRole && listed.name === answer.targetName) {
+        const { targetRole: _role, targetName: _name, ...byNumber } = answer;
+        return byNumber;
+      }
+    }
+    return value;
+  }, navigationActionSchema);
+/** Whether a screenshot shows a form: somewhere to type, pick a date or choose an option. */
+export const showsForm = (capture: RecordEntry) =>
+  Array.isArray(capture.payload.elements) &&
+  capture.payload.elements.some(
+    (element: { role?: unknown; tag?: unknown }) =>
+      ['textbox', 'searchbox', 'combobox', 'spinbutton', 'listbox', 'radio', 'checkbox'].includes(
+        String(element.role),
+      ) || ['input', 'select', 'textarea'].includes(String(element.tag)),
   );
 export class Runner {
   private readonly targetJourneyContexts = new WeakMap<BrowserWalk, Map<string, RecordEntry>>();
@@ -582,29 +612,43 @@ export class Runner {
     const models = new MetaModels(this.store);
     const returnEvidence = new ReturnEvidence(this.store, run.id);
     let current = start;
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15 * 60000)]);
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(LIMITS.minutes * 60000),
+    ]);
     let unchangedTraversal = 0;
     let unreachedTargets = 0;
     let decisionAllowanceSpent = true;
     let refusedAnswers = 0;
     let finalReviewSafe = true;
     const track = new AnalysisTrack();
-    const remainingDecisions = Math.max(
-      0,
-      LIMITS.driver -
-        this.store.usage(run.id).requests.filter((request) => request.role === 'driver').length,
-    );
+    // Each journey step has its own allowance; a walk without a plan is one step.
+    let stepId: string | undefined;
+    let stepDecisions = 0;
+    let stepHasForm = false;
+    let stepTitle = '';
     try {
-      for (let i = 0; i < remainingDecisions; i++) {
+      for (let i = 0; ; i++) {
         walk.assertActive();
         if (this.stopForDeniedPage(run, walk, current)) return;
         current = await this.requestedChecks(track, run, walk, probe, current, signal);
         if (this.stopForDeniedPage(run, walk, current)) return;
         const journey = readOrderedJourney(this.store.records(run.id));
-        if (journey && !currentJourneyInstruction(journey).currentStep) {
+        const step = journey && currentJourneyInstruction(journey).currentStep;
+        if (journey && !step) {
           decisionAllowanceSpent = false;
           break;
         }
+        const id = step ? step.id : 'walk';
+        if (id !== stepId) {
+          stepId = id;
+          stepDecisions = 0;
+          stepHasForm = false;
+          stepTitle = step ? step.text : '';
+        }
+        stepHasForm ||= showsForm(current);
+        if (stepDecisions >= (stepHasForm ? DECISIONS_PER_FORM_STEP : DECISIONS_PER_STEP)) break;
+        stepDecisions++;
         const snap = requestEvidence(this.store, run.id, 'driver', current);
         let action;
         try {
@@ -613,7 +657,10 @@ export class Runner {
             'driver',
             snap.records,
             walk.images(imageRecordsForRead(snap)),
-            completionOnScreen(current.id),
+            completionOnScreen(
+              current.id,
+              Array.isArray(current.payload.elements) ? current.payload.elements : [],
+            ),
             false,
             signal,
             snap.read,
@@ -910,9 +957,9 @@ export class Runner {
           'limit',
           'driver',
           {
-            reason: readOrderedJourney(this.store.records(run.id))
-              ? 'The robot used its remaining navigation decisions and stopped. Planning and navigation share at most twenty driver requests; this limit does not establish a website defect.'
-              : 'The robot used its twenty navigation decisions and stopped. This limit does not establish a website defect.',
+            reason: `The robot used its ${stepDecisions} navigation decisions for ${
+              stepTitle ? `the step "${stepTitle}"` : 'this walk'
+            } and stopped. This limit does not establish a website defect.`,
           },
           [current.id],
         );

@@ -1,3 +1,4 @@
+import { LIMITS } from '../src/types.js';
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -337,7 +338,7 @@ test('Cancelled traversal and stale source refuse before a key; physical action 
       ActionStateChanged,
     );
     const current = await x.walk.captureSettled();
-    x.walk.actions = 119;
+    x.walk.actions = LIMITS.actions - 1;
     await assert.rejects(
       walkToKeyboardTarget(
         x.walk,
@@ -351,7 +352,7 @@ test('Cancelled traversal and stale source refuse before a key; physical action 
       /action limit/,
     );
     assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length, 1);
-    assert.equal(x.walk.actions, 120);
+    assert.equal(x.walk.actions, LIMITS.actions);
   } finally {
     await x.close();
   }

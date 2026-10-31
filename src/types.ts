@@ -127,8 +127,10 @@ export interface Approval {
 export const LIMITS = {
   // Owner, 31 Oct: at most $10 per audit and no project total.
   runMicros: 10_000_000,
-  actions: 120,
-  minutes: 15,
+  // Owner, 31 Oct: the navigator's allowance is per journey step (below), so the whole-audit
+  // time and key limits must leave room for several steps.
+  actions: 600,
+  minutes: 45,
   driver: 20,
   analyst: 8,
   reviewer: 4,
@@ -136,6 +138,10 @@ export const LIMITS = {
   voiceOverCheckpoints: 2,
   voiceOverCommands: 12,
 } as const;
+/** Navigator decisions per journey step (owner, 31 Oct: "PER STEP, not for the entire audit"),
+ * and per step whose page shows a form, where typing and choosing take more decisions. */
+export const DECISIONS_PER_STEP = 24;
+export const DECISIONS_PER_FORM_STEP = 32;
 /** Each role's share of one audit's limit, so the split holds at any approved amount. At
  * $3 it matches the original $1.60 / $0.65 / $0.65 / $0.10 split within a cent. */
 export const PHASE_SHARE = { driver: 0.53, analyst: 0.22, reviewer: 0.22, sam: 0.03 } as const;

@@ -137,3 +137,31 @@ test('A "step finished" answer that names no screenshot means the current one', 
     note: 'Next',
   });
 });
+
+test('A control named both by number and by name is kept when both mean the same control', () => {
+  const current = '18fc92b1-5517-468b-ae05-f22e31a3c232';
+  const elements = [
+    { id: 'e9', role: 'menuitem', name: 'Flights' },
+    { id: 'e10', role: 'menuitem', name: 'Car rental' },
+  ];
+  // The answer refused at 63 s in the 31 Oct Booking.com audit.
+  const answer = {
+    kind: 'focus_target',
+    note: 'Reach Flights nav item to open flight search',
+    targetId: 'e9',
+    targetRole: 'menuitem',
+    targetName: 'Flights',
+    traversalKey: 'Tab',
+  };
+  assert(!navigationActionSchema.safeParse(answer).success, 'the plain rules refuse it');
+  const kept = completionOnScreen(current, elements).parse(answer);
+  assert.equal(kept.targetId, 'e9');
+  assert(!('targetRole' in kept) && !('targetName' in kept));
+  // Number and name that point to different controls stay refused.
+  assert(
+    !completionOnScreen(current, elements).safeParse({ ...answer, targetName: 'Car rental' })
+      .success,
+  );
+  // A number that is not on this screen stays refused too.
+  assert(!completionOnScreen(current, elements).safeParse({ ...answer, targetId: 'e99' }).success);
+});
