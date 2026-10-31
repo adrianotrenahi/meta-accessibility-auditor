@@ -10,6 +10,34 @@ import { openJourneyDrafts, checkedJourneyPlanReference } from "./journey-drafts
 import { recoverUnstartedJourneyJob, confirmJourneyJobDiscard } from "./journey-job-cleanup.mjs";
 import { createMetaEngineCall, createJourneyPlanPreparer } from "./engine-call.mjs";
 const uuid = /^[a-f0-9-]{36}$/;
+/**
+ * The run page asks for the run twice a second, and the engine builds each answer in the same
+ * program that drives the robot. While a run is going, an answer this recent is shared.
+ */
+export const RUN_READ_REUSE_MS = 1500;
+export function recentRunReads(read, now = () => performance.now()) {
+  const kept = new Map();
+  return {
+    read(job) {
+      if (job.deleted || job.discarding || job.engineId === null) return null;
+      const last = kept.get(job.id);
+      if (last && last.engineId === job.engineId && now() - last.at < RUN_READ_REUSE_MS)
+        return last.read;
+      const fresh = read(job).then((value) => {
+        // Only a running run's answer is shared; an ended one is read afresh each time.
+        if (value?.snapshot.run.state !== "running" && kept.get(job.id)?.read === fresh)
+          kept.delete(job.id);
+        return value;
+      });
+      kept.set(job.id, { at: now(), engineId: job.engineId, read: fresh });
+      fresh.catch(() => {
+        if (kept.get(job.id)?.read === fresh) kept.delete(job.id);
+      });
+      return fresh;
+    },
+    forget: (id) => kept.delete(id),
+  };
+}
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 /** The one local user. Audits belong to the account, not to a browser, so every
  * browser on this computer sees the same audits, and no other account's. */
@@ -297,7 +325,7 @@ export async function startMetaFunnelProof({
       )
         throw Error("Unsupported offline proof settings.");
     };
-    const data = async (job) => {
+    const readData = async (job) => {
       if (job.deleted || job.discarding || job.engineId === null) return null;
       // Return core records before the browser's 6s timeout, even if the optional read stalls.
       const optionalDeadline = performance.now() + 5000;
@@ -335,6 +363,8 @@ export async function startMetaFunnelProof({
       if (job.deleted || job.discarding) return null;
       return value;
     };
+    const recentReads = recentRunReads(readData);
+    const data = (job) => recentReads.read(job);
     const jobView = (job, value) => {
       if (!value)
         return {
@@ -399,6 +429,8 @@ export async function startMetaFunnelProof({
       if (discards.has(job.id)) return discards.get(job.id);
       job.discarding = true;
       job.discardError = null;
+      // A discarded run is never read again, so its last shared answer is dropped.
+      recentReads.forget(job.id);
       const pending = (async () => {
         try {
           await persist();
@@ -683,6 +715,7 @@ export async function startMetaFunnelProof({
                 "POST",
                 action === "advance" ? { sequence: body.sequence } : {},
               );
+              recentReads.forget(job.id);
               return json(200, { accepted: true });
             }
             if (req.method === "GET" && action === "assets" && hash) {

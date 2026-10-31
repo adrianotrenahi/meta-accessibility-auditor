@@ -1005,12 +1005,16 @@ export class Store {
   image(runId: string, name: string) {
     this.run(runId);
     if (!/^[a-zA-Z0-9_-]+\.png$/.test(name)) throw Error('Invalid image.');
-    const original = this.records(runId).find(
-      (r) => r.kind === 'capture' && r.payload.imageFile === name,
-    );
+    // Only the capture that saved this file: the audits page asks for every screenshot twice a
+    // second, and re-reading the whole run once per screenshot made each step slower than the last.
+    const original = this.db
+      .prepare(
+        "SELECT body FROM records WHERE run_id=? AND kind='capture' AND json_extract(body,'$.imageFile')=? ORDER BY seq LIMIT 1",
+      )
+      .get(runId, name) as { body: string } | undefined;
     if (!original) throw Error('The original capture record is missing.');
     const bytes = readFileSync(join(this.dir, runId, name));
-    if (digest(bytes) !== original.payload.imageHash)
+    if (digest(bytes) !== JSON.parse(original.body).imageHash)
       throw Error('The original image has changed; its evidence cannot be used.');
     return bytes;
   }
