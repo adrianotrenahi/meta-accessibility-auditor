@@ -9,6 +9,7 @@ import {
   RELOAD_QUIET_MS,
   BrowserWalk,
   MeasurementStateChanged,
+  ActionLimitReached,
   ActionStateChanged,
 } from './browser.js';
 import { documentWasReplaced } from './page-observation.js';
@@ -628,6 +629,7 @@ export class Runner {
     let stepHasForm = false;
     let stepTitle = '';
     try {
+      try {
       for (let i = 0; ; i++) {
         walk.assertActive();
         if (this.stopForDeniedPage(run, walk, current)) return;
@@ -949,6 +951,27 @@ export class Runner {
           if (this.stopForDeniedPage(run, walk, current)) return;
           await this.queueCheckpoint(track, models, run, current, walk, signal);
         }
+      }
+      } catch (error) {
+        // The navigator's share of the audit's money, or the audit's key-press limit, ends
+        // navigation cleanly: what the robot reached is still checked and reviewed below
+        // (owner, 31 Oct). Any other failure keeps the hard path.
+        if (
+          !(error instanceof ActionLimitReached) &&
+          !(error instanceof RoleAllowanceLimit && error.role === 'driver')
+        )
+          throw error;
+        this.store.append(
+          run.id,
+          'limit',
+          'driver',
+          {
+            method: 'navigation_limit',
+            reason: `${safeError(error)} Navigation stopped so the recorded evidence can be analysed; remaining instructions stay incomplete.`,
+          },
+          [current.id],
+        );
+        decisionAllowanceSpent = false;
       }
       if (this.stopForDeniedPage(run, walk, current)) return;
       if (decisionAllowanceSpent)

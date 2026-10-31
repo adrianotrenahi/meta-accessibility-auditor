@@ -84,6 +84,8 @@ export function metaReportScreens<T extends StateCapture>(
       .flatMap((row) => row.captureIds),
     ...snapshot.findings.map((finding) => finding.anchor?.captureId ?? finding.captureIds[0]!),
   ]);
+  // Only the analyst's own reading counts as analysed; a finished-step screen that only the
+  // reviewer read is shown, deliberately marked as not analysed.
   const shown = new Set([
     ...analysed,
     ...(snapshot.journey?.completed ?? []).map((row) => row.captureId),

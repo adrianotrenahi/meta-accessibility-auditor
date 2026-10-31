@@ -14,7 +14,7 @@ import {
 import { Runner } from '../src/runner.js';
 import { VoiceOverProbe } from '../src/voiceover.js';
 import type { Action } from '../src/models.js';
-import { LIMITS, type RecordEntry } from '../src/types.js';
+import type { RecordEntry } from '../src/types.js';
 import type { Page, ElementHandle } from 'playwright';
 
 test('Page closure during context revalidation cannot return an allowed traversal', async () => {
@@ -654,7 +654,7 @@ test('Retained handle capacity refuses overflow and releases every owned referen
     const retained = memory.entries.flatMap((entry: any) => [...entry.owned]);
     assert.equal(await memory.remember(input), undefined);
     assert.equal(memory.entries.length, MAX_CYCLE_MEMORIES);
-    assert.equal(MAX_CYCLE_MEMORIES, LIMITS.driver);
+    assert.equal(MAX_CYCLE_MEMORIES, 20, 'its own number, no longer the navigator allowance');
     assert.equal((await memory.check(x.walk.page, target)).state, 'blocked');
     const unrelated = await x.walk.page.locator('#outside').elementHandle();
     assert(unrelated);

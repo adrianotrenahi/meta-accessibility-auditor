@@ -129,9 +129,12 @@ export const LIMITS = {
   runMicros: 10_000_000,
   // Owner, 31 Oct: the navigator's allowance is per journey step (below), so the whole-audit
   // time and key limits must leave room for several steps.
-  actions: 600,
+  // One key-press decision can send up to 24 keys, so a 32-decision form step can need 768.
+  actions: 1200,
   minutes: 45,
-  driver: 20,
+  // Only a backstop: the real navigator limit is per step (DECISIONS_PER_STEP below). At most
+  // 12 approved steps of 32 decisions, plus the one planning request.
+  driver: 12 * 32 + 1,
   analyst: 8,
   reviewer: 4,
   sam: 16,

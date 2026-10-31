@@ -1,3 +1,4 @@
+import { RoleAllowanceLimit } from '../src/role-allowance.js';
 import { showsForm } from '../src/runner.js';
 import { DECISIONS_PER_FORM_STEP, DECISIONS_PER_STEP } from '../src/types.js';
 import { test } from 'node:test';
@@ -483,6 +484,46 @@ test('A finished step gives the next step a fresh decision allowance', async (t)
             String(r.payload.reason).includes(
               `${allowance} navigation decisions for the step "Inspect the available search."`,
             ),
+        ),
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test('Running out of the navigator money share stops navigation cleanly and still analyses', async (t) => {
+  const x = await fixture();
+  let finalChecks = 0;
+  t.mock.method(
+    x.runner as any,
+    'analyseCheckpoint',
+    async (_models: any, _run: any, current: any) => {
+      finalChecks++;
+      return current;
+    },
+  );
+  t.mock.method(x.runner as any, 'review', async () => {});
+  t.mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+    if (role !== 'driver') return { findings: [], coverage: [] };
+    throw new RoleAllowanceLimit('driver', 'Phase spending limit reached.');
+  });
+  try {
+    await (x.runner as any).live(
+      x.run,
+      x.walk,
+      new VoiceOverProbe(x.walk),
+      x.current,
+      x.controller,
+    );
+    assert.equal(finalChecks, 1, 'the final check still runs');
+    assert(
+      x.app.store
+        .records(x.run.id)
+        .some(
+          (r) =>
+            r.kind === 'limit' &&
+            r.payload.method === 'navigation_limit' &&
+            String(r.payload.reason).includes('Phase spending limit reached.'),
         ),
     );
   } finally {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BrowserWalk, ActionStateChanged } from '../src/browser.js';
+import { BrowserWalk, ActionStateChanged, ActionLimitReached } from '../src/browser.js';
 import { startServer } from '../server/index.js';
 import {
   walkToKeyboardTarget,
@@ -338,18 +338,31 @@ test('Cancelled traversal and stale source refuse before a key; physical action 
       ActionStateChanged,
     );
     const current = await x.walk.captureSettled();
+    // The last allowed key is sent; the limit refuses only a further key, so the final
+    // analysis can still read the page (owner, 31 Oct).
     x.walk.actions = LIMITS.actions - 1;
+    const reached = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      current,
+      { ...seek, targetName: 'A' },
+      new AbortController().signal,
+      x.step,
+    );
+    assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length, 1);
+    assert.equal(x.walk.actions, LIMITS.actions);
     await assert.rejects(
       walkToKeyboardTarget(
         x.walk,
         x.app.store,
         x.run.id,
-        current,
-        { ...seek, targetName: 'A' },
+        reached.current.kind === 'capture' ? reached.current : await x.walk.captureSettled(),
+        { ...seek, targetName: 'Target' },
         new AbortController().signal,
         x.step,
       ),
-      /action limit/,
+      ActionLimitReached,
     );
     assert.equal(x.app.store.records(x.run.id).filter((r) => r.kind === 'action').length, 1);
     assert.equal(x.walk.actions, LIMITS.actions);

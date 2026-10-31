@@ -79,6 +79,12 @@ const ARIA_READ_TIMEOUT_MS = 1000;
 export const RELOAD_QUIET_MS = 1000;
 /** The wait never exceeds this; a page still reloading is then measured with retries. */
 export const RELOAD_WAIT_MAX_MS = 10000;
+/** The audit's key-press limit: navigation stops cleanly and what was recorded is analysed. */
+export class ActionLimitReached extends Error {
+  constructor() {
+    super('Browser action limit reached.');
+  }
+}
 export class MeasurementStateChanged extends Error {
   constructor(
     public captureId: string,
@@ -192,10 +198,11 @@ export class BrowserWalk {
     if (this.closingRequested) throw Error('The browser is closing; no further action is allowed.');
     if (this.store.run(this.runId).state !== 'running') throw Error('The run has stopped.');
     if (Date.now() - this.started > LIMITS.minutes * 60000) throw Error('Run time limit reached.');
-    if (this.actions >= LIMITS.actions) throw Error('Browser action limit reached.');
   }
+  /** Checked only before an input is sent, so the final analysis can still read the page. */
   count() {
     this.assertActive();
+    if (this.actions >= LIMITS.actions) throw new ActionLimitReached();
     this.actions++;
   }
   async start(url: string) {
