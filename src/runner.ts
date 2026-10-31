@@ -69,6 +69,10 @@ import {
   recordOptOutContext,
   ReturnEvidence,
 } from './journey-evidence.js';
+/** Real websites default to the visitor's Chrome (owner, 31 Oct), so a caller that names no
+ * engine cannot quietly bring back the automation signal; the controlled shop keeps WebKit. */
+export const defaultEngine = (publicWebsite: boolean) =>
+  publicWebsite ? ('chromium' as const) : ('webkit' as const);
 export class Runner {
   private readonly targetJourneyContexts = new WeakMap<BrowserWalk, Map<string, RecordEntry>>();
   active?: { run: Run; walk: BrowserWalk; probe: VoiceOverProbe; controller: AbortController };
@@ -185,7 +189,7 @@ export class Runner {
       run.id,
       this.origin,
       options.headless ?? false,
-      options.engine ?? 'webkit',
+      options.engine ?? defaultEngine(options.publicWebsite === true),
       options.publicWebsite === true,
     );
     const probe = new VoiceOverProbe(walk),

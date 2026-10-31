@@ -40,6 +40,34 @@ export const isCommitment = (name: string) =>
 /** Real websites often load a new document right after arrival: a robot check,
  * a consent or language redirect. The robot measures only after the page has gone
  * this long without loading a new document (owner, 30 Oct). */
+/** Launch settings for real-website audits: no automation signal, as in a visitor's Chrome. */
+export const VISITOR_CHROME_ARGS = ['--disable-blink-features=AutomationControlled'];
+/** Real websites see the browser a visitor would use (owner, 31 Oct): the installed Chrome app,
+ * without Chrome's "controlled by automated software" signal, so the audit reads the page real
+ * visitors get rather than one served to robots. Playwright's own Chromium is the fallback when
+ * Chrome is not installed. The controlled shop and WebKit keep the test browsers unchanged. */
+export function launchAuditBrowser(
+  engine: 'webkit' | 'chromium',
+  visitorChrome: boolean,
+  options: { headless: boolean; proxy?: { server: string; bypass: string } },
+) {
+  if (!visitorChrome) return (engine === 'webkit' ? webkit : chromium).launch(options);
+  return chromium
+    .launch({ ...options, channel: 'chrome', args: VISITOR_CHROME_ARGS })
+    // Playwright's full Chromium, not its cut-down hidden build: that one still labels itself
+    // HeadlessChrome in the browser brands a site can read. The cut-down build is the last resort.
+    .catch(() => chromium.launch({ ...options, channel: 'chromium', args: VISITOR_CHROME_ARGS }))
+    .catch(() => chromium.launch({ ...options, args: VISITOR_CHROME_ARGS }));
+}
+/** The browser's own user agent with the hidden-window word removed; nothing else changes. */
+export async function visitorUserAgent(browser: Browser) {
+  const page = await browser.newPage();
+  try {
+    return (await page.evaluate(() => navigator.userAgent)).replace('HeadlessChrome', 'Chrome');
+  } finally {
+    await page.close();
+  }
+}
 export const ARRIVAL_QUIET_MS = 2500;
 /** Controls each screenshot lists for the navigator (owner, 31 Oct: up to 500, was 60). */
 export const MAX_LISTED_CONTROLS = 500;
@@ -183,7 +211,8 @@ export class BrowserWalk {
       this.publicProxy = proxy;
     }
     this.assertActive();
-    this.launching = (this.engine === 'webkit' ? webkit : chromium).launch({
+    const visitorChrome = this.publicWebsite && this.engine === 'chromium';
+    this.launching = launchAuditBrowser(this.engine, visitorChrome, {
       headless: this.headless,
       ...(this.publicProxy
         ? { proxy: { server: this.publicProxy.url, bypass: '<-loopback>' } }
@@ -196,6 +225,8 @@ export class BrowserWalk {
       deviceScaleFactor: 1,
       serviceWorkers: 'block',
       acceptDownloads: false,
+      // A hidden window still names itself HeadlessChrome; a visitor's Chrome says Chrome.
+      ...(visitorChrome ? { userAgent: await visitorUserAgent(this.browser) } : {}),
     });
     await installControlIdentity(context, this.controlIdentityKey);
     await installPointerState(context, this.pointerStateKey);
