@@ -143,4 +143,4 @@ three refused inputs in a row stop navigation. The navigator is told that date
 pickers, day and month selectors, dropdowns and option lists are chosen with the arrow
 keys and Enter or Space, not typed into (owner, 31 October). Each navigator decision
 is one request to Meta: audits estimate its size locally and generously instead of
-asking Meta first, and the actual charge is still settled from Meta's answer.
+asking Meta first; the estimate counts text bytes (very likely an upper bound), asks Meta when it looks too big, and records a `reservation_exceeded` warning if a charge ever exceeds what was set aside.

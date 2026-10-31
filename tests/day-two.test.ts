@@ -549,7 +549,8 @@ for (const scenario of ['recovers', 'stops'] as const)
       } else {
         assert.equal(refusals.length, MAX_REFUSED_ANSWERS);
         assert.equal(actions, 0, 'nothing is typed');
-        assert(records.some((r) => r.payload.method === 'navigator_answers_refused'));
+        assert(records.some((r) => r.payload.method === 'inputs_refused'));
+        assert(!records.some((r) => r.payload.method === 'navigator_answers_refused'));
       }
     } finally {
       mock.restoreAll();

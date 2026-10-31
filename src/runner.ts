@@ -807,6 +807,8 @@ export class Runner {
             // before any key was sent proves nothing about the page and does not count
             // (owner, 31 Oct); the navigator's own decision limit still bounds retries.
             const refusedUnsent = traversed.outcome === 'unavailable' && !traversed.actions.length;
+            // A traversal that sent keys breaks a run of refused inputs; they are no longer "in a row".
+            if (traversed.actions.length) refusedInputs = 0;
             unreachedTargets = refusedUnsent
               ? unreachedTargets
               : ['cycle', 'unavailable'].includes(traversed.outcome)
@@ -846,6 +848,7 @@ export class Runner {
           unchangedTraversal = 0;
         } else if (action.kind === 'voiceover') {
           unchangedTraversal = 0;
+          refusedInputs = 0;
           current = await performFocusedCheck(
             this.store,
             run.id,
@@ -900,7 +903,7 @@ export class Runner {
                   'limit',
                   'driver',
                   {
-                    method: 'navigator_answers_refused',
+                    method: 'inputs_refused',
                     reason: `${MAX_REFUSED_ANSWERS} inputs in a row were refused. Navigation stopped so the recorded evidence can be analysed; remaining instructions stay incomplete.`,
                   },
                   [current.id],

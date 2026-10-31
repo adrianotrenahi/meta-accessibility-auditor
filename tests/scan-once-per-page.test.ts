@@ -7,7 +7,13 @@ import { Store, digest } from '../src/store.js';
 import { earlierPageScan } from '../src/repeat-checkpoint.js';
 import { requestEvidence, EvidenceRequestLimit } from '../src/request-evidence.js';
 import { imageRecordsForRead } from '../src/image-receipt.js';
-import { MetaModels, navigationActionSchema, analysisSchema } from '../src/models.js';
+import {
+  MetaModels,
+  navigationActionSchema,
+  analysisSchema,
+  estimateInputTokens,
+  IMAGE_TOKEN_ESTIMATE,
+} from '../src/models.js';
 import { CAPS } from '../src/types.js';
 import { Runner } from '../src/runner.js';
 
@@ -275,6 +281,98 @@ test('With the local estimate on, a navigator decision is one request to Meta', 
       assert.equal(counts, role === 'driver' ? 0 : 1, `${role} size checks`);
       assert.equal(urls.length - counts, 1, `${role} sends one generation`);
       assert.equal(x.store.usage(x.run.id).requests[0]!.role, role, 'money is still set aside');
+    } finally {
+      x.close();
+    }
+  }
+});
+
+// Codex and Loca, PR 60: one token per three characters is not an upper bound for Chinese,
+// Arabic, emoji or long hex hashes. The estimate now counts bytes and allows 10,000 per image.
+test('The local size estimate never falls below the text bytes, for any script', () => {
+  for (const text of [
+    '东京到大阪的航班'.repeat(500),
+    'رحلات من الدار البيضاء'.repeat(300),
+    '✈️🧳🌍'.repeat(400),
+    'e6315e2de573bcf353776c1b4e8dc315a9ba626fc1551b652b443a62bf44673e'.repeat(80),
+  ]) {
+    const bytes = Buffer.byteLength(text, 'utf8');
+    const estimate = estimateInputTokens({ input: [{ content: [{ type: 'input_text', text }] }] });
+    assert(estimate >= bytes, `${estimate} < ${bytes}`);
+  }
+  const withImage = estimateInputTokens({
+    input: [{ content: [{ type: 'input_text', text: '' }, { type: 'input_image' }] }],
+  });
+  assert(withImage >= IMAGE_TOKEN_ESTIMATE);
+});
+
+test('A strict estimate over the limit asks Meta, and an overspend leaves a warning', async () => {
+  for (const scenario of ['huge page', 'overspend'] as const) {
+    const x = seeded();
+    try {
+      const current =
+        scenario === 'huge page'
+          ? x.store.append(x.run.id, 'capture', 'browser', {
+              ...x.capture('https://www.booking.com/').payload,
+              aria: 'x'.repeat(CAPS.driver.input + 10),
+            })
+          : x.capture('https://www.booking.com/');
+      const packet = requestEvidence(x.store, x.run.id, 'driver', current);
+      const urls: string[] = [];
+      const model = new MetaModels(
+        x.store,
+        (async (url) => {
+          urls.push(String(url));
+          if (String(url).endsWith('/input_tokens')) return Response.json({ input_tokens: 5000 });
+          return Response.json({
+            status: 'completed',
+            // The overspend case reports far more than any estimate allowed for.
+            usage: { input_tokens: scenario === 'overspend' ? 900_000 : 5000, output_tokens: 10 },
+            output: [
+              {
+                type: 'function_call',
+                name: 'return_result',
+                arguments: JSON.stringify({ kind: 'press', key: 'Tab', note: 'Next' }),
+              },
+            ],
+          });
+        }) as typeof fetch,
+        () => ({
+          approvedBy: 'Adriano',
+          maxUsd: 3,
+          maxRunUsd: 3,
+          approvedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        }),
+        () => 'mock-key-no-provider-access',
+      );
+      model.estimateNavigatorInput = true;
+      await model.reason(
+        x.run.id,
+        'driver',
+        packet.records,
+        imageRecordsForRead(packet).map((capture) => ({
+          captureId: capture.id,
+          image:
+            'data:image/png;base64,' +
+            x.store.image(x.run.id, capture.payload.imageFile).toString('base64'),
+        })),
+        navigationActionSchema as any,
+        false,
+        new AbortController().signal,
+        packet.read,
+      );
+      const asked = urls.filter((url) => url.endsWith('/input_tokens')).length;
+      const warned = x.store
+        .records(x.run.id)
+        .some((r) => r.kind === 'limit' && r.payload.method === 'reservation_exceeded');
+      if (scenario === 'huge page') {
+        assert.equal(asked, 1, 'too big by the strict count: Meta is asked for the exact size');
+        assert(!warned);
+      } else {
+        assert.equal(asked, 0);
+        assert(warned, 'a charge above the money set aside is recorded');
+      }
     } finally {
       x.close();
     }

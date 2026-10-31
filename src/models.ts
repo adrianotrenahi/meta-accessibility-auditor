@@ -290,23 +290,30 @@ export class IncompleteModelResult extends Error {
     super('The model response was incomplete.');
   }
 }
-/** Images are priced by size, not file bytes; a 1440x900 screenshot is well under this. */
-export const IMAGE_TOKEN_ESTIMATE = 3000;
-/** A generous local token estimate: one token per three characters of text (real text runs
- * nearer four), a fixed amount per image, and a margin for the request's own structure. */
+/** Generous allowance per supplied screenshot: a 1440x900 viewport costs about 1-2k tokens
+ * under every published image scheme. Unproven for Muse Spark; see reservation_exceeded. */
+export const IMAGE_TOKEN_ESTIMATE = 10_000;
+/** An upper-bound token estimate: every ordinary token is at least one byte of UTF-8 text (byte
+ * BPE and byte-fallback tokenizers), so the text's byte length bounds its tokens, Chinese,
+ * Arabic, emoji and long hex hashes included. Images get a generous fixed allowance, and a
+ * margin covers special and template tokens. For plain English it over-counts about 4x. */
 export function estimateInputTokens(body: {
   instructions?: string;
   input?: { content?: { type: string; text?: string }[] }[];
   tools?: unknown;
 }) {
-  let characters = (body.instructions ?? '').length + JSON.stringify(body.tools ?? []).length;
+  let bytes =
+    Buffer.byteLength(body.instructions ?? '', 'utf8') +
+    Buffer.byteLength(JSON.stringify(body.tools ?? []), 'utf8');
   let images = 0;
+  let parts = 0;
   for (const message of body.input ?? [])
     for (const part of message.content ?? []) {
+      parts++;
       if (part.type === 'input_image') images++;
-      else characters += (part.text ?? '').length;
+      else bytes += Buffer.byteLength(part.text ?? '', 'utf8');
     }
-  return Math.ceil(characters / 3) + images * IMAGE_TOKEN_ESTIMATE + 1000;
+  return bytes + images * IMAGE_TOKEN_ESTIMATE + 1000 + parts * 8;
 }
 /** A completed answer that is unreadable or breaks its rules; only the answer check raises it. */
 export class InvalidModelAnswer extends Error {
@@ -534,11 +541,17 @@ export class MetaModels {
           ' Return only the schema-constrained JSON result, without progress messages or narrative outside it. Keep reasons concise; leave unavailable checks explicitly unknown. ';
     }
     // The navigator's request size is estimated here instead of asking Meta first, so each
-    // decision is one request, not two (owner, 31 Oct). The estimate is generous, so the money
-    // set aside is never too small; the actual charge is settled from Meta's own answer.
-    const count =
+    // decision is one request, not two (owner, 31 Oct). The estimate counts text bytes, which is
+    // very likely an upper bound for Muse Spark's (unpublished) tokenizer; a request that looks
+    // too big that way asks Meta for its exact size instead of being refused, and a charge above
+    // the money set aside is recorded below rather than passing silently.
+    const estimated =
       this.estimateNavigatorInput && role === 'driver' && purpose === 'execution'
         ? estimateInputTokens(body)
+        : undefined;
+    const count =
+      estimated !== undefined && estimated <= cap.input
+        ? estimated
         : (await this.post(runId, '/responses/input_tokens', body, signal, purpose)).input_tokens;
     if (!Number.isInteger(count) || count < 0)
       throw Error('The provider did not return a valid evidence input count.');
@@ -557,6 +570,16 @@ export class MetaModels {
         throw Error('Meta usage was missing; the spending reservation is retained.');
       const actual = tokenCostMicros(cap.model, u.input_tokens, u.output_tokens);
       this.store.settle(id, actual, response.status === 'completed' ? 'received' : 'incomplete');
+      if (actual > reserved)
+        this.store.append(runId, 'limit', 'runner', {
+          method: 'reservation_exceeded',
+          reason:
+            'This request cost more than the money set aside for it. The charge is recorded as billed; the size estimate needs checking.',
+          requestId: id,
+          reservedMicros: reserved,
+          actualMicros: actual,
+          ...(estimated !== undefined ? { estimatedInputTokens: estimated } : {}),
+        });
       this.store.append(runId, 'model_response', role, {
         requestId: id,
         requestPurpose: purpose,
@@ -564,6 +587,7 @@ export class MetaModels {
         instructionHash: digest(body.instructions),
         status: response.status,
         usage: u,
+        ...(estimated !== undefined && count === estimated ? { inputEstimate: estimated } : {}),
         output: response.output,
         ...(read
           ? {
