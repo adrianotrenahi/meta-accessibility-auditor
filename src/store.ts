@@ -36,6 +36,8 @@ export const recordIsIntact = (record: RecordEntry) =>
     record.payload._sourcesHash === digest(JSON.stringify(record.sources)));
 /** No screenshot name can contain a second dot, so this never collides with one. */
 export const KEPT_ROWS = 'rows.discarded.json';
+/** Earlier decisions (each with its key presses, notes and limits) the navigator reads for its next one. */
+export const NAVIGATOR_RECENT_DECISIONS = 8;
 export class Store {
   db: DatabaseSync;
   /** This store's own per-audit ceiling. $3 unless the real-website host opens it with
@@ -635,9 +637,25 @@ export class Store {
     const walked =
       walkThroughSeq === undefined ? records : records.filter((r) => r.seq <= walkThroughSeq);
     const wanted = new Set(ids ?? walked.map((r) => r.id));
+    // The navigator decides the next key from the current screen and its recent steps. Every
+    // earlier key press made each decision slower (owner, 31 Oct: 40,000 to 77,000 tokens per
+    // decision on Booking.com, 6 s growing to 12 s). Analysis and review still read it all.
+    // One progress note opens each decision; the window starts at the eighth-latest, so each
+    // kept decision keeps its note, its key presses and the limits they met.
+    const recentFrom =
+      role === 'driver'
+        ? (walked
+            .filter((r) => r.kind === 'navigator_note' && r.payload.kind === 'progress')
+            .at(-NAVIGATOR_RECENT_DECISIONS)?.seq ?? 0)
+        : 0;
     // The walk and navigator notes are always original records, not another role's digest.
     for (const r of walked)
-      if (['plan', 'action', 'navigator_note', 'at_check', 'coverage', 'limit'].includes(r.kind))
+      if (
+        ['plan', 'action', 'navigator_note', 'at_check', 'coverage', 'limit'].includes(r.kind) &&
+        (r.seq >= recentFrom ||
+          r.kind === 'plan' ||
+          (r.kind === 'navigator_note' && r.payload.kind === 'step_completed'))
+      )
         wanted.add(r.id);
     const selected = records.filter((r) => wanted.has(r.id));
     const missing = [...wanted].filter((id) => !selected.some((r) => r.id === id));

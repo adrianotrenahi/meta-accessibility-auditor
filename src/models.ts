@@ -74,7 +74,16 @@ export const actionSchema = z.object({
 });
 export type Action = z.infer<typeof actionSchema>;
 // Old requested/actual key records remain readable; fresh decisions request portable keys.
-export const navigationActionSchema = actionSchema
+// A key press that arrives with a step or screenshot label is still that key press: the
+// labels mean something only on step_done, and the press acts on the current screen anyway.
+// Owner, 31 Oct: one stray label ended a ten-minute Booking.com audit.
+const withoutStrayStepLabels = (value: unknown) => {
+  if (!value || typeof value !== 'object' || (value as { kind?: unknown }).kind === 'step_done')
+    return value;
+  const { stepId: _stepId, captureId: _captureId, ...action } = value as Record<string, unknown>;
+  return action;
+};
+export const navigationActionSchema = z.preprocess(withoutStrayStepLabels, actionSchema
   .extend({
     key: z
       .enum([
@@ -110,11 +119,8 @@ export const navigationActionSchema = actionSchema
           message:
             'Instruction completion needs its exact step and original capture, with no browser input.',
         });
-    } else if (action.stepId !== undefined || action.captureId !== undefined)
-      context.addIssue({
-        code: 'custom',
-        message: 'Instruction evidence belongs only to an explicit step completion.',
-      });
+    }
+    // Labels on any other kind were already dropped by withoutStrayStepLabels.
     if (action.kind !== 'wait' && action.waitMs !== undefined)
       context.addIssue({
         code: 'custom',
@@ -151,7 +157,7 @@ export const navigationActionSchema = actionSchema
         message:
           'Choose exactly one original target by ID or exact role/name. Only an explicit activation may activate it; traversal never types.',
       });
-  });
+  }));
 export const candidateSchema = z.object({
   issueKey: z.string().regex(/^[a-z][a-z0-9_]{2,79}$/),
   scope: z.enum(['element', 'view']),
@@ -220,6 +226,8 @@ const jobInstructions = {
   driver:
     instructions.driver +
     ' Prefer focus_target to reach a named control through several real keyboard steps in one decision. Use its exact targetId from the supplied controls, or targetRole plus exact targetName from the current original accessible page. Use traversalKey Tab or Shift+Tab for ordinary controls. When the target belongs to a menubar, menu or tablist, Tab reaches its active entry and the local keyboard path uses real orientation-aware arrows within that same group; inactive items are not necessarily Tab-reachable. To reach a menu or tab item from outside its group, use traversalKey Tab: the robot enters the group and then uses the arrows. Do not Tab past an active menu item to seek another item in that same menu. For a calendar with a current date cell, use an arrow key to move within that same native grid; first bring the desired month into the first visible calendar if necessary. Dates may not be individually Tab-reachable. The robot uses real keys until that same unique control is focused and stops on a meaningful page change or cycle. Optional activation Enter or Space is an explicit request applied only after the target is reached and freshly checked against the original control, with the ordinary no-booking/payment/login guards. Without activation it only reaches focus; it never types during traversal. Previously unseen descriptions require a fresh decision before any inherited activation, and changed descriptions stop traversal. If the requested control is now focused, read the fresh original and choose a separate press only when the intent still holds. Use a new type action after reaching an input. Never repeat an exhausted or refused target unchanged. A wait action may use waitMs up to10000 while a real results page loads; loading alone is not task completion. Do not request focus_target again when the requested control is already focused. Single press remains available for one key or widget-specific arrow keys. ' +
+    ' If a search box already holds a different entry (a pre-filled airport chip, for example), remove that entry by keyboard before typing, then type the requested value once. ' +
+    ' When the site answers your input with its own error (for example "something went wrong", "try again" or "refresh the page"), the site refused or failed that request. Do not activate its refresh, reload or retry links, do not leave the page and do not repeat the same input: choose finish with a short note quoting the site\'s message. A site refusal is a recorded limit, not a website defect and not task completion. ' +
     ' Missing-fact checks share the existing two native/focused slots. Do not repeat an exhausted or refused check or revisit an unavailable state to force a result.',
   analyst:
     instructions.analyst +
