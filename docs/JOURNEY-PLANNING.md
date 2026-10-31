@@ -44,7 +44,12 @@ proposal or receipt to pass execution checks, while owner/brief checks, physical
 cleanup and charge preservation remain mandatory.
 
 The navigator receives the original shared records plus one current instruction
-and its observable success condition. A `step_done` answer names that instruction
+and its observable success condition. Of the walk itself it reads the plan, every
+finished step and its eight most recent decisions, each with its key presses,
+notes and limits; earlier presses made every decision slower (owner, 31 October: 6 s growing
+to 12 s per decision on Booking.com). Analysis and review still read the whole walk.
+A key press that arrives with a stray step or screenshot label is still that key
+press; those labels count only on `step_done`. A `step_done` answer names that instruction
 and the current stable original capture. The engine checks freshness and approved
 order before recording completion. This is a navigator claim, not an independent
 accessibility pass or proof of usable search results. An unfinished instruction
