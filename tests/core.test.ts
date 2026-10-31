@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { parseSam, MetaModels, actionSchema } from '../src/models.js';
-import { PHASE } from '../src/types.js';
+import { LIMITS, PHASE } from '../src/types.js';
 import { VoiceOverProbe } from '../src/voiceover.js';
 import { voiceOver } from '@guidepup/guidepup';
 import { BrowserWalk } from '../src/browser.js';
@@ -413,12 +413,13 @@ test('Caps protect other phases and the reserved final-review slot', () => {
   const x = create();
   try {
     assert.throws(() => x.store.reserve(x.run.id, 'driver', 1600001, approved));
-    for (let n = 0; n < 3; n++) {
-      const id = x.store.reserve(x.run.id, 'reviewer', 10000, approved);
-      x.store.settle(id, 10000, 'completed');
+    // Owner, 31 Oct: every strip screen is reviewed; one final review is still kept back.
+    for (let n = 0; n < LIMITS.reviewer - 1; n++) {
+      const id = x.store.reserve(x.run.id, 'reviewer', 100, approved);
+      x.store.settle(id, 100, 'completed');
     }
-    assert.throws(() => x.store.reserve(x.run.id, 'reviewer', 10000, approved), /reserved/);
-    assert.doesNotThrow(() => x.store.reserve(x.run.id, 'reviewer', 10000, approved, true));
+    assert.throws(() => x.store.reserve(x.run.id, 'reviewer', 100, approved), /reserved/);
+    assert.doesNotThrow(() => x.store.reserve(x.run.id, 'reviewer', 100, approved, true));
   } finally {
     x.close();
   }

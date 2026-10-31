@@ -154,3 +154,7 @@ the next option starting with it, and the robot checks after every press and sto
 the wanted one. Every press is a counted keyboard input; nothing is typed into a text
 box. An option the dropdown does not offer, or no focused dropdown, is a refused input:
 nothing is pressed and the navigator is asked again.
+
+The analyst checks every screen that goes to the strip and the reviewer reviews each
+check (owner, 31 October). Their request counts are only backstops (60 and 61, with
+one final review always kept back); the audit's money shares remain the real limit.

@@ -190,3 +190,26 @@ test('One audit can make more than twenty navigator requests, up to the backstop
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Owner, 31 Oct: "8 at most? no. It should check all screens that go to the strip".
+test('The analyst and reviewer can check far more than eight screens in one audit', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'every-strip-screen-'));
+  const store = new Store(dir);
+  try {
+    const run = store.create('Many screens', 'https://www.booking.com/', 'offline');
+    const approval: Approval = {
+      approvedBy: 'Adriano',
+      maxRunUsd: 3,
+      approvedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    };
+    for (let i = 0; i < 30; i++) {
+      store.settle(store.reserve(run.id, 'analyst', 1, approval), 1, 'completed');
+      store.settle(store.reserve(run.id, 'reviewer', 1, approval), 1, 'completed');
+    }
+    assert(LIMITS.analyst >= 30 && LIMITS.reviewer >= 31);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

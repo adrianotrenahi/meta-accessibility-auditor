@@ -952,7 +952,7 @@ export class Store {
         PHASE[role]
       )
         throw new RoleAllowanceLimit(role, 'Phase spending limit reached.');
-      if (role === 'reviewer' && !final && phase.length >= 3)
+      if (role === 'reviewer' && !final && phase.length >= LIMITS.reviewer - 1)
         throw new RoleAllowanceLimit(role, 'Final review slot is reserved.');
       const protectedPhases = (Object.keys(PHASE) as Role[])
         .filter((p) => p !== role)
