@@ -123,6 +123,11 @@ test('A "step finished" answer that names no screenshot means the current one', 
   };
   assert(!navigationActionSchema.safeParse(answer).success, 'the plain rules still refuse it');
   assert.deepEqual(completionOnScreen(current).parse(answer), { ...answer, captureId: current });
+  // An explicit empty value means the same as leaving it out.
+  assert.equal(
+    completionOnScreen(current).parse({ ...answer, captureId: null }).captureId,
+    current,
+  );
   // A screenshot the navigator did name is kept as given; the runner then checks it.
   assert.equal(completionOnScreen(current).parse({ ...answer, captureId: other }).captureId, other);
   // Nothing else is filled in: a key press stays a key press.

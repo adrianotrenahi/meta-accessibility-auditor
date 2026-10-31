@@ -2,7 +2,7 @@ import { RoleAllowanceLimit } from './role-allowance.js';
 import { walkToKeyboardTarget } from './keyboard-target.js';
 import { disposeKeyboardCycles } from './keyboard-cycle-memory.js';
 import { publicEntryLimit, PUBLIC_TRAFFIC_CHALLENGE } from './public-target.js';
-import { z, ZodError } from 'zod';
+import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
 import {
   ARRIVAL_QUIET_MS,
@@ -30,6 +30,7 @@ import { AnalysisTrack } from './analysis-track.js';
 import {
   MetaModels,
   IncompleteModelResult,
+  InvalidModelAnswer,
   navigationActionSchema,
   analysisSchema,
   reviewSchema,
@@ -85,7 +86,7 @@ export const completionOnScreen = (currentCaptureId: string) =>
       value &&
       typeof value === 'object' &&
       (value as { kind?: unknown }).kind === 'step_done' &&
-      (value as { captureId?: unknown }).captureId === undefined
+      (value as { captureId?: unknown }).captureId == null
         ? { ...value, captureId: currentCaptureId }
         : value,
     navigationActionSchema,
@@ -622,7 +623,7 @@ export class Runner {
           // audit (owner, 31 Oct: one "step finished" answer without its screenshot ended a
           // Booking.com audit). The refusal is saved where the navigator reads it, and it is
           // asked again within its usual decision allowance; three in a row stop navigation.
-          if (!(error instanceof ZodError || error instanceof SyntaxError)) throw error;
+          if (!(error instanceof InvalidModelAnswer)) throw error;
           refusedAnswers++;
           this.store.append(
             run.id,
@@ -630,11 +631,7 @@ export class Runner {
             'driver',
             {
               method: 'navigator_answer_refused',
-              reason: `The navigator's answer did not meet the decision rules and was not acted on: ${
-                error instanceof ZodError
-                  ? error.issues.map((issue) => issue.message).join(' ')
-                  : 'it was not readable.'
-              } No browser input was sent.`,
+              reason: `The navigator's answer did not meet the decision rules and was not acted on: ${error.message} No browser input was sent.`,
               consecutive: refusedAnswers,
             },
             [current.id],

@@ -289,6 +289,15 @@ export class IncompleteModelResult extends Error {
     super('The model response was incomplete.');
   }
 }
+/** A completed answer that is unreadable or breaks its rules; only the answer check raises it. */
+export class InvalidModelAnswer extends Error {
+  constructor(
+    public role: Exclude<Role, 'sam'>,
+    public issues: string[],
+  ) {
+    super(issues.join(' ') || 'The model answer was not readable.');
+  }
+}
 export class MetaModels {
   constructor(
     private store: Store,
@@ -559,7 +568,18 @@ export class MetaModels {
       const raw =
         role === 'driver' && purpose === 'execution' ? tool?.arguments : outputText(response);
       if (!raw) throw Error('The model did not return a valid result.');
-      const result = schema.parse(JSON.parse(raw));
+      let result: T;
+      try {
+        result = schema.parse(JSON.parse(raw));
+      } catch (error) {
+        if (error instanceof z.ZodError)
+          throw new InvalidModelAnswer(
+            role,
+            error.issues.map((issue) => issue.message),
+          );
+        if (error instanceof SyntaxError) throw new InvalidModelAnswer(role, []);
+        throw error;
+      }
       this.store.settle(id, actual, 'completed');
       return result;
     } catch (e) {

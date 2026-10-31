@@ -10,7 +10,7 @@ import {
   candidateSchema,
   MetaModels,
   IncompleteModelResult,
-  navigationActionSchema,
+  InvalidModelAnswer,
 } from '../src/models.js';
 import { Runner, MAX_REFUSED_ANSWERS } from '../src/runner.js';
 import { ActionStateChanged, ObservationUnsettled } from '../src/browser.js';
@@ -426,21 +426,35 @@ for (const scenario of ['recovers', 'stops'] as const)
         captures = 0;
       const original = x.capture(captures++);
       // The exact answer from the 31 Oct audit: step_done without its captureId.
-      const refused = () =>
-        navigationActionSchema.parse({
-          kind: 'step_done',
-          note: 'Homepage visible with search and navigation.',
-          stepId: 'arrive-home',
-        });
-      mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
-        if (role === 'driver') {
-          decisions++;
-          if (scenario === 'stops' || decisions === 1) return refused();
-          return { kind: decisions === 2 ? 'press' : 'finish', key: 'Tab', note: 'Safe action.' };
-        }
-        if (role === 'analyst') return { findings: [], coverage: [] };
-        throw Error('No accepted finding needs review.');
-      });
+      const october = {
+        kind: 'step_done',
+        note: 'Homepage visible with search and navigation.',
+        stepId: 'arrive-home',
+      };
+      // An answer that still breaks the rules: a step completion that also presses a key.
+      const broken = { ...october, captureId: original.id, key: 'Enter' };
+      const filled: (string | undefined)[] = [];
+      mock.method(
+        MetaModels.prototype,
+        'reason',
+        async (_id: string, role: string, _r: unknown, _i: unknown, schema: any) => {
+          if (role === 'driver') {
+            decisions++;
+            // The runner's own answer check: the October answer gets the current screenshot.
+            filled.push(schema.parse(october).captureId);
+            if (scenario === 'stops' || decisions === 1) {
+              const checked = schema.safeParse(broken);
+              throw new InvalidModelAnswer(
+                'driver',
+                checked.error.issues.map((issue: any) => issue.message),
+              );
+            }
+            return { kind: decisions === 2 ? 'press' : 'finish', key: 'Tab', note: 'Safe action.' };
+          }
+          if (role === 'analyst') return { findings: [], coverage: [] };
+          throw Error('No accepted finding needs review.');
+        },
+      );
       const walk = {
         assertActive() {},
         images: x.images,
@@ -459,6 +473,7 @@ for (const scenario of ['recovers', 'stops'] as const)
         new AbortController(),
       );
       const records = x.store.records(x.run.id);
+      assert.equal(filled[0], original.id, 'the runner fills in the screenshot it showed');
       const refusals = records.filter((r) => r.payload.method === 'navigator_answer_refused');
       assert.match(refusals[0]!.payload.reason, /exact step and original capture/);
       const actions = records.filter((r) => r.kind === 'action').length;
