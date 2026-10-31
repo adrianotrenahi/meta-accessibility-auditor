@@ -69,7 +69,15 @@ const comparisonFields = new Set([
   'limit',
   '_sourcesHash',
 ]);
-function emptyEarlierTraversal(record: RecordEntry, current: RecordEntry, records: RecordEntry[]) {
+/** A comparison across one input that recorded no price, choice or other change. With
+ * `anyInput` false it must be a Tab press on one page; with true, any recorded input (a
+ * page change alone is not a recorded change), and both originals must be settled. */
+function emptyEarlierTraversal(
+  record: RecordEntry,
+  current: RecordEntry | null,
+  records: RecordEntry[],
+  anyInput = false,
+) {
   const p = record.payload;
   if (
     record.author !== 'browser' ||
@@ -80,8 +88,7 @@ function emptyEarlierTraversal(record: RecordEntry, current: RecordEntry, record
     p.comparable !== false ||
     p.limit !== INCOMPARABLE_TOTALS_LIMIT ||
     Object.keys(p).some((key) => !comparisonFields.has(key)) ||
-    record.seq >= current.seq ||
-    p.afterCaptureId === current.id ||
+    (current !== null && (record.seq >= current.seq || p.afterCaptureId === current.id)) ||
     ![
       'selectionSame',
       'sameCurrency',
@@ -106,7 +113,8 @@ function emptyEarlierTraversal(record: RecordEntry, current: RecordEntry, record
     before.author !== 'browser' ||
     after.author !== 'browser' ||
     typeof before.payload.url !== 'string' ||
-    before.payload.url !== after.payload.url ||
+    (!anyInput && before.payload.url !== after.payload.url) ||
+    (anyInput && (before.payload.stable !== true || after.payload.stable !== true)) ||
     action.kind !== 'action' ||
     action.author !== 'browser' ||
     action.payload.method !== 'actual_keyboard_or_browser' ||
@@ -114,8 +122,9 @@ function emptyEarlierTraversal(record: RecordEntry, current: RecordEntry, record
     action.payload.sourceCaptureId !== before.id ||
     action.payload.sourceImageHash !== before.payload.imageHash ||
     !(before.seq < action.seq && action.seq < after.seq && after.seq < record.seq) ||
-    action.payload.action?.kind !== 'press' ||
-    !['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.payload.action.key) ||
+    (!anyInput &&
+      (action.payload.action?.kind !== 'press' ||
+        !['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(action.payload.action.key))) ||
     record.sources.length !== 5 ||
     ![before.id, after.id, action.id].every((id) => record.sources.includes(id))
   )
@@ -181,24 +190,57 @@ export function requestEvidence(
   runId: string,
   role: Exclude<Role, 'sam'>,
   current: RecordEntry,
+  throughSeq?: number,
 ) {
   const records = store.records(runId);
   if (current.runId !== runId || current.kind !== 'capture')
     throw Error('Requests need an original current screen from this run.');
+  // A screen checked on the analysis track reads the walk as it stood when the screen was
+  // handed over, not the robot's later steps; claims and reviews are still read in full.
+  const walked =
+    throughSeq === undefined ? records : records.filter((record) => record.seq <= throughSeq);
   const candidates = records.filter((r) => r.kind === 'candidate');
   let roots: string[] = [current.id];
   if (role === 'reviewer') roots.push(...candidates.map((r) => r.id));
   else if (role === 'analyst') {
-    const lastAction = records.findLast((r) => r.kind === 'action');
-    if (lastAction) roots.push(lastAction.id);
-    const otherView = records.findLast(
-      (r) => r.kind === 'capture' && r.payload.url !== current.payload.url,
-    );
-    if (otherView) roots.push(otherView.id);
-    // A keyboard barrier measured a few steps back is still the journey's evidence.
+    // Owner, 30 Oct: the analyst reads the screens a customer sees on the strip: the screen
+    // being checked and, after an input on that same page, the screen just before it (the
+    // cookie pop-up before it was dismissed). Earlier pictures come only with a recorded
+    // change between them (below) or a control Tab never reached. Everything else stays in
+    // the written record of the walk.
+    const lastAction = walked.findLast((r) => r.kind === 'action');
+    const before = lastAction && records.find((r) => r.id === lastAction.payload.sourceCaptureId);
+    const tabMove =
+      lastAction?.payload.action?.kind === 'press' &&
+      ['Tab', 'Shift+Tab', 'Alt+Tab', 'Alt+Shift+Tab'].includes(lastAction.payload.action.key);
+    if (
+      lastAction &&
+      before?.kind === 'capture' &&
+      before.payload.url === current.payload.url &&
+      !tabMove
+    )
+      roots.push(lastAction.id);
+    // A recorded price or choice change between screens keeps both screens (latest two).
     roots.push(
-      ...records
-        .filter((r) => r.kind === 'observation' && r.payload.method === 'keyboard_reach/1')
+      ...walked
+        .filter(
+          (r) =>
+            r.kind === 'observation' &&
+            r.payload.method === 'comparable_totals' &&
+            !emptyEarlierTraversal(r, null, records, true),
+        )
+        .slice(-2)
+        .map((r) => r.id),
+    );
+    // A control Tab never reached is measured keyboard evidence, still owed to the journey.
+    roots.push(
+      ...walked
+        .filter(
+          (r) =>
+            r.kind === 'observation' &&
+            r.payload.method === 'keyboard_reach/1' &&
+            r.payload.reached === false,
+        )
         .slice(-2)
         .map((r) => r.id),
     );
@@ -209,24 +251,17 @@ export function requestEvidence(
       originals.filter((record) => record.kind === 'capture').map((record) => record.id),
     );
     const requiredIds = new Set(originals.map((record) => record.id));
-    const latestComparison = records.findLast(
-      (record) => record.kind === 'observation' && record.payload.method === 'comparable_totals',
-    );
     // Read attached measurements and reader results with their entire original source
     // graph. A return comparison, for example, also needs the earlier typed-entry baseline.
     // Select attachments from this request's original pictures only: a historical source
     // is not an instruction to add unrelated observations from that historical screen.
-    const attached = records.filter(
+    const attached = walked.filter(
       (record) =>
         ['observation', 'at_check', 'criterion_scope'].includes(record.kind) &&
         record.sources.some((id) => selectedCaptures.has(id)) &&
-        !(
-          role === 'analyst' &&
-          candidates.length === 0 &&
-          record.id !== latestComparison?.id &&
-          !requiredIds.has(record.id) &&
-          emptyEarlierTraversal(record, current, records)
-        ),
+        // An input that changed nothing brings no picture to the analyst or reviewer; a
+        // saved claim that cites one still keeps it (requiredIds).
+        !(!requiredIds.has(record.id) && emptyEarlierTraversal(record, null, records, true)),
     );
     const available = attached.filter((record) => {
       if (record.kind !== 'observation' || record.payload.stable !== false) return true;
@@ -376,7 +411,7 @@ export function requestEvidence(
   if (role === 'analyst')
     roots.push(...candidates.map((r) => r.id), ...reviewFeedbackIds(records, runId));
   const receipt = makeImageReceipt(originals, current.id);
-  const snapshot = store.snapshot(runId, role, roots, receipt);
+  const snapshot = store.snapshot(runId, role, roots, receipt, throughSeq);
   for (const r of snapshot.records)
     if (!recordIsIntact(r)) throw Error('A selected original record changed; no request is sent.');
   suppliedImageIds(snapshot.read, snapshot.records);

@@ -18,7 +18,8 @@ const MEASUREMENT_ATTEMPTS = 3;
 const BLOCKER_ATTEMPTS = 3;
 import { VoiceOverProbe } from './voiceover.js';
 import { Store, digest, recordIsIntact } from './store.js';
-import { earlierCheck, earlierScan } from './repeat-checkpoint.js';
+import { earlierCheck, earlierScan, walkEvidenceSince } from './repeat-checkpoint.js';
+import { AnalysisTrack } from './analysis-track.js';
 import {
   MetaModels,
   IncompleteModelResult,
@@ -550,6 +551,7 @@ export class Runner {
     let unreachedTargets = 0;
     let decisionAllowanceSpent = true;
     let finalReviewSafe = true;
+    const track = new AnalysisTrack();
     const remainingDecisions = Math.max(
       0,
       LIMITS.driver -
@@ -558,6 +560,8 @@ export class Runner {
     try {
       for (let i = 0; i < remainingDecisions; i++) {
         walk.assertActive();
+        if (this.stopForDeniedPage(run, walk, current)) return;
+        current = await this.requestedChecks(track, run, walk, probe, current, signal);
         if (this.stopForDeniedPage(run, walk, current)) return;
         const journey = readOrderedJourney(this.store.records(run.id));
         if (journey && !currentJourneyInstruction(journey).currentStep) {
@@ -653,7 +657,7 @@ export class Runner {
             decisionAllowanceSpent = false;
             break;
           }
-          current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
+          await this.queueCheckpoint(track, models, run, current, walk, signal);
           continue;
         }
         if (action.kind === 'focus_target') {
@@ -817,7 +821,7 @@ export class Runner {
         if (!journey && i % 3 === 2) {
           current = (await this.automaticMeasurement(run, walk, current, signal)).current;
           if (this.stopForDeniedPage(run, walk, current)) return;
-          current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
+          await this.queueCheckpoint(track, models, run, current, walk, signal);
         }
       }
       if (this.stopForDeniedPage(run, walk, current)) return;
@@ -833,14 +837,23 @@ export class Runner {
           },
           [current.id],
         );
+      // Every screen handed to the analysis track is checked before the final one.
+      await track.drain();
+      signal.throwIfAborted();
+      if (this.store.run(run.id).state !== 'running') throw Error('The run has stopped.');
+      current = await this.requestedChecks(track, run, walk, probe, current, signal);
+      if (this.stopForDeniedPage(run, walk, current)) return;
       current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
     } catch (error) {
       // A hard navigation, money, source or observation failure cannot start
-      // another optional model request from finally.
+      // another optional model request from finally, nor from the analysis track.
       finalReviewSafe = false;
+      track.cancel();
       throw error;
     } finally {
       returnEvidence.clear();
+      // No background check may still be writing when the final review or the run's end begins.
+      await track.settle();
       if (
         finalReviewSafe &&
         !signal.aborted &&
@@ -1066,30 +1079,110 @@ export class Runner {
     probe?: VoiceOverProbe,
   ) {
     if (this.stopForDeniedPage(run, walk, current)) return current;
-    const checked = earlierCheck(this.store.records(run.id), current);
-    if (checked) {
-      signal.throwIfAborted();
-      if (this.store.run(run.id).state !== 'running') throw Error('The run has stopped.');
-      this.store.append(
-        run.id,
-        'coverage',
-        'runner',
-        {
-          method: 'repeat_checkpoint/1',
-          state: 'ALREADY_CHECKED',
-          reason:
-            'The analyst already checked this exact screenshot, and nothing was seen or done on the page since. It is not sent to the analyst or reviewer again; the earlier check and any review of it stand.',
-          captureId: current.id,
-          analystCoverageId: checked.id,
-        },
-        [current.id, checked.id],
-      );
-      return current;
-    }
+    if (this.repeatCheckpoint(run, current, signal)) return current;
     try {
       return (await this.analyse(models, run, current, walk, signal, probe)) ?? current;
     } catch (error) {
       return this.recoverIncomplete(error, run, current, walk, signal);
+    }
+  }
+  /** Records that this exact screenshot was already checked, or handed over, with nothing
+   * seen or done since; the analyst and reviewer are not called again for it. */
+  private repeatCheckpoint(
+    run: Run,
+    current: RecordEntry,
+    signal: AbortSignal,
+    track?: AnalysisTrack,
+  ) {
+    const records = this.store.records(run.id);
+    const checked = earlierCheck(records, current);
+    const queued =
+      track?.last?.captureId === current.id &&
+      !walkEvidenceSince(records, track.last.throughSeq, current);
+    if (!checked && !queued) return false;
+    signal.throwIfAborted();
+    if (this.store.run(run.id).state !== 'running') throw Error('The run has stopped.');
+    this.store.append(
+      run.id,
+      'coverage',
+      'runner',
+      {
+        method: 'repeat_checkpoint/1',
+        state: 'ALREADY_CHECKED',
+        reason: checked
+          ? 'The analyst already checked this exact screenshot, and nothing was seen or done on the page since. It is not sent to the analyst or reviewer again; the earlier check and any review of it stand.'
+          : 'This exact screenshot is already being checked, and nothing was seen or done on the page since. It is not sent to the analyst or reviewer again.',
+        captureId: current.id,
+        ...(checked ? { analystCoverageId: checked.id } : {}),
+      },
+      [current.id, ...(checked ? [checked.id] : [])],
+    );
+    return true;
+  }
+  /** Hands this screen to the analysis track and returns at once, so the robot keeps
+   * walking while the analyst and reviewer check it (owner, 30 Oct). */
+  private async queueCheckpoint(
+    track: AnalysisTrack,
+    models: MetaModels,
+    run: Run,
+    current: RecordEntry,
+    walk: BrowserWalk,
+    signal: AbortSignal,
+  ) {
+    track.rethrow();
+    if (this.stopForDeniedPage(run, walk, current)) return;
+    if (this.repeatCheckpoint(run, current, signal, track)) return;
+    // The live page is read here, on the robot's track; the check itself reads saved originals.
+    await this.readCheckpointContext(run, walk, current);
+    track.rethrow();
+    declareCriterionScopes(this.store, run.id);
+    const throughSeq = this.store.records(run.id).at(-1)?.seq ?? 0;
+    track.add(current, throughSeq, async () => {
+      if (signal.aborted || this.store.run(run.id).state !== 'running') return;
+      try {
+        await this.analyse(models, run, current, walk, signal, undefined, { track, throughSeq });
+      } catch (error) {
+        if (signal.aborted || this.store.run(run.id).state !== 'running') return;
+        this.incompleteCheckpoint(error, run, current, signal);
+      }
+    });
+  }
+  /** Focused checks the analyst asked for, done now, between the robot's own steps.
+   * Each is refused, and saved as not tested, unless the page still matches its screenshot. */
+  private async requestedChecks(
+    track: AnalysisTrack,
+    run: Run,
+    walk: BrowserWalk,
+    probe: VoiceOverProbe,
+    current: RecordEntry,
+    signal: AbortSignal,
+  ) {
+    track.rethrow();
+    for (const request of track.takeRequests())
+      current = await performFocusedCheck(
+        this.store,
+        run.id,
+        walk,
+        probe,
+        this.focusedBudget(run.id),
+        current,
+        request,
+        signal,
+      );
+    return current;
+  }
+  private async readCheckpointContext(run: Run, walk: BrowserWalk, current: RecordEntry) {
+    if (typeof walk.observationStamp !== 'function') return;
+    try {
+      await readJourneyContext(walk, current);
+    } catch (error) {
+      this.store.append(
+        run.id,
+        'limit',
+        'analyst',
+        { reason: 'Original journey context could not be collected.', detail: safeError(error) },
+        [current.id],
+      );
     }
   }
   private async recoverIncomplete(
@@ -1157,22 +1250,18 @@ export class Runner {
     walk: BrowserWalk,
     signal: AbortSignal,
     probe?: VoiceOverProbe,
+    background?: { track: AnalysisTrack; throughSeq: number },
   ) {
+    const track = background?.track;
     declareCriterionScopes(this.store, run.id);
-    if (typeof walk.observationStamp === 'function') {
-      try {
-        await readJourneyContext(walk, current);
-      } catch (error) {
-        this.store.append(
-          run.id,
-          'limit',
-          'analyst',
-          { reason: 'Original journey context could not be collected.', detail: safeError(error) },
-          [current.id],
-        );
-      }
-    }
-    const snapshot = requestEvidence(this.store, run.id, 'analyst', current);
+    if (!track) await this.readCheckpointContext(run, walk, current);
+    const snapshot = requestEvidence(
+      this.store,
+      run.id,
+      'analyst',
+      current,
+      background?.throughSeq,
+    );
     const images = walk.images(imageRecordsForRead(snapshot));
     if (analysisNetworkDeferred(this.store.records(run.id), 'analyst')) return current;
     const analysis = await optionalAnalysisRequest('analyst', () =>
@@ -1236,7 +1325,7 @@ export class Runner {
         },
         visualSources.sources,
       );
-      if (target) {
+      if (target && !track?.isCancelled) {
         try {
           await mapElement(this.store, models, run.id, target.capture, target.target.id, signal);
         } catch (e) {
@@ -1258,6 +1347,19 @@ export class Runner {
       topics: analysis.coverage,
       readSnapshotId: snapshot.read.id,
     });
+    if (track) {
+      // On the analysis track the browser belongs to the robot: requested checks are handed
+      // back, and the review reads the same saved originals the analyst read.
+      for (const request of (analysis.missingEvidence ?? []) as MissingEvidenceRequest[])
+        track.ask(request);
+      declareCriterionScopes(this.store, run.id);
+      if (
+        !track.isCancelled &&
+        this.store.usage(run.id).requests.filter((r) => r.role === 'reviewer').length < 3
+      )
+        await this.review(models, run, current, walk, signal, false, background.throughSeq);
+      return current;
+    }
     let next = current;
     for (const request of (analysis.missingEvidence ?? []) as MissingEvidenceRequest[])
       next = await performFocusedCheck(
@@ -1287,11 +1389,12 @@ export class Runner {
     walk: BrowserWalk,
     signal: AbortSignal,
     final: boolean,
+    throughSeq?: number,
   ) {
     const candidates = this.store.records(run.id).filter((r) => r.kind === 'candidate');
     const proposals = this.store.records(run.id).filter((r) => r.kind === 'criterion_proposal');
     if (!candidates.length && !proposals.length) return;
-    const snapshot = requestEvidence(this.store, run.id, 'reviewer', current);
+    const snapshot = requestEvidence(this.store, run.id, 'reviewer', current, throughSeq);
     const images = walk.images(imageRecordsForRead(snapshot));
     if (analysisNetworkDeferred(this.store.records(run.id), 'reviewer')) return;
     const result = await optionalAnalysisRequest('reviewer', () =>

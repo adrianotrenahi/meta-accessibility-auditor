@@ -391,12 +391,20 @@ test('Spending reserves before a request and retains unknown charges', () => {
   try {
     const id = x.store.reserve(x.run.id, 'driver', 100000, approved);
     assert.equal(x.store.usage().reserved, 100000);
+    assert.throws(() => x.store.reserve(x.run.id, 'driver', 2500, approved), /in progress/);
+    // The analysis track may have its own request in flight beside the navigator's
+    // (owner, 30 Oct); both charges are held, so the money limits still count them.
+    const beside = x.store.reserve(x.run.id, 'sam', 2500, approved);
+    assert.equal(x.store.usage().reserved, 102500);
     assert.throws(() => x.store.reserve(x.run.id, 'sam', 2500, approved), /in progress/);
+    const other = x.store.create('Another run', x.run.url, 'offline');
+    assert.throws(() => x.store.reserve(other.id, 'analyst', 2500, approved), /in progress/);
+    x.store.settle(beside, 2500, 'completed');
     x.store.settle(id, null, 'unknown');
     assert.equal(x.store.usage().reserved, 100000);
     const next = x.store.reserve(x.run.id, 'sam', 2500, approved);
     x.store.settle(next, 2500, 'completed');
-    assert.equal(x.store.usage().spent, 2500);
+    assert.equal(x.store.usage().spent, 5000);
   } finally {
     x.close();
   }
