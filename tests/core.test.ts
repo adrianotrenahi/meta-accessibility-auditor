@@ -515,6 +515,24 @@ test('A changed original picture cannot be supplied as the old evidence', () => 
     x.close();
   }
 });
+// Owner, 31 Oct: each step got slower. The audits page reads every screenshot twice a second,
+// and each one re-read the whole run; now only the capture that saved the file is looked up.
+test('A screenshot is checked against its own capture without re-reading the whole run', () => {
+  const x = create();
+  try {
+    const asset = x.store.asset(x.run.id, 'original.png', Buffer.from('original'));
+    // Another kind of record naming the file, and another run's capture, are not its original.
+    x.store.append(x.run.id, 'action', 'browser', { imageFile: asset.file, imageHash: 'f'.repeat(64) });
+    const other = x.store.create('Other', x.run.url, 'offline');
+    x.store.append(other.id, 'capture', 'browser', { imageFile: asset.file, imageHash: 'f'.repeat(64) });
+    assert.throws(() => x.store.image(x.run.id, 'original.png'), /capture record is missing/);
+    x.store.append(x.run.id, 'capture', 'browser', { imageFile: asset.file, imageHash: asset.hash });
+    x.store.records = () => assert.fail('the whole run was re-read');
+    assert.equal(x.store.image(x.run.id, 'original.png').toString(), 'original');
+  } finally {
+    x.close();
+  }
+});
 test('SAM uses capture pixels, validates visible targets and avoids unrelated geometry', () => {
   const target = {
     id: 'e1',
