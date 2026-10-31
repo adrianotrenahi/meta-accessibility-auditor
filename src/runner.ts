@@ -1011,6 +1011,8 @@ export class Runner {
           [current.id],
         );
         decisionAllowanceSpent = false;
+        // Keys sent just before the stop may have changed the page; the final check reads it now.
+        current = await walk.captureSettled().catch(() => current);
       }
       if (this.stopForDeniedPage(run, walk, current)) return;
       if (decisionAllowanceSpent)

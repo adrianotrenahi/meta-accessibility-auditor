@@ -68,6 +68,10 @@ export async function visitorUserAgent(browser: Browser) {
     await page.close();
   }
 }
+/** How long a dropdown keeps typed keys as one search before starting a new one. */
+const OPTION_SEARCH_RESET_MS = 1200;
+/** Key presses one choose_option may send (more than any options sharing a first character). */
+export const MAX_OPTION_PRESSES = 60;
 export const ARRIVAL_QUIET_MS = 2500;
 /** Controls each screenshot lists for the navigator (owner, 31 Oct: up to 500, was 60). */
 export const MAX_LISTED_CONTROLS = 500;
@@ -173,6 +177,7 @@ export class BrowserWalk {
   private readonly pointerStateKey = '__access_walk_pointer_' + randomUUID();
   /** Page-side registry of the exact controls each original listed (no DOM change). */
   private readonly stampKey = '__access_walk_stamp_' + randomUUID();
+  private lastOptionKeyAt = 0;
   constructor(
     public store: Store,
     public runId: string,
@@ -1020,6 +1025,123 @@ export class BrowserWalk {
         );
       this.count();
       await this.page.keyboard.type(action.text);
+    } else if (action.kind === 'choose_option') {
+      // One decision chooses an option in a native dropdown by keyboard (owner, 31 Oct: dates
+      // on Booking.com are day and month dropdowns, and one AI decision per press took minutes).
+      // On a Mac the arrow keys open a closed dropdown instead of stepping through it, so the
+      // robot presses the option's first character: each press moves to the next option that
+      // starts with it ("2": 20, 21, 22...), checked after every press. Each press is a counted
+      // keyboard input; no text is entered.
+      if (before.paymentForm)
+        throw new InputRefused('A dropdown inside a payment form is outside this run.');
+      const wanted = (action.option ?? '').replace(/\s+/g, ' ').trim();
+      // The dropdown first read is remembered, so focus moving to any other control (even
+      // another dropdown) stops the presses before a key reaches it.
+      const marker = this.stampKey + '_choice';
+      const read = (remember: boolean) =>
+        this.page.evaluate(
+          ({ target, key, remember }: { target: string; key: string; remember: boolean }) => {
+            const element = document.activeElement;
+            const registry = globalThis as any;
+            if (!(element instanceof HTMLSelectElement) || element.disabled || element.multiple)
+              return { error: 'not-dropdown' as const };
+            if (remember) registry[key] = element;
+            else if (registry[key] !== element) return { error: 'focus-moved' as const };
+            const labels = [...element.options].map((option) => ({
+              label: (option.label || option.text).replace(/\s+/g, ' ').trim(),
+              disabled: option.disabled,
+            }));
+            const same = labels.filter(
+              (option) => option.label.toLowerCase() === target.toLowerCase(),
+            );
+            const match = same.find((option) => !option.disabled);
+            if (!match)
+              return {
+                error: same.length ? ('disabled' as const) : ('missing' as const),
+                available: labels
+                  .filter((option) => !option.disabled)
+                  .map((option) => option.label)
+                  .slice(0, 40),
+              };
+            const first = match.label.toLowerCase()[0] ?? '';
+            return {
+              chosen:
+                (labels[element.selectedIndex]?.label ?? '').toLowerCase() === target.toLowerCase(),
+              first,
+              sharing: labels.filter(
+                (option) => !option.disabled && option.label.toLowerCase().startsWith(first),
+              ).length,
+            };
+          },
+          { target: wanted, key: marker, remember },
+        );
+      const refuse = (state: { error: string; available?: string[] }) =>
+        new InputRefused(
+          state.error === 'not-dropdown'
+            ? 'choose_option needs a focused dropdown; reach it with focus_target first.'
+            : state.error === 'focus-moved'
+              ? 'Focus left the dropdown before the choice; nothing was pressed.'
+              : state.error === 'disabled'
+                ? `The option "${wanted}" is shown but disabled, so it cannot be chosen.`
+                : `The focused dropdown has no option "${wanted}". Available: ${(state.available ?? []).join(' | ')}.`,
+        );
+      let state = await read(true);
+      if (state.error) throw refuse({ error: state.error, available: state.available });
+      if (!/^[a-z0-9]$/.test(state.first ?? ''))
+        throw new InputRefused(`"${wanted}" cannot be reached by its first character.`);
+      const key = state.first!;
+      // Dropdowns join keys pressed within about a second into one search ("2", "2" then "3"
+      // would look for "223"), so a new choice waits until the previous one has been forgotten,
+      // then checks the same dropdown still has focus.
+      const sinceLast = Date.now() - this.lastOptionKeyAt;
+      if (sinceLast < OPTION_SEARCH_RESET_MS) {
+        await this.page.waitForTimeout(OPTION_SEARCH_RESET_MS - sinceLast);
+        state = await read(false);
+        if (state.error) throw refuse({ error: state.error, available: state.available });
+      }
+      let presses = 0;
+      try {
+        while (!state.chosen && presses <= Math.min(state.sharing ?? 0, MAX_OPTION_PRESSES)) {
+          this.count();
+          await this.page.keyboard.press(key);
+          this.lastOptionKeyAt = Date.now();
+          presses++;
+          state = await read(false);
+          if (state.error) break;
+        }
+      } catch (error) {
+        // A stop mid-choice (key-press limit, run stopped, time limit) still saves the presses
+        // already sent before passing the stop on.
+        if (presses)
+          this.store.append(
+            this.runId,
+            'action',
+            'browser',
+            {
+              method: 'actual_keyboard_or_browser',
+              sourceCaptureId:
+                source.kind === 'capture' ? source.id : source.payload.sourceCaptureId,
+              sourceImageHash:
+                source.kind === 'capture'
+                  ? source.payload.imageHash
+                  : source.payload.sourceImageHash,
+              action: { ...action, key, presses },
+              requestedAction,
+              before,
+              after: null,
+              urlBefore,
+              urlAfter: this.page.url(),
+              outcome: 'option_interrupted',
+              waitAfterMs: 0,
+              actionCount: this.actions,
+            },
+            [source.id],
+          );
+        throw error;
+      }
+      const chosen = !state.error && state.chosen === true;
+      action = { ...action, key, presses } as Action;
+      if (!chosen) outcome = 'option_not_reached';
     } else if (action.kind === 'scroll') {
       this.count();
       await this.page.mouse.wheel(0, action.direction === 'up' ? -600 : 600);

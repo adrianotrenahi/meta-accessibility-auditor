@@ -44,10 +44,14 @@ export function analysisNetworkDeferred(records: RecordEntry[], role: AnalysisRo
     if (record.kind !== 'action' || record.author !== 'browser' || record.seq <= after)
       return false;
     if (!recordIsIntact(record)) throw Error('The later original input changed.');
+    // A dropdown choice that sent presses changed the page even when it stopped short.
+    const dropdownPresses =
+      record.payload.action?.kind === 'choose_option' && Number(record.payload.action?.presses) > 0;
     if (
       record.payload.method !== 'actual_keyboard_or_browser' ||
-      record.payload.outcome !== 'performed' ||
-      !['press', 'type', 'scroll', 'back'].includes(record.payload.action?.kind)
+      (!dropdownPresses &&
+        (record.payload.outcome !== 'performed' ||
+          !['press', 'type', 'scroll', 'back'].includes(record.payload.action?.kind)))
     )
       return false;
     const source = records.find((item) => item.id === record.payload.sourceCaptureId);
