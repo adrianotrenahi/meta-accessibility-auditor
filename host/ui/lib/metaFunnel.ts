@@ -5,7 +5,6 @@ import {
   metaKeyboardMap,
 } from "./metaKeyboardEvidence";
 import { readOptionalMetaAssessment, metaAssessmentNote } from "./metaAssessment";
-import { metaScreenGroups } from "./metaScreenState";
 /** The host's session identity stays separate from the engine's original IDs. */
 export function metaWalkSession(
   snapshot: HostSnapshot,
@@ -36,7 +35,7 @@ export function metaWalkSession(
     sessionId: jobId,
     evidenceBase: `/api/offline/jobs/${jobId}/assets`,
   });
-  const groups = new Map(metaScreenGroups(snapshot.captures).map((group) => [group.primary.id, group]));
+  const groups = new Map(view.screens.map((screen) => [screen.primary.id, screen]));
   return {
     id: jobId,
     name:

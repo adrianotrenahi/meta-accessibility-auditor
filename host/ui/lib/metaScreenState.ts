@@ -59,3 +59,49 @@ export function metaScreenGroups<T extends StateCapture>(captures: readonly T[])
   }
   return groups;
 }
+
+/** One report screen per strip picture (owner, 31 Oct: the strip and the Findings tab show
+ * the same pictures, and only those). Consecutive screen groups with the same page key form
+ * one page visit, as the strip always did; a modal, menu or viewport change starts its own.
+ * Every picture the analyst read, or a finding points to, is its own screen, so the Booking.com
+ * cookie banner and the home page behind it both show and pins stay on their own image. A
+ * visit nobody analysed shows its latest picture. Every original stays in `captures`. */
+export function metaReportScreens<T extends StateCapture>(
+  snapshot: {
+    captures: readonly T[];
+    analysis?: { completed: { role: string; captureIds: string[] }[] };
+    findings: readonly { captureIds: string[]; anchor: { captureId: string } | null }[];
+  },
+  pageKey: (capture: T) => string,
+) {
+  const read = new Set([
+    ...(snapshot.analysis?.completed ?? [])
+      .filter((row) => row.role === 'analyst')
+      .flatMap((row) => row.captureIds),
+    ...snapshot.findings.map((finding) => finding.anchor?.captureId ?? finding.captureIds[0]!),
+  ]);
+  const explicit = (capture: T) => capture.screenState !== undefined;
+  const visits: { first: T; captures: T[] }[] = [];
+  for (const group of metaScreenGroups(snapshot.captures)) {
+    const previous = visits.at(-1);
+    if (previous && !explicit(group.primary) && !explicit(previous.first) &&
+      pageKey(previous.first) === pageKey(group.primary))
+      previous.captures.push(...group.originals);
+    else visits.push({ first: group.primary, captures: [...group.originals] });
+  }
+  return visits.flatMap(({ captures }) => {
+    if (!captures.some((capture) => read.has(capture.id)))
+      return [{ primary: captures.at(-1)!, originals: [captures.at(-1)!], captures, analysed: false }];
+    // Unread pictures belong to the analysed screen they lead up to, or else the last one.
+    const screens: { primary: T; originals: T[]; captures: T[]; analysed: boolean }[] = [];
+    let waiting: T[] = [];
+    for (const capture of captures) {
+      waiting.push(capture);
+      if (!read.has(capture.id)) continue;
+      screens.push({ primary: capture, originals: [capture], captures: waiting, analysed: true });
+      waiting = [];
+    }
+    screens.at(-1)!.captures.push(...waiting);
+    return screens;
+  });
+}
