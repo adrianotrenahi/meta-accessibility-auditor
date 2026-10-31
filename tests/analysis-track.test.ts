@@ -106,3 +106,67 @@ test('A check on the track reads the walk as it stood when its screen was handed
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('After a hard failure of the walk, no queued check starts', async () => {
+  const track = new AnalysisTrack();
+  const started: string[] = [];
+  let release!: () => void;
+  const inFlight = new Promise<void>((resolve) => (release = resolve));
+  track.add(screen, 1, async () => {
+    started.push('in flight');
+    await inFlight;
+  });
+  track.add(screen, 2, async () => {
+    started.push('queued');
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  track.cancel();
+  assert.equal(track.isCancelled, true);
+  release();
+  await track.settle();
+  assert.deepEqual(
+    started,
+    ['in flight'],
+    'the request already in flight finishes; no other starts',
+  );
+});
+
+test('A background read never includes walk records saved after its hand-over', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-track-'));
+  const store = new Store(dir);
+  try {
+    const run = store.create('Bounded walk records', 'http://127.0.0.1/a', 'offline');
+    const asset = store.asset(run.id, 'capture_a.png', Buffer.from('a'));
+    const handedOver = store.append(run.id, 'capture', 'browser', {
+      url: 'http://127.0.0.1/a',
+      stable: true,
+      imageFile: asset.file,
+      imageHash: asset.hash,
+    });
+    const claim = store.append(run.id, 'candidate', 'analyst', { title: 'Earlier claim' }, [
+      handedOver.id,
+    ]);
+    const throughSeq = store.records(run.id).at(-1)!.seq;
+    const later = [
+      store.append(run.id, 'action', 'browser', { method: 'actual_keyboard_or_browser' }),
+      store.append(run.id, 'at_check', 'browser', { method: 'voiceover', spoken: 'Later page' }),
+      store.append(run.id, 'navigator_note', 'driver', { kind: 'progress', text: 'Later step' }),
+      store.append(run.id, 'limit', 'browser', { reason: 'A later limit.' }),
+    ];
+    for (const role of ['analyst', 'reviewer'] as const) {
+      const read = requestEvidence(store, run.id, role, handedOver, throughSeq);
+      const ids = new Set(read.records.map((record) => record.id));
+      assert(
+        later.every((record) => !ids.has(record.id)),
+        `${role} read no later walk record`,
+      );
+      assert(ids.has(claim.id), `${role} still reads the earlier claim`);
+      assert.equal(read.read.payload.walkThroughSeq, throughSeq);
+    }
+    const unbounded = requestEvidence(store, run.id, 'analyst', handedOver);
+    assert(later.every((record) => unbounded.records.some((item) => item.id === record.id)));
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

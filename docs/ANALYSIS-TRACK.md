@@ -15,10 +15,14 @@ were reached (`src/analysis-track.ts`).
   the analyst asks for (for example, Tab to a control) is handed back to the robot, which
   performs it between its own steps only if the page still matches that screenshot;
   otherwise it is saved as not tested, with no input sent.
-- **Each check reads the walk as it stood at hand-over.** Later robot steps never become
-  evidence for an earlier screen (`requestEvidence(..., throughSeq)`).
+- **Each check reads the walk as it stood at hand-over.** Later robot steps, notes,
+  screen-reader results and limits never become evidence for an earlier screen
+  (`requestEvidence(..., throughSeq)` and `Store.snapshot(..., walkThroughSeq)`). Claims and
+  proposals are still read in full.
 - **Failures.** A hard failure on the track stops the robot at its next step, as it did
-  inline; at most the decision already under way finishes first. A dropped connection
+  inline; at most the decision already under way finishes first. A hard failure of the walk
+  cancels the track: no waiting screen starts a paid check, and the check in progress starts
+  no reviewer or pinpointing request (its request already in flight finishes and is kept). A dropped connection
   leaves that checkpoint unknown and never makes the robot refresh or wait.
 - **End of the walk.** Every handed-over screen is checked before the final checkpoint and
   the final review. Stop and abort still end the run; no new paid request starts after them.

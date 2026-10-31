@@ -639,3 +639,39 @@ test('A hard failure on the analysis track stops the walk at the robot’s next 
     await x.close();
   }
 });
+
+test('A hard failure of the walk cancels screens still waiting for their check', async (t) => {
+  const x = await fixture(false, false);
+  let decisions = 0,
+    analyses = 0,
+    reviews = 0;
+  let release!: () => void;
+  const answered = new Promise<void>((resolve) => (release = resolve));
+  t.mock.method(MetaModels.prototype, 'reason', async (...args: any[]) => {
+    const role = args[1];
+    if (role === 'analyst') {
+      analyses++;
+      await answered;
+      return { findings: [], coverage: [] };
+    }
+    if (role === 'reviewer') {
+      reviews++;
+      return { decisions: [] };
+    }
+    if (++decisions === 7) {
+      setImmediate(release);
+      throw Error('Synthetic hard driver failure.');
+    }
+    return { kind: 'press', key: 'Escape', note: 'Synthetic key.' };
+  });
+  try {
+    await assert.rejects(
+      (x.runner as any).live(x.run, x.walk, new VoiceOverProbe(x.walk), x.current, x.controller),
+      /Synthetic hard driver failure/,
+    );
+    assert.equal(analyses, 1, 'the second handed-over screen never started its paid check');
+    assert.equal(reviews, 0);
+  } finally {
+    await x.close();
+  }
+});

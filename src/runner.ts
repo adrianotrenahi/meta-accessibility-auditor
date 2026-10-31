@@ -846,8 +846,9 @@ export class Runner {
       current = await this.analyseCheckpoint(models, run, current, walk, signal, probe);
     } catch (error) {
       // A hard navigation, money, source or observation failure cannot start
-      // another optional model request from finally.
+      // another optional model request from finally, nor from the analysis track.
       finalReviewSafe = false;
+      track.cancel();
       throw error;
     } finally {
       returnEvidence.clear();
@@ -1133,6 +1134,7 @@ export class Runner {
     if (this.repeatCheckpoint(run, current, signal, track)) return;
     // The live page is read here, on the robot's track; the check itself reads saved originals.
     await this.readCheckpointContext(run, walk, current);
+    track.rethrow();
     declareCriterionScopes(this.store, run.id);
     const throughSeq = this.store.records(run.id).at(-1)?.seq ?? 0;
     track.add(current, throughSeq, async () => {
@@ -1323,7 +1325,7 @@ export class Runner {
         },
         visualSources.sources,
       );
-      if (target) {
+      if (target && !track?.isCancelled) {
         try {
           await mapElement(this.store, models, run.id, target.capture, target.target.id, signal);
         } catch (e) {
@@ -1351,7 +1353,10 @@ export class Runner {
       for (const request of (analysis.missingEvidence ?? []) as MissingEvidenceRequest[])
         track.ask(request);
       declareCriterionScopes(this.store, run.id);
-      if (this.store.usage(run.id).requests.filter((r) => r.role === 'reviewer').length < 3)
+      if (
+        !track.isCancelled &&
+        this.store.usage(run.id).requests.filter((r) => r.role === 'reviewer').length < 3
+      )
         await this.review(models, run, current, walk, signal, false, background.throughSeq);
       return current;
     }

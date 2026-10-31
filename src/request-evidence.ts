@@ -411,7 +411,7 @@ export function requestEvidence(
   if (role === 'analyst')
     roots.push(...candidates.map((r) => r.id), ...reviewFeedbackIds(records, runId));
   const receipt = makeImageReceipt(originals, current.id);
-  const snapshot = store.snapshot(runId, role, roots, receipt);
+  const snapshot = store.snapshot(runId, role, roots, receipt, throughSeq);
   for (const r of snapshot.records)
     if (!recordIsIntact(r)) throw Error('A selected original record changed; no request is sent.');
   suppliedImageIds(snapshot.read, snapshot.records);

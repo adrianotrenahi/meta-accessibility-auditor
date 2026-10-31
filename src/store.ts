@@ -608,7 +608,13 @@ export class Store {
       createdAt: r.created,
     };
   }
-  snapshot(runId: string, role: Role, ids?: string[], imageReceipt?: ImageReceipt) {
+  snapshot(
+    runId: string,
+    role: Role,
+    ids?: string[],
+    imageReceipt?: ImageReceipt,
+    walkThroughSeq?: number,
+  ) {
     const records = this.records(runId).filter(
       (r) =>
         !['read_snapshot', 'model_response'].includes(r.kind) &&
@@ -617,9 +623,13 @@ export class Store {
         // A note that an earlier check stands is bookkeeping, not evidence about the page.
         !(r.kind === 'coverage' && r.payload.method === 'repeat_checkpoint/1'),
     );
-    const wanted = new Set(ids ?? records.map((r) => r.id));
+    // A screen checked on the analysis track reads the walk as it stood at hand-over; records
+    // named by id (claims, proposals and what they cite) stay readable in full.
+    const walked =
+      walkThroughSeq === undefined ? records : records.filter((r) => r.seq <= walkThroughSeq);
+    const wanted = new Set(ids ?? walked.map((r) => r.id));
     // The walk and navigator notes are always original records, not another role's digest.
-    for (const r of records)
+    for (const r of walked)
       if (['plan', 'action', 'navigator_note', 'at_check', 'coverage', 'limit'].includes(r.kind))
         wanted.add(r.id);
     const selected = records.filter((r) => wanted.has(r.id));
@@ -630,6 +640,7 @@ export class Store {
       records: selected.map((r) => ({ id: r.id, hash: r.hash, sources: r.sources })),
       missing,
       ...(imageReceipt ? { imageReceipt } : {}),
+      ...(walkThroughSeq === undefined ? {} : { walkThroughSeq }),
     });
     return { read, records: selected };
   }
