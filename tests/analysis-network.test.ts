@@ -14,7 +14,7 @@ import { Store } from '../src/store.js';
 import { Runner } from '../src/runner.js';
 import { ObservationUnsettled } from '../src/browser.js';
 import { assessmentForRun } from '../src/assessment.js';
-import type { RecordEntry } from '../src/types.js';
+import { LIMITS, type RecordEntry } from '../src/types.js';
 
 const privateText = 'untrusted secret 203.0.113.100 https://untrusted.invalid';
 const coded = (code: string) => Object.assign(Error(privateText), { code });
@@ -131,7 +131,8 @@ function fixture(
     .run('historical-unknown', old.id, 'driver', 78087, null, 'unknown', new Date().toISOString());
   store.finish(old.id, 'partial');
   if (options.finalReviewOnly)
-    for (let n = 0; n < 3; n++)
+    // Earlier checkpoint reviews fill every slot but the final one (owner, 31 Oct: all are reviewed).
+    for (let n = 0; n < LIMITS.reviewer - 1; n++)
       store.db
         .prepare('INSERT INTO requests VALUES(?,?,?,?,?,?,?)')
         .run(
