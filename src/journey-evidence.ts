@@ -100,228 +100,259 @@ function performedTriplet(
     );
 }
 
-/** Read-only, bounded and value-whitelisted: no general field values or JSON-LD/customer data. */
+/** The page's declared prices and choices, read in the page; saves nothing. Read-only,
+ * bounded and value-whitelisted: no general field values or JSON-LD/customer data. */
+function readPageJourneyData(page: BrowserWalk['page']) {
+  return page.evaluate((unrecognisedBundleLimit) => {
+    const limits: string[] = [];
+    const dom = {
+      visible(e: Element) {
+        const style = getComputedStyle(e);
+        return (
+          e.getClientRects().length > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+        );
+      },
+      isType(e: Element, name: string) {
+        return (e.getAttribute('itemtype') ?? '')
+          .split(/\s+/)
+          .some(
+            (value) =>
+              value === `https://schema.org/${name}` || value === `http://schema.org/${name}`,
+          );
+      },
+      own(scope: Element, name: string) {
+        return [...scope.querySelectorAll(`[itemprop~="${name}"]`)].filter(
+          (e) =>
+            (e.hasAttribute('itemscope')
+              ? e.parentElement?.closest('[itemscope]')
+              : e.closest('[itemscope]')) === scope,
+        );
+      },
+      scalar(e: Element | undefined) {
+        if (!e || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName)) return null;
+        const text = (e.getAttribute('content') ?? e.textContent ?? '').trim();
+        return text.length > 0 && text.length <= 200 ? text : null;
+      },
+      one(scope: Element, name: string) {
+        const nodes = this.own(scope, name);
+        return nodes.length === 1 ? this.scalar(nodes[0]) : null;
+      },
+      number(text: string | null, positive = false) {
+        if (text === null || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text)) return null;
+        const value = Number(text);
+        return Number.isFinite(value) &&
+          value <= 1_000_000_000 &&
+          (positive ? value > 0 : value >= 0)
+          ? value
+          : null;
+      },
+      identifier(scope: Element) {
+        const id = this.one(scope, 'sku') ?? this.one(scope, 'productID');
+        return id && /^[a-zA-Z0-9._-]{1,80}$/.test(id) ? id : null;
+      },
+      money(scope: Element) {
+        const total = this.number(this.one(scope, 'price'));
+        const code = this.one(scope, 'priceCurrency');
+        return total !== null && code && /^[A-Z]{3}$/.test(code) ? { total, currency: code } : null;
+      },
+    };
+    const offers = [...document.querySelectorAll('[itemscope][itemtype]')].filter(
+      (e) => dom.isType(e, 'Offer') && dom.visible(e),
+    );
+    const bundles = offers.filter(
+      (e) =>
+        dom.own(e, 'includesObject').length > 0 &&
+        !(e.getAttribute('itemprop') ?? '').split(/\s+/).includes('addOn'),
+    );
+    let commerce: {
+      kind: 'declared_bundle_offer';
+      total: number;
+      currency: string;
+      items: { id: string; quantity: number }[];
+      disclosure: string | null;
+    } | null = null;
+    if (bundles.length === 1) {
+      const bundle = bundles[0],
+        price = dom.money(bundle),
+        nodes = dom.own(bundle, 'includesObject');
+      const items: { id: string; quantity: number }[] = [];
+      let complete = nodes.length > 0 && nodes.length <= 20;
+      for (const node of nodes.slice(0, 20)) {
+        const products = dom.own(node, 'typeOfGood');
+        const product =
+          products.length === 1 && dom.isType(products[0], 'Product') ? products[0] : null;
+        const id = product ? dom.identifier(product) : null;
+        const quantity = dom.number(dom.one(node, 'amountOfThisGood'), true);
+        if (
+          !dom.isType(node, 'TypeAndQuantityNode') ||
+          !id ||
+          quantity === null ||
+          !Number.isSafeInteger(quantity) ||
+          quantity > 1_000_000
+        )
+          complete = false;
+        else items.push({ id, quantity });
+      }
+      if (new Set(items.map((item) => item.id)).size !== items.length) complete = false;
+      const descriptions = dom
+        .own(bundle, 'description')
+        .filter((e) => dom.visible(e) && !['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName));
+      const disclosure =
+        descriptions.length === 1
+          ? (descriptions[0].textContent ?? '').trim().slice(0, 500) || null
+          : null;
+      if (price && complete)
+        commerce = {
+          kind: 'declared_bundle_offer',
+          ...price,
+          items: items.sort((a, b) => a.id.localeCompare(b.id)),
+          disclosure,
+        };
+    }
+    if (!commerce) limits.push(unrecognisedBundleLimit);
+    const choices: {
+      id: string;
+      selector: string;
+      type: 'checkbox' | 'radio' | 'select' | 'quantity';
+      checked: boolean | null;
+      selectedIndexes: number[];
+      quantity: number | null;
+      extra: { id: string; price: number; currency: string } | null;
+    }[] = [];
+    const controls = [
+      ...document.querySelectorAll(
+        'input[type="checkbox"],input[type="radio"],select,input[type="number"][itemprop~="amountOfThisGood"],input[type="number"][itemprop~="orderQuantity"]',
+      ),
+    ].filter(dom.visible);
+    let choicesComplete = controls.length <= 40;
+    for (const control of controls.slice(0, 40)) {
+      const descriptor = [
+        control.id,
+        control.getAttribute('name'),
+        control.getAttribute('autocomplete'),
+      ].join(' ');
+      if (
+        /password|token|secret|one.?time|otp|verification|security|auth|session|credit|payment|cvv|card|email|address|phone/i.test(
+          descriptor,
+        )
+      ) {
+        choicesComplete = false;
+        continue;
+      }
+      const input = control as HTMLInputElement;
+      const type =
+        control.tagName === 'SELECT'
+          ? 'select'
+          : input.type === 'number'
+            ? 'quantity'
+            : (input.type as 'checkbox' | 'radio');
+      const id = control.id;
+      const selector = id ? '#' + CSS.escape(id) : '';
+      const extraScope = control.closest('[itemscope][itemtype]');
+      const extraPrice =
+        extraScope &&
+        dom.isType(extraScope, 'Offer') &&
+        (extraScope.getAttribute('itemprop') ?? '').split(/\s+/).includes('addOn')
+          ? dom.money(extraScope)
+          : null;
+      const extraId = extraScope ? dom.identifier(extraScope) : null;
+      const extra =
+        extraPrice && extraId
+          ? { id: extraId, price: extraPrice.total, currency: extraPrice.currency }
+          : null;
+      const quantity =
+        type === 'quantity' &&
+        /^\d+$/.test(input.value) &&
+        Number(input.value) > 0 &&
+        Number(input.value) <= 1_000_000
+          ? Number(input.value)
+          : null;
+      const quantityProducts =
+        extraScope && dom.isType(extraScope, 'TypeAndQuantityNode')
+          ? dom.own(extraScope, 'typeOfGood')
+          : [];
+      const quantityItemId =
+        quantityProducts.length === 1 && dom.isType(quantityProducts[0], 'Product')
+          ? dom.identifier(quantityProducts[0])
+          : null;
+      const quantityKnown =
+        !!quantityItemId &&
+        !!commerce?.items.some((item) => item.id === quantityItemId && item.quantity === quantity);
+      if (
+        !id ||
+        id.length > 200 ||
+        selector.length > 240 ||
+        document.querySelectorAll(selector).length !== 1 ||
+        (type === 'quantity' ? quantity === null || !quantityKnown : !extra) ||
+        (!!extra && !!commerce && extra.currency !== commerce.currency) ||
+        type === 'select' ||
+        input.disabled
+      )
+        choicesComplete = false;
+      choices.push({
+        id: id.slice(0, 200),
+        selector: selector.slice(0, 240),
+        type,
+        checked: type === 'checkbox' || type === 'radio' ? input.checked : null,
+        selectedIndexes:
+          type === 'select'
+            ? [...(control as HTMLSelectElement).options]
+                .flatMap((option, index) => (option.selected ? [index] : []))
+                .slice(0, 100)
+            : [],
+        quantity,
+        extra,
+      });
+    }
+    if (!choicesComplete)
+      limits.push(
+        'Some choice identities, meanings or states were not safely established; identical page addresses or totals do not prove an unchanged selection.',
+      );
+    return { commerce, choices, choicesComplete, limits };
+  }, UNRECOGNISED_BUNDLE_LIMIT);
+}
+
+const selection = (data: JourneyData) =>
+  data.choices
+    .map(({ id, selector, type, checked, selectedIndexes, quantity, extra }) => ({
+      id,
+      selector,
+      type,
+      checked,
+      selectedIndexes,
+      quantity,
+      extraId: extra?.id ?? null,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+/** Prices and choices as they are now, read as text with no screenshot (owner, 31 Oct: a
+ * Tab on a page with prices needs a price note, not a picture). Null when unreadable. */
+export async function journeyDataNow(walk: BrowserWalk): Promise<JourneyData | null> {
+  walk.assertActive();
+  const parsed = journeyDataSchema.safeParse(await readPageJourneyData(walk.page));
+  return parsed.success ? parsed.data : null;
+}
+
+/** Whether declared prices or choices differ; an unreadable side counts as a change. */
+export function journeyDataChanged(before: JourneyData | null, after: JourneyData | null) {
+  if (!before || !after) return true;
+  // Every declared price counts here, including an add-on's own price.
+  const shape = (data: JourneyData) =>
+    JSON.stringify([
+      data.commerce,
+      [...data.choices].sort((a, b) => a.id.localeCompare(b.id)),
+      data.choicesComplete,
+    ]);
+  return shape(before) !== shape(after);
+}
+
 export async function readJourneyContext(walk: BrowserWalk, source: RecordEntry) {
   walk.assertActive();
   const { store, runId, page } = walk;
   capture(store, runId, source);
   const stamp = await walk.observationStamp();
   const sameSource = source.payload.url === page.url() && source.payload.stateStamp === stamp;
-  const data = sameSource
-    ? await page.evaluate((unrecognisedBundleLimit) => {
-        const limits: string[] = [];
-        const dom = {
-          visible(e: Element) {
-            const style = getComputedStyle(e);
-            return (
-              e.getClientRects().length > 0 &&
-              style.visibility !== 'hidden' &&
-              style.display !== 'none'
-            );
-          },
-          isType(e: Element, name: string) {
-            return (e.getAttribute('itemtype') ?? '')
-              .split(/\s+/)
-              .some(
-                (value) =>
-                  value === `https://schema.org/${name}` || value === `http://schema.org/${name}`,
-              );
-          },
-          own(scope: Element, name: string) {
-            return [...scope.querySelectorAll(`[itemprop~="${name}"]`)].filter(
-              (e) =>
-                (e.hasAttribute('itemscope')
-                  ? e.parentElement?.closest('[itemscope]')
-                  : e.closest('[itemscope]')) === scope,
-            );
-          },
-          scalar(e: Element | undefined) {
-            if (!e || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName)) return null;
-            const text = (e.getAttribute('content') ?? e.textContent ?? '').trim();
-            return text.length > 0 && text.length <= 200 ? text : null;
-          },
-          one(scope: Element, name: string) {
-            const nodes = this.own(scope, name);
-            return nodes.length === 1 ? this.scalar(nodes[0]) : null;
-          },
-          number(text: string | null, positive = false) {
-            if (text === null || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text)) return null;
-            const value = Number(text);
-            return Number.isFinite(value) &&
-              value <= 1_000_000_000 &&
-              (positive ? value > 0 : value >= 0)
-              ? value
-              : null;
-          },
-          identifier(scope: Element) {
-            const id = this.one(scope, 'sku') ?? this.one(scope, 'productID');
-            return id && /^[a-zA-Z0-9._-]{1,80}$/.test(id) ? id : null;
-          },
-          money(scope: Element) {
-            const total = this.number(this.one(scope, 'price'));
-            const code = this.one(scope, 'priceCurrency');
-            return total !== null && code && /^[A-Z]{3}$/.test(code)
-              ? { total, currency: code }
-              : null;
-          },
-        };
-        const offers = [...document.querySelectorAll('[itemscope][itemtype]')].filter(
-          (e) => dom.isType(e, 'Offer') && dom.visible(e),
-        );
-        const bundles = offers.filter(
-          (e) =>
-            dom.own(e, 'includesObject').length > 0 &&
-            !(e.getAttribute('itemprop') ?? '').split(/\s+/).includes('addOn'),
-        );
-        let commerce: {
-          kind: 'declared_bundle_offer';
-          total: number;
-          currency: string;
-          items: { id: string; quantity: number }[];
-          disclosure: string | null;
-        } | null = null;
-        if (bundles.length === 1) {
-          const bundle = bundles[0],
-            price = dom.money(bundle),
-            nodes = dom.own(bundle, 'includesObject');
-          const items: { id: string; quantity: number }[] = [];
-          let complete = nodes.length > 0 && nodes.length <= 20;
-          for (const node of nodes.slice(0, 20)) {
-            const products = dom.own(node, 'typeOfGood');
-            const product =
-              products.length === 1 && dom.isType(products[0], 'Product') ? products[0] : null;
-            const id = product ? dom.identifier(product) : null;
-            const quantity = dom.number(dom.one(node, 'amountOfThisGood'), true);
-            if (
-              !dom.isType(node, 'TypeAndQuantityNode') ||
-              !id ||
-              quantity === null ||
-              !Number.isSafeInteger(quantity) ||
-              quantity > 1_000_000
-            )
-              complete = false;
-            else items.push({ id, quantity });
-          }
-          if (new Set(items.map((item) => item.id)).size !== items.length) complete = false;
-          const descriptions = dom
-            .own(bundle, 'description')
-            .filter((e) => dom.visible(e) && !['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName));
-          const disclosure =
-            descriptions.length === 1
-              ? (descriptions[0].textContent ?? '').trim().slice(0, 500) || null
-              : null;
-          if (price && complete)
-            commerce = {
-              kind: 'declared_bundle_offer',
-              ...price,
-              items: items.sort((a, b) => a.id.localeCompare(b.id)),
-              disclosure,
-            };
-        }
-        if (!commerce) limits.push(unrecognisedBundleLimit);
-        const choices: {
-          id: string;
-          selector: string;
-          type: 'checkbox' | 'radio' | 'select' | 'quantity';
-          checked: boolean | null;
-          selectedIndexes: number[];
-          quantity: number | null;
-          extra: { id: string; price: number; currency: string } | null;
-        }[] = [];
-        const controls = [
-          ...document.querySelectorAll(
-            'input[type="checkbox"],input[type="radio"],select,input[type="number"][itemprop~="amountOfThisGood"],input[type="number"][itemprop~="orderQuantity"]',
-          ),
-        ].filter(dom.visible);
-        let choicesComplete = controls.length <= 40;
-        for (const control of controls.slice(0, 40)) {
-          const descriptor = [
-            control.id,
-            control.getAttribute('name'),
-            control.getAttribute('autocomplete'),
-          ].join(' ');
-          if (
-            /password|token|secret|one.?time|otp|verification|security|auth|session|credit|payment|cvv|card|email|address|phone/i.test(
-              descriptor,
-            )
-          ) {
-            choicesComplete = false;
-            continue;
-          }
-          const input = control as HTMLInputElement;
-          const type =
-            control.tagName === 'SELECT'
-              ? 'select'
-              : input.type === 'number'
-                ? 'quantity'
-                : (input.type as 'checkbox' | 'radio');
-          const id = control.id;
-          const selector = id ? '#' + CSS.escape(id) : '';
-          const extraScope = control.closest('[itemscope][itemtype]');
-          const extraPrice =
-            extraScope &&
-            dom.isType(extraScope, 'Offer') &&
-            (extraScope.getAttribute('itemprop') ?? '').split(/\s+/).includes('addOn')
-              ? dom.money(extraScope)
-              : null;
-          const extraId = extraScope ? dom.identifier(extraScope) : null;
-          const extra =
-            extraPrice && extraId
-              ? { id: extraId, price: extraPrice.total, currency: extraPrice.currency }
-              : null;
-          const quantity =
-            type === 'quantity' &&
-            /^\d+$/.test(input.value) &&
-            Number(input.value) > 0 &&
-            Number(input.value) <= 1_000_000
-              ? Number(input.value)
-              : null;
-          const quantityProducts =
-            extraScope && dom.isType(extraScope, 'TypeAndQuantityNode')
-              ? dom.own(extraScope, 'typeOfGood')
-              : [];
-          const quantityItemId =
-            quantityProducts.length === 1 && dom.isType(quantityProducts[0], 'Product')
-              ? dom.identifier(quantityProducts[0])
-              : null;
-          const quantityKnown =
-            !!quantityItemId &&
-            !!commerce?.items.some(
-              (item) => item.id === quantityItemId && item.quantity === quantity,
-            );
-          if (
-            !id ||
-            id.length > 200 ||
-            selector.length > 240 ||
-            document.querySelectorAll(selector).length !== 1 ||
-            (type === 'quantity' ? quantity === null || !quantityKnown : !extra) ||
-            (!!extra && !!commerce && extra.currency !== commerce.currency) ||
-            type === 'select' ||
-            input.disabled
-          )
-            choicesComplete = false;
-          choices.push({
-            id: id.slice(0, 200),
-            selector: selector.slice(0, 240),
-            type,
-            checked: type === 'checkbox' || type === 'radio' ? input.checked : null,
-            selectedIndexes:
-              type === 'select'
-                ? [...(control as HTMLSelectElement).options]
-                    .flatMap((option, index) => (option.selected ? [index] : []))
-                    .slice(0, 100)
-                : [],
-            quantity,
-            extra,
-          });
-        }
-        if (!choicesComplete)
-          limits.push(
-            'Some choice identities, meanings or states were not safely established; identical page addresses or totals do not prove an unchanged selection.',
-          );
-        return { commerce, choices, choicesComplete, limits };
-      }, UNRECOGNISED_BUNDLE_LIMIT)
-    : null;
+  const data = sameSource ? await readPageJourneyData(page) : null;
   const stable = sameSource && source.payload.stateStamp === (await walk.observationStamp());
   return store.append(
     runId,
@@ -376,18 +407,6 @@ export function compareJourneyTotals(
     throw Error('The initial commerce state was not observed before the action.');
   const first = before.data.commerce,
     last = after.data.commerce;
-  const selection = (data: JourneyData) =>
-    data.choices
-      .map(({ id, selector, type, checked, selectedIndexes, quantity, extra }) => ({
-        id,
-        selector,
-        type,
-        checked,
-        selectedIndexes,
-        quantity,
-        extraId: extra?.id ?? null,
-      }))
-      .sort((a, b) => a.id.localeCompare(b.id));
   const selectionSame =
     first && last && before.data.choicesComplete && after.data.choicesComplete
       ? JSON.stringify([first.items, selection(before.data)]) ===

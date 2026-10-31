@@ -53,3 +53,20 @@ and 3.
 
 A live public-site run with these changes has not been made yet; it needs the owner's
 spending approval.
+
+## Tab steps save focus notes, not screenshots
+
+Owner decision, 31 October 2026: on Booking.com each Tab press took a full screenshot
+(about 7 seconds each, 16 presses = 108 seconds), and none of those pictures reached the
+strip.
+
+- **Tab and Shift+Tab** now save where focus landed (`keyboard_focus/1`) and take a real
+  screenshot only when the screen visibly changes, on pages with prices or choices too,
+  whenever their prices and choices were read cleanly.
+- **Prices and choices are read as text after each Tab** on such pages. If they differ from
+  the last real screenshot, a screenshot is taken and a `journey_change/1` note saves the
+  before and after prices; the analyst then reads both screens (a recorded change).
+- **A Tab from a real screenshot that changes the screen** keeps the full price and choice
+  comparison, as before.
+- **Space, Enter, typing and every other input** keep their before-and-after screenshots,
+  because they can change a choice.

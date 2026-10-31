@@ -613,6 +613,79 @@ test('Native grid traversal still stops after an unrelated price change', async 
   }
 });
 
+// A page with a declared price, like Booking.com's home page: Tab steps used to take one
+// screenshot each (owner, 31 Oct). The offer's price changes when B gets focus.
+const pricedPage = (quietChange: boolean) =>
+  '<div itemscope itemtype="https://schema.org/Offer" itemprop="addOn"><meta itemprop="sku" content="gift-wrap">' +
+  '<meta id="price" itemprop="price" content="5.00"><meta itemprop="priceCurrency" content="EUR">' +
+  '<label><input id="gift" type="checkbox" checked>Gift wrap</label></div>' +
+  '<button>A</button><button id="b">B</button><button>C</button><button>Target</button>' +
+  (quietChange
+    ? '<script>document.querySelector("#b").onfocus=()=>document.querySelector("#price").setAttribute("content","7.00")</script>'
+    : '');
+
+test('Tab steps on a page with prices save where focus landed, not a screenshot each', async () => {
+  const x = await setup('chromium', pricedPage(false));
+  const runner = new Runner(x.app.store, x.app.origin);
+  try {
+    const shots = () => x.app.store.records(x.run.id).filter((r) => r.kind === 'capture').length;
+    const before = shots();
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      (start, action, guard) =>
+        (runner as any).targetKeyboardStep(x.run, x.walk, start, action, guard),
+    );
+    assert.equal(result.outcome, 'reached');
+    assert(result.actions.length >= 4, 'real Tab presses were sent and saved');
+    assert.equal(shots(), before, 'no screenshot was taken for the Tab steps');
+    const focusNotes = x.app.store
+      .records(x.run.id)
+      .filter((r) => r.kind === 'observation' && r.payload.method === 'keyboard_focus/1');
+    assert.equal(focusNotes.length, result.actions.length, 'one focus note per key press');
+  } finally {
+    await x.close();
+  }
+});
+
+test('A Tab that quietly changes a price takes a real screenshot and saves the change', async () => {
+  const x = await setup('chromium', pricedPage(true));
+  const runner = new Runner(x.app.store, x.app.origin);
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      (start, action, guard) =>
+        (runner as any).targetKeyboardStep(x.run, x.walk, start, action, guard),
+    );
+    const records = x.app.store.records(x.run.id);
+    const change = records.find((r) => r.payload.method === 'journey_change/1');
+    assert(change, 'the price change is saved as a note');
+    const after = records.find((r) => r.id === change.payload.afterContextId)!;
+    const before = records.find((r) => r.id === change.payload.beforeContextId)!;
+    assert.equal(before.payload.data.choices[0].extra.price, 5);
+    assert.equal(after.payload.data.choices[0].extra.price, 7, 'the new price is saved as text');
+    const screen = records.find((r) => r.id === after.payload.sourceCaptureId)!;
+    assert.equal(screen.kind, 'capture', 'a real screenshot was taken when the price changed');
+    // The analyst reads both screens for this recorded change.
+    const { requestEvidence } = await import('../src/request-evidence.js');
+    const { suppliedImageIds } = await import('../src/image-receipt.js');
+    const latest = result.current.kind === 'capture' ? result.current : screen;
+    const read = requestEvidence(x.app.store, x.run.id, 'analyst', latest);
+    assert(suppliedImageIds(read.read, read.records).includes(x.current.id));
+  } finally {
+    await x.close();
+  }
+});
+
 test('Explicit target checkbox activation retains original opt-out measurements', async () => {
   const html =
     '<div itemscope itemtype="https://schema.org/Offer" itemprop="addOn"><meta itemprop="sku" content="gift-wrap"><meta itemprop="price" content="5.00"><meta itemprop="priceCurrency" content="EUR"><label><input id="gift" type="checkbox" checked>Gift wrap</label></div>';
