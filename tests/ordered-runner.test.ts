@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store, digest } from '../src/store.js';
 import { Runner } from '../src/runner.js';
-import { BrowserWalk } from '../src/browser.js';
+import { BrowserWalk, PageUnreadable } from '../src/browser.js';
 import { VoiceOverProbe } from '../src/voiceover.js';
 import { MetaModels } from '../src/models.js';
 import { startServer } from '../server/index.js';
@@ -524,6 +524,54 @@ test('Running out of the navigator money share stops navigation cleanly and stil
             r.kind === 'limit' &&
             r.payload.method === 'navigation_limit' &&
             String(r.payload.reason).includes('Phase spending limit reached.'),
+        ),
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+// Owner, 31 Oct: Booking.com's results page stayed unreadable after Search and the audit ended
+// on a technical error. Now that stop is clean: what was reached is still checked and reviewed.
+test('A page that stays unreadable after an input stops navigation cleanly and still analyses', async (t) => {
+  const x = await fixture();
+  let finalChecks = 0,
+    reads = 0;
+  t.mock.method(
+    x.runner as any,
+    'analyseCheckpoint',
+    async (_models: any, _run: any, current: any) => {
+      finalChecks++;
+      return current;
+    },
+  );
+  t.mock.method(x.runner as any, 'review', async () => {});
+  t.mock.method(MetaModels.prototype, 'reason', async (_id: string, role: string) => {
+    if (role !== 'driver') return { findings: [], coverage: [] };
+    return { kind: 'press', key: 'Tab', note: 'Synthetic key before a slow page.' };
+  });
+  t.mock.method(x.walk, 'captureSettled', async () => {
+    reads++;
+    throw new PageUnreadable('The page did not become readable within about 30 seconds of waiting.');
+  });
+  try {
+    await (x.runner as any).live(
+      x.run,
+      x.walk,
+      new VoiceOverProbe(x.walk),
+      x.current,
+      x.controller,
+    );
+    assert.equal(finalChecks, 1, 'the final check still runs');
+    assert.equal(reads, 1, 'the unreadable page is not waited for a second time');
+    assert(
+      x.app.store
+        .records(x.run.id)
+        .some(
+          (r) =>
+            r.kind === 'limit' &&
+            r.payload.method === 'navigation_limit' &&
+            String(r.payload.reason).includes('did not become readable'),
         ),
     );
   } finally {

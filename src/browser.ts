@@ -1,5 +1,5 @@
 import { originalAriaName } from './aria-name.js';
-import { webkit, chromium, type Browser, type ElementHandle, type Page } from 'playwright';
+import { webkit, chromium, errors, type Browser, type ElementHandle, type Page } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
 import { Store, digest, recordIsIntact } from './store.js';
 import { LIMITS, type Capture, type RecordEntry } from './types.js';
@@ -110,6 +110,11 @@ export class MeasurementStateChanged extends Error {
 /** No input has been sent: the decision's original no longer matches the page. */
 export class ActionStateChanged extends Error {}
 export class ObservationUnsettled extends Error {}
+/** After an input, how long a page slow to become readable is retried before navigation stops
+ * cleanly (owner, 31 Oct: Booking.com's results page took longer than one read allows). */
+export const SLOW_PAGE_WAIT_MS = 30_000;
+/** The page stayed unreadable for SLOW_PAGE_WAIT_MS; no input was repeated. */
+export class PageUnreadable extends Error {}
 export function publicSearchInput(
   focus: {
     tag: string;
@@ -417,7 +422,56 @@ export class BrowserWalk {
       screenShape: await renderedScreenShape(this.page, this.pointerStateKey),
     };
   }
-  async capture(): Promise<RecordEntry> {
+  slowPageWaitMs = SLOW_PAGE_WAIT_MS;
+  /** One read always runs; a read that ran out of time is tried again while `deadline` allows.
+   * captureSettled shares one deadline across its readings, so a slow page costs it about
+   * `slowPageWaitMs` in all, plus at most the read already under way. */
+  async capture(deadline = performance.now() + this.slowPageWaitMs): Promise<RecordEntry> {
+    let waited = false;
+    for (;;) {
+      let timedOut: Error;
+      try {
+        return await this.captureOrWait();
+      } catch (error) {
+        // A stop takes precedence; only a read that ran out of time is tried again.
+        this.assertActive();
+        if (!(error instanceof errors.TimeoutError) || this.page.isClosed()) throw error;
+        timedOut = error;
+      }
+      const unreadable = () =>
+        new PageUnreadable(
+          `The page did not become readable within about ${this.slowPageWaitMs / 1000} seconds of waiting (${
+            timedOut.message.split('\n')[0]
+          }). No input was repeated.`,
+        );
+      if (performance.now() >= deadline) throw unreadable();
+      if (!waited) {
+        waited = true;
+        this.store.append(
+          this.runId,
+          'limit',
+          'browser',
+          {
+            method: 'slow_page_wait',
+            reason:
+              'The page is slow to become readable. The robot waits and reads it again; no input is repeated.',
+            maximumWaitMs: Math.max(0, Math.round(deadline - performance.now())),
+          },
+          this.lastOriginal ? [this.lastOriginal.id] : [],
+        );
+      }
+      await this.page
+        .waitForLoadState('domcontentloaded', {
+          timeout: Math.max(1, Math.floor(deadline - performance.now())),
+        })
+        .catch(() => undefined);
+      this.assertActive();
+      await this.page.waitForTimeout(Math.max(0, Math.min(1000, deadline - performance.now())));
+      // No new read starts once the wait is used up.
+      if (performance.now() >= deadline) throw unreadable();
+    }
+  }
+  private async captureOrWait(): Promise<RecordEntry> {
     const previous = this.lastOriginal;
     return readNavigationCapture(
       this.page,
@@ -454,7 +508,8 @@ export class BrowserWalk {
     )
       throw Error('Observation recovery needs an intact original capture from this run.');
     const attempts: RecordEntry[] = [];
-    let current = first ?? (await this.capture());
+    const deadline = performance.now() + this.slowPageWaitMs;
+    let current = first ?? (await this.capture(deadline));
     for (let attempt = 0; attempt < 3; attempt++) {
       this.assertActive();
       attempts.push(current);
@@ -462,7 +517,7 @@ export class BrowserWalk {
         return current;
       if (attempt < 2) {
         await this.page.waitForTimeout(400);
-        current = await this.capture();
+        current = await this.capture(deadline);
       }
     }
     // Same page, focus and popups, but its copy kept changing (a live ticker, a
