@@ -33,7 +33,7 @@ npm run audits
 
 Open http://127.0.0.1:4346/audits. This is Cavioo's audits page, signed in as **Testing Account**: start an audit of the controlled example shop, watch the live run and read the report. It needs no AI key and spends nothing. The first start downloads Cavioo's screens once (an internet connection is needed then); see [docs/CAVIOO-SCREENS.md](docs/CAVIOO-SCREENS.md). Audits are saved in the ignored `data/audits/example` folder (`data/audits/websites` for real websites), and every browser on the computer sees the same audits of Testing Account.
 
-For real websites, add `META_API_KEY` to `.env`, write a bounded `spend-approval.json` (see below), and run `npm run audits -- --public-websites`.
+For real websites, add `META_API_KEY` to `.env`, write a bounded `spend-approval.json` (see below), and run `npm run audits -- --public-websites`. These audits use Meta's Contributor mode: much cheaper, but Meta may use the screenshots, page text, navigator notes and findings it receives to train future models ([docs/MODEL-CONTEXT.md](docs/MODEL-CONTEXT.md)).
 
 `npm run dev` still opens the engine's own plain test viewer at http://127.0.0.1:4317, an engineering harness without Cavioo's design. Reopening a run or reading its evidence never starts another run.
 
