@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NAVIGATOR_RECENT_DECISIONS, Store } from '../src/store.js';
 import { navigationActionSchema } from '../src/models.js';
+import { completionOnScreen } from '../src/runner.js';
 
 // Owner, 31 Oct: each Booking.com decision re-read every earlier key press (45 by the end),
 // so decisions grew from 6 s to 12 s. The navigator now reads its recent steps only.
@@ -109,4 +110,30 @@ test('A key press with a stray step or screenshot label is still that key press'
       note: 'Done',
     }).success,
   );
+});
+
+test('A "step finished" answer that names no screenshot means the current one', () => {
+  const current = '18fc92b1-5517-468b-ae05-f22e31a3c232';
+  const other = '6f031a69-0211-452e-800c-e944a55e80be';
+  // The exact answer that ended the 31 Oct Booking.com audit.
+  const answer = {
+    kind: 'step_done',
+    note: 'Homepage visible with search and navigation.',
+    stepId: 'arrive-home',
+  };
+  assert(!navigationActionSchema.safeParse(answer).success, 'the plain rules still refuse it');
+  assert.deepEqual(completionOnScreen(current).parse(answer), { ...answer, captureId: current });
+  // An explicit empty value means the same as leaving it out.
+  assert.equal(
+    completionOnScreen(current).parse({ ...answer, captureId: null }).captureId,
+    current,
+  );
+  // A screenshot the navigator did name is kept as given; the runner then checks it.
+  assert.equal(completionOnScreen(current).parse({ ...answer, captureId: other }).captureId, other);
+  // Nothing else is filled in: a key press stays a key press.
+  assert.deepEqual(completionOnScreen(current).parse({ kind: 'press', key: 'Tab', note: 'Next' }), {
+    kind: 'press',
+    key: 'Tab',
+    note: 'Next',
+  });
 });

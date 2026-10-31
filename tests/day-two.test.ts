@@ -6,8 +6,13 @@ import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { requestEvidence } from '../src/request-evidence.js';
 import { candidateTarget } from '../src/candidate-target.js';
-import { candidateSchema, MetaModels, IncompleteModelResult } from '../src/models.js';
-import { Runner } from '../src/runner.js';
+import {
+  candidateSchema,
+  MetaModels,
+  IncompleteModelResult,
+  InvalidModelAnswer,
+} from '../src/models.js';
+import { Runner, MAX_REFUSED_ANSWERS } from '../src/runner.js';
 import { ActionStateChanged, ObservationUnsettled } from '../src/browser.js';
 import { exportHostSnapshot } from '../src/host-export.js';
 import type { RecordEntry } from '../src/types.js';
@@ -410,6 +415,83 @@ test('An incomplete analysis cannot abort an otherwise safe continuing walk or i
     x.close();
   }
 });
+
+// Owner, 31 Oct: a "step finished" answer without its screenshot ended a Booking.com audit.
+// A refused answer is now noted and asked again; three in a row stop navigation.
+for (const scenario of ['recovers', 'stops'] as const)
+  test(`A navigator answer that breaks the rules is not acted on and is asked again (${scenario})`, async () => {
+    const x = setup();
+    try {
+      let decisions = 0,
+        captures = 0;
+      const original = x.capture(captures++);
+      // The exact answer from the 31 Oct audit: step_done without its captureId.
+      const october = {
+        kind: 'step_done',
+        note: 'Homepage visible with search and navigation.',
+        stepId: 'arrive-home',
+      };
+      // An answer that still breaks the rules: a step completion that also presses a key.
+      const broken = { ...october, captureId: original.id, key: 'Enter' };
+      const filled: (string | undefined)[] = [];
+      mock.method(
+        MetaModels.prototype,
+        'reason',
+        async (_id: string, role: string, _r: unknown, _i: unknown, schema: any) => {
+          if (role === 'driver') {
+            decisions++;
+            // The runner's own answer check: the October answer gets the current screenshot.
+            filled.push(schema.parse(october).captureId);
+            if (scenario === 'stops' || decisions === 1) {
+              const checked = schema.safeParse(broken);
+              throw new InvalidModelAnswer(
+                'driver',
+                checked.error.issues.map((issue: any) => issue.message),
+              );
+            }
+            return { kind: decisions === 2 ? 'press' : 'finish', key: 'Tab', note: 'Safe action.' };
+          }
+          if (role === 'analyst') return { findings: [], coverage: [] };
+          throw Error('No accepted finding needs review.');
+        },
+      );
+      const walk = {
+        assertActive() {},
+        images: x.images,
+        act: async (_action: any, source: RecordEntry) =>
+          x.store.append(x.run.id, 'action', 'browser', { performed: true }, [source.id]),
+        captureSettled: async () => x.capture(captures++),
+        waitForReloadsToStop: async () => true,
+        measurements: async (source: RecordEntry) =>
+          x.store.append(x.run.id, 'observation', 'browser', { measured: true }, [source.id]),
+      };
+      await (new Runner(x.store, 'http://127.0.0.1:4317') as any).live(
+        x.run,
+        walk,
+        {},
+        original,
+        new AbortController(),
+      );
+      const records = x.store.records(x.run.id);
+      assert.equal(filled[0], original.id, 'the runner fills in the screenshot it showed');
+      const refusals = records.filter((r) => r.payload.method === 'navigator_answer_refused');
+      assert.match(refusals[0]!.payload.reason, /exact step and original capture/);
+      const actions = records.filter((r) => r.kind === 'action').length;
+      if (scenario === 'recovers') {
+        assert.equal(decisions, 3);
+        assert.equal(refusals.length, 1);
+        assert.equal(actions, 1, 'the next good answer is acted on');
+      } else {
+        assert.equal(decisions, MAX_REFUSED_ANSWERS);
+        assert.equal(refusals.length, MAX_REFUSED_ANSWERS);
+        assert.equal(actions, 0, 'no refused answer sends input');
+        assert(records.some((r) => r.payload.method === 'navigator_answers_refused'));
+      }
+    } finally {
+      mock.restoreAll();
+      x.close();
+    }
+  });
 
 test('A stale navigation decision is discarded before input and the next decision reads the refreshed original', async () => {
   const x = setup();
