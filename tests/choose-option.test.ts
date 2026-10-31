@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BrowserWalk, InputRefused } from '../src/browser.js';
+import { BrowserWalk, InputRefused, ActionLimitReached } from '../src/browser.js';
+import { LIMITS } from '../src/types.js';
 import { navigationActionSchema } from '../src/models.js';
 import { startServer } from '../server/index.js';
 
@@ -81,4 +82,58 @@ test('choose_option carries only the option text', () => {
     !navigationActionSchema.safeParse({ kind: 'press', key: 'Tab', option: '12', note: 'x' })
       .success,
   );
+});
+
+// Loca and Codex, PR 61: the dropdown step must join the existing guards and evidence rules.
+test('The dropdown step keeps every guard: payment forms, moved focus, disabled options, stops', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'choose-option-guards-'));
+  const app = await startServer(0, dir, false);
+  const run = app.store.create('Choose guards', app.origin + '/shop/', 'offline');
+  const walk = new BrowserWalk(app.store, run.id, app.origin, true, 'chromium');
+  const choose = async (option: string) => {
+    const current = await walk.captureSettled();
+    return walk.act(
+      navigationActionSchema.parse({ kind: 'choose_option', option, note: 'Choice' }),
+      current,
+    );
+  };
+  const actions = () => app.store.records(run.id).filter((r) => r.kind === 'action');
+  try {
+    await walk.start(run.url);
+    await walk.page.setContent(
+      `<select id="day"><option disabled>-</option>${days}</select><input id="search" aria-label="Search">` +
+        '<form><select id="expiry"><option>01</option><option>12</option></select>' +
+        '<input name="cardnumber" aria-label="Card number"></form>',
+    );
+    // A greyed-out option is named as such, not as missing; nothing is pressed.
+    await walk.page.selectOption('#day', { index: 5 });
+    await walk.page.focus('#day');
+    await assert.rejects(choose('-'), /disabled/);
+    // A dropdown inside a payment form is refused before any key.
+    await walk.page.focus('#expiry');
+    await assert.rejects(choose('12'), /payment form/);
+    assert.equal(actions().length, 0);
+    // Focus moving away during the pause between choices stops the choice before any key.
+    await walk.page.focus('#day');
+    await choose('6, Sunday');
+    const before = actions().length;
+    await walk.page.evaluate(() =>
+      setTimeout(() => document.getElementById('search')!.focus(), 300),
+    );
+    await assert.rejects(choose('22, Tuesday'), InputRefused);
+    assert.equal(actions().length, before, 'nothing was pressed into the search box');
+    assert.equal(await walk.page.inputValue('#search'), '');
+    // A stop mid-choice still saves the presses already sent.
+    await walk.page.focus('#day');
+    await walk.page.waitForTimeout(1300);
+    walk.actions = LIMITS.actions - 2;
+    await assert.rejects(choose('22, Tuesday'), ActionLimitReached);
+    const interrupted = actions().at(-1)!;
+    assert.equal(interrupted.payload.outcome, 'option_interrupted');
+    assert.equal(interrupted.payload.action.presses, 2);
+  } finally {
+    await walk.close();
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

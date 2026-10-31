@@ -3,6 +3,12 @@ import { recordIsIntact } from './store.js';
 import type { RecordEntry } from './types.js';
 import { readHashMatches, suppliedImageIds } from './image-receipt.js';
 
+/** A dropdown choice that sent real key presses (owner, 31 Oct): keyboard evidence like a press. */
+const dropdownKeys = (record: { payload: any }) =>
+  record.payload.action?.kind === 'choose_option' &&
+  Number(record.payload.action?.presses) > 0 &&
+  record.payload.before?.tag === 'select';
+
 export const CRITERIA_VERSION = 'access-walk/criteria-v1' as const;
 export const CRITERION_IDS = [
   'C01',
@@ -571,7 +577,7 @@ function evidenceGate(
       criterionId === 'C06' &&
       actions.some(
         (action) =>
-          action.payload.action?.kind === 'press' &&
+          (action.payload.action?.kind === 'press' || dropdownKeys(action)) &&
           afterCapture(original, action, allRecords)?.id === captureId,
       )
     )
@@ -597,7 +603,8 @@ function evidenceGate(
       criterionId === 'C14' &&
       actions.some(
         (action) =>
-          ['press', 'type', 'back'].includes(action.payload.action?.kind) &&
+          (['press', 'type', 'back'].includes(action.payload.action?.kind) ||
+            dropdownKeys(action)) &&
           afterCapture(original, action, allRecords)?.id === captureId,
       )
     )
@@ -753,10 +760,11 @@ function evidenceGate(
   if (criterionId === 'C05') {
     const functional = actions.filter(
       (r) =>
-        r.payload.action?.kind === 'press' &&
-        ['Enter', 'Space', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(
-          r.payload.action.key,
-        ) &&
+        (dropdownKeys(r) ||
+          (r.payload.action?.kind === 'press' &&
+            ['Enter', 'Space', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(
+              r.payload.action.key,
+            ))) &&
         !['body', 'html', 'iframe'].includes(r.payload.before?.tag ?? 'body'),
     );
     if (!functional.length)
@@ -772,14 +780,14 @@ function evidenceGate(
   if (criterionId === 'C06') {
     const paired = actions.some(
       (r) =>
-        r.payload.action?.kind === 'press' &&
+        (r.payload.action?.kind === 'press' || dropdownKeys(r)) &&
         afterCapture(original, r, allRecords)?.id === captureId,
     );
     return paired && capture.payload.focus && typeof capture.payload.focus.tag === 'string'
       ? yes()
       : fail(
           'Actual keyboard-stop focus and its original captured state are missing.',
-          actions.some((r) => r.payload.action?.kind === 'press'),
+          actions.some((r) => r.payload.action?.kind === 'press' || dropdownKeys(r)),
         );
   }
   if (criterionId === 'C07') {
@@ -878,7 +886,7 @@ function evidenceGate(
   if (criterionId === 'C14') {
     const paired = actions.some(
       (r) =>
-        ['press', 'type', 'back'].includes(r.payload.action?.kind) &&
+        (['press', 'type', 'back'].includes(r.payload.action?.kind) || dropdownKeys(r)) &&
         r.payload.waitAfterMs > 0 &&
         afterCapture(original, r, allRecords)?.id === captureId,
     );

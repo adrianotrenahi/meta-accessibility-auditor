@@ -722,3 +722,43 @@ test('A deferred role cannot bypass the original capture hash guard', async () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Codex, PR 61: a dropdown choice that sent real key presses is fresh input, even if it stopped
+// short of the wanted option; one with no presses is not.
+test('A dropdown choice with real presses reopens an interrupted role', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'access-walk-analysis-choice-')),
+    store = new Store(dir);
+  try {
+    const run = store.create('Controlled defer by choice', 'http://127.0.0.1/shop', 'offline');
+    store.append(run.id, 'limit', 'analyst', {
+      method: 'analysis_network_unavailable',
+      checkpointState: 'unknown',
+    });
+    const source = store.append(run.id, 'capture', 'browser', {
+      original: true,
+      stable: true,
+      imageHash: 'a'.repeat(64),
+    });
+    const choose = (presses: number) =>
+      store.append(
+        run.id,
+        'action',
+        'browser',
+        {
+          method: 'actual_keyboard_or_browser',
+          outcome: 'option_not_reached',
+          sourceCaptureId: source.id,
+          sourceImageHash: source.payload.imageHash,
+          action: { kind: 'choose_option', option: '22, Tuesday', key: '2', presses },
+        },
+        [source.id],
+      );
+    choose(0);
+    assert(analysisNetworkDeferred(store.records(run.id), 'analyst'), 'no presses, no change');
+    choose(2);
+    assert.equal(analysisNetworkDeferred(store.records(run.id), 'analyst'), false);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

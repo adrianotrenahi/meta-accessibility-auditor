@@ -575,6 +575,29 @@ test('Tab alone, a missing aftermath or an interrupted focus read cannot invent 
   }
 });
 
+// Codex, PR 61: a dropdown choice that sent real key presses is functional keyboard evidence;
+// one with no presses is not.
+test('A dropdown choice with real key presses counts as a functional keyboard action', () => {
+  for (const presses of [3, 0]) {
+    const x = fixture();
+    try {
+      const before = x.capture(),
+        s = x.scope(before),
+        a = x.action(before, '2', {
+          action: { kind: 'choose_option', option: '22, Tuesday', key: '2', presses },
+          before: { tag: 'select', name: 'Day and date of departure' },
+          after: { tag: 'select', name: 'Day and date of departure' },
+        }),
+        after = x.capture();
+      x.scope(after);
+      x.approve(s, 'C05', [before.id, a.id, after.id]);
+      assert.equal(row(x.report(), 'C05').checks[0].verdict, presses ? 'PASS' : 'NOT_TESTED');
+    } finally {
+      x.close();
+    }
+  }
+});
+
 test('Keyboard focus and action feedback require actual input, captured state and recorded wait', () => {
   const x = fixture();
   try {
