@@ -429,6 +429,8 @@ export async function startMetaFunnelProof({
       if (discards.has(job.id)) return discards.get(job.id);
       job.discarding = true;
       job.discardError = null;
+      // A discarded run is never read again, so its last shared answer is dropped.
+      recentReads.forget(job.id);
       const pending = (async () => {
         try {
           await persist();
