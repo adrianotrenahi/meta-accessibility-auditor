@@ -340,7 +340,9 @@ test('Actual Runner continues to a fresh driver decision after an uncertain anal
     assert.equal(x.generations(), 1);
     const failed = x.roles.find((row) => row.role === 'analyst')!,
       next = x.roles.at(-1)!;
-    assert.notEqual(next.captureId, failed.captureId, 'The next driver reads a fresh original.');
+    // The analyst checks on its own track (owner, 30 Oct): the robot did not wait for it, so
+    // its next decision reads the same current original and nothing is refreshed or replayed.
+    assert.equal(next.captureId, failed.captureId, 'The next driver reads the current original.');
     const priorWalk = x.store
       .records(x.run.id)
       .filter(
@@ -353,7 +355,11 @@ test('Actual Runner continues to a fresh driver decision after an uncertain anal
       priorWalk.every((record) => next.recordIds.includes(record.id)),
       'The next driver retains the original walk and notes, not a cut summary.',
     );
-    assert.equal(x.store.records(x.run.id).filter((record) => record.kind === 'capture').length, 5);
+    assert.equal(
+      x.store.records(x.run.id).filter((record) => record.kind === 'capture').length,
+      4,
+      'no refresh screenshot after the failure',
+    );
     const usage = x.store.usage(x.run.id);
     assert.equal(usage.requests.length, 1);
     assert.equal(usage.requests[0].role, 'analyst');
@@ -435,21 +441,19 @@ test('Driver network failures stay hard and cannot start final review', async ()
   }
 });
 
-test('Parent abort, owner Stop and failed observation refresh stop before another driver or review request', async () => {
+test('Parent abort and owner Stop stop before another driver or review request', async () => {
   for (const options of [
     { stopAtFailure: true },
     { stopStateOnly: true },
     { abortAtFailure: true },
-    { failRefresh: 'ordinary' },
-    { failRefresh: 'unsettled' },
-    { failRefresh: 'abort' },
   ] as const) {
     const x = fixture({ ...options, pending: true });
     try {
       await x.execute();
+      // The robot's next decision runs alongside the analyst; nothing follows the stop.
       assert.deepEqual(
         x.roles.map((row) => row.role),
-        ['driver', 'driver', 'driver', 'analyst'],
+        ['driver', 'driver', 'driver', 'analyst', 'driver'],
       );
       assert.equal(x.inputCount(), 3);
       assert.equal(x.generations(), 1);
@@ -459,12 +463,36 @@ test('Parent abort, owner Stop and failed observation refresh stop before anothe
       );
       assert.equal(x.store.usage(x.run.id).requests[0].status, 'unknown');
       assert.deepEqual(x.store.published(x.run.id), []);
-      if (options.stopAtFailure || options.stopStateOnly || options.abortAtFailure)
-        assert(
-          !x.store
-            .records(x.run.id)
-            .some((record) => record.payload.method === 'analysis_network_unavailable'),
-        );
+      assert(
+        !x.store
+          .records(x.run.id)
+          .some((record) => record.payload.method === 'analysis_network_unavailable'),
+      );
+    } finally {
+      x.close();
+    }
+  }
+});
+
+test('A dropped analysis connection on the analysis track never makes the robot refresh or wait', async () => {
+  // Before 30 Oct the robot waited for the analyst and then took a fresh screenshot; a
+  // failure of that refresh ended the run. On the track there is no wait and no refresh.
+  for (const failRefresh of ['ordinary', 'unsettled', 'abort'] as const) {
+    const x = fixture({ failRefresh, pending: true });
+    try {
+      await x.execute();
+      assert.deepEqual(x.roles.map((row) => row.role).slice(0, 5), [
+        'driver',
+        'driver',
+        'driver',
+        'analyst',
+        'driver',
+      ]);
+      assert.equal(x.inputCount(), 3);
+      assert.equal(x.generations(), 1, 'the unknown generation is never replayed');
+      assert.equal(x.captureCount(), 4, 'no refresh screenshot was taken');
+      assert.equal(x.store.usage(x.run.id).requests[0].status, 'unknown');
+      assert.deepEqual(x.store.published(x.run.id), []);
     } finally {
       x.close();
     }
@@ -496,9 +524,10 @@ test('Permanent, unclassified, malformed, schema and money failures cannot becom
     const x = fixture({ hardError, pending: true });
     try {
       await x.execute();
+      // The robot's next decision runs alongside the analyst; the failure then stops the run.
       assert.deepEqual(
         x.roles.map((row) => row.role),
-        ['driver', 'driver', 'driver', 'analyst'],
+        ['driver', 'driver', 'driver', 'analyst', 'driver'],
       );
       assert.equal(x.inputCount(), 3);
       assert.equal(x.generations(), 0);

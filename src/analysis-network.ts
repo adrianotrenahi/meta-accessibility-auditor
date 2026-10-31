@@ -34,8 +34,14 @@ export function analysisNetworkDeferred(records: RecordEntry[], role: AnalysisRo
   );
   if (!failure) return false;
   if (!recordIsIntact(failure)) throw Error('The saved analysis interruption changed.');
+  // Measured from the failed checkpoint's own screenshot: on the analysis track the robot may
+  // already have moved on before the failure is saved, and those inputs are new evidence.
+  const checkpoint = records.find(
+    (record) => record.kind === 'capture' && record.id === failure.payload.checkpointCaptureId,
+  );
+  const after = Math.min(failure.seq, checkpoint?.seq ?? failure.seq);
   return !records.some((record) => {
-    if (record.kind !== 'action' || record.author !== 'browser' || record.seq <= failure.seq)
+    if (record.kind !== 'action' || record.author !== 'browser' || record.seq <= after)
       return false;
     if (!recordIsIntact(record)) throw Error('The later original input changed.');
     if (

@@ -890,7 +890,14 @@ export class Store {
       const total = this.usage(),
         run = this.usage(runId),
         phase = run.requests.filter((r) => r.role === role);
-      if (total.requests.some((r) => r.status === 'sending'))
+      // The navigator and the analysis track may each have one request in flight in the
+      // same run (owner, 30 Oct: the robot keeps walking while earlier screens are checked).
+      // Every in-flight charge is already counted below, so the money limits still hold.
+      if (
+        total.requests.some(
+          (r: any) => r.status === 'sending' && (r.run_id !== runId || r.role === role),
+        )
+      )
         throw Error('Another paid request is in progress.');
       if (
         total.spent + total.reserved + micros >

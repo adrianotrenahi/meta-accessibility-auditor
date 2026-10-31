@@ -201,12 +201,16 @@ async function fixture(ordered = true, planningCharge = true) {
   };
 }
 
-test('Ordered navigation checks completed tasks, without an analysis pause after three dialog keys', async (t) => {
+test('Ordered navigation hands each completed task to the analysis track without waiting for it', async (t) => {
   const x = await fixture();
   let calls = 0,
     analyses = 0,
     measurements = 0,
-    reviews = 0;
+    reviews = 0,
+    handedOver = 0;
+  // The analyst never answers while the robot walks: the walk must not wait for it.
+  let release!: () => void;
+  const answered = new Promise<void>((resolve) => (release = resolve));
   t.mock.method(
     x.runner as any,
     'automaticMeasurement',
@@ -215,11 +219,25 @@ test('Ordered navigation checks completed tasks, without an analysis pause after
       return { current };
     },
   );
+  const queue = (x.runner as any).queueCheckpoint.bind(x.runner);
+  t.mock.method(x.runner as any, 'queueCheckpoint', async (...args: any[]) => {
+    handedOver++;
+    return queue(...args);
+  });
   t.mock.method(
     x.runner as any,
-    'analyseCheckpoint',
-    async (_models: any, _run: any, current: any) => {
+    'analyse',
+    async (
+      _models: any,
+      _run: any,
+      current: any,
+      _walk: any,
+      _signal: any,
+      _probe: any,
+      background: any,
+    ) => {
       analyses++;
+      if (background) await answered;
       return current;
     },
   );
@@ -234,7 +252,7 @@ test('Ordered navigation checks completed tasks, without an analysis pause after
       .filter((record) => record.kind === 'capture')
       .at(-1)!;
     if (calls === 4) {
-      assert.equal(analyses, 0);
+      assert.equal(handedOver, 0, 'no analysis pause after three dialog keys');
       return {
         kind: 'step_done',
         stepId: 'open',
@@ -242,7 +260,9 @@ test('Ordered navigation checks completed tasks, without an analysis pause after
         note: 'Entry instruction observed.',
       };
     }
-    assert.equal(analyses, 1, 'One completed task checkpoint ran before the next instruction.');
+    assert.equal(handedOver, 1, 'the completed task was handed over before the next instruction');
+    assert.equal(reviews, 0, 'the robot decides again while the earlier check is still unanswered');
+    release();
     return {
       kind: 'step_done',
       stepId: 'check',
@@ -268,7 +288,7 @@ test('Ordered navigation checks completed tasks, without an analysis pause after
     assert.equal(
       analyses,
       2,
-      'One task checkpoint and one final analysis; no duplicate final task analysis.',
+      'One task checkpoint on the track and one final analysis; no duplicate final task analysis.',
     );
     assert.equal(reviews, 1);
     assert.deepEqual(x.app.store.published(x.run.id), []);
@@ -422,14 +442,10 @@ test('Legacy controlled walks keep their every-third-decision checkpoint', async
     'automaticMeasurement',
     async (_run: any, _walk: any, current: any) => ({ current }),
   );
-  t.mock.method(
-    x.runner as any,
-    'analyseCheckpoint',
-    async (_models: any, _run: any, current: any) => {
-      analyses++;
-      return current;
-    },
-  );
+  t.mock.method(x.runner as any, 'analyse', async (_models: any, _run: any, current: any) => {
+    analyses++;
+    return current;
+  });
   t.mock.method(x.runner as any, 'review', async () => {});
   t.mock.method(MetaModels.prototype, 'reason', async () =>
     ++calls <= 3
@@ -517,6 +533,108 @@ test('Two instructions finished on one unchanged screenshot get one scan and one
       reads.every((read) => read.payload.records.every((pin: any) => pin.id !== skipped[0]!.id)),
       'the note is never sent to a model as evidence',
     );
+  } finally {
+    await x.close();
+  }
+});
+
+test('A check the analyst asks for is done by the robot only while the page still matches', async (t) => {
+  const x = await fixture();
+  let calls = 0;
+  let release!: () => void;
+  const answered = new Promise<void>((resolve) => (release = resolve));
+  t.mock.method(
+    x.runner as any,
+    'automaticMeasurement',
+    async (_run: any, _walk: any, current: any) => ({ current }),
+  );
+  t.mock.method(
+    x.runner as any,
+    'analyse',
+    async (_m: any, _run: any, current: any, _w: any, _s: any, _p: any, background: any) => {
+      if (!background) return current;
+      // The analyst answers only after the robot has already pressed a key and moved on.
+      await answered;
+      background.track.ask({
+        method: 'keyboard_focus',
+        captureId: current.id,
+        criterionId: null,
+        reason: 'Synthetic request for the screen the analyst checked.',
+      });
+      return current;
+    },
+  );
+  t.mock.method(x.runner as any, 'review', async () => {});
+  t.mock.method(MetaModels.prototype, 'reason', async () => {
+    calls++;
+    const latest = x.app.store
+      .records(x.run.id)
+      .filter((record) => record.kind === 'capture')
+      .at(-1)!;
+    if (calls === 1)
+      return { kind: 'step_done', stepId: 'open', captureId: latest.id, note: 'Opened.' };
+    if (calls === 2) {
+      await x.walk.page.setContent('<h1>Moved on</h1><button>Other</button>');
+      return { kind: 'press', key: 'Tab', note: 'Synthetic key on the next screen.' };
+    }
+    if (calls === 3) {
+      release();
+      await new Promise((resolve) => setImmediate(resolve));
+      return { kind: 'press', key: 'Tab', note: 'Another key; the request is handled first.' };
+    }
+    return { kind: 'step_done', stepId: 'check', captureId: latest.id, note: 'Checked.' };
+  });
+  try {
+    await (x.runner as any).live(
+      x.run,
+      x.walk,
+      new VoiceOverProbe(x.walk),
+      x.current,
+      x.controller,
+    );
+    const records = x.app.store.records(x.run.id);
+    const focused = records.filter((record) => record.kind === 'focused_check');
+    assert.equal(focused.length, 1);
+    assert.equal(focused[0]!.payload.state, 'NOT_TESTED');
+    assert.equal(focused[0]!.payload.attempted, false);
+    assert.equal(focused[0]!.payload.captureId, x.current.id);
+    assert.equal(
+      records.filter((record) => record.kind === 'action').length,
+      2,
+      'only the robot’s own two keys were sent; the stale request sent none',
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test('A hard failure on the analysis track stops the walk at the robot’s next step', async (t) => {
+  const x = await fixture();
+  let calls = 0;
+  t.mock.method(
+    x.runner as any,
+    'automaticMeasurement',
+    async (_run: any, _walk: any, current: any) => ({ current }),
+  );
+  t.mock.method(x.runner as any, 'analyse', async (...args: any[]) => {
+    if (args[6]) throw Error('Synthetic hard analysis failure.');
+    return args[2];
+  });
+  t.mock.method(x.runner as any, 'review', async () => {
+    throw Error('No review may run after a hard failure.');
+  });
+  t.mock.method(MetaModels.prototype, 'reason', async () => {
+    calls++;
+    if (calls === 1)
+      return { kind: 'step_done', stepId: 'open', captureId: x.current.id, note: 'Opened.' };
+    return { kind: 'press', key: 'Tab', note: 'Synthetic key.' };
+  });
+  try {
+    await assert.rejects(
+      (x.runner as any).live(x.run, x.walk, new VoiceOverProbe(x.walk), x.current, x.controller),
+      /Synthetic hard analysis failure/,
+    );
+    assert(calls <= 2, 'at most the decision already under way when the failure arrived');
   } finally {
     await x.close();
   }

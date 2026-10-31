@@ -285,8 +285,9 @@ test('No supported-premise review, changed original, or changed context can inhe
 test('SAM uses the analyst target original, even after navigation has moved to a different screen', async () => {
   const x = setup();
   try {
+    // The analysis track checks the screen it was handed while the robot has moved on.
     const first = x.capture(0);
-    const current = x.capture(1, '#continue', x.run.url + 'basket');
+    x.capture(1, '#continue', x.run.url + 'basket');
     let samCalls = 0;
     const models = {
       reason: async (_run: string, role: string) =>
@@ -304,7 +305,7 @@ test('SAM uses the analyst target original, even after navigation has moved to a
     await (runner as any).analyse(
       models,
       x.run,
-      current,
+      first,
       { images: x.images },
       new AbortController().signal,
     );

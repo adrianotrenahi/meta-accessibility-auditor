@@ -16,11 +16,14 @@ const ownContextRead = (record: RecordEntry, capture: RecordEntry) =>
   record.payload.sourceCaptureId === capture.id &&
   record.payload.sourceCaptureHash === capture.hash;
 
-const newerWalkEvidence = (records: RecordEntry[], after: RecordEntry, capture: RecordEntry) =>
+/** A screenshot, input, measurement or check about this screen saved after this point. */
+export const walkEvidenceSince = (records: RecordEntry[], seq: number, capture: RecordEntry) =>
   records.some(
     (record) =>
-      record.seq > after.seq && WALK_EVIDENCE.has(record.kind) && !ownContextRead(record, capture),
+      record.seq > seq && WALK_EVIDENCE.has(record.kind) && !ownContextRead(record, capture),
   );
+const newerWalkEvidence = (records: RecordEntry[], after: RecordEntry, capture: RecordEntry) =>
+  walkEvidenceSince(records, after.seq, capture);
 
 /** The automatic scan of this exact original, when no input or observation followed it. */
 export function earlierScan(records: RecordEntry[], capture: RecordEntry) {

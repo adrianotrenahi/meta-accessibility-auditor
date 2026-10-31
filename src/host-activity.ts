@@ -42,7 +42,11 @@ export function exportHostActivity(records: RecordEntry[], runId: string, runnin
       );
       if (!source || record.sources.length !== 1 || record.sources[0] !== source.id) return [];
       const following = intact.slice(index + 1);
-      const nextRead = following.findIndex((item) => item.kind === 'read_snapshot');
+      // Analyst and reviewer reads now interleave with the walk; only the navigator's next
+      // read ends this input interval.
+      const nextRead = following.findIndex(
+        (item) => item.kind === 'read_snapshot' && item.author === 'driver',
+      );
       const interval = nextRead < 0 ? following : following.slice(0, nextRead);
       const input = interval.find((item) => item.kind === 'action' && item.author === 'browser');
       if (

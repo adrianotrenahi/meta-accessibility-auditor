@@ -134,14 +134,15 @@ function fixture(
   };
 }
 
-test('An older empty focus comparison stays original but does not add a third analysis image', () => {
+test('Tab presses that changed nothing stay original but add no earlier analysis picture', () => {
   const x = fixture();
   try {
     const originals = JSON.stringify(x.store.records(x.run.id));
     const read = x.read();
-    assert.deepEqual(suppliedImageIds(read.read, read.records), [x.second.id, x.current.id]);
+    // Owner, 30 Oct: only screens a customer sees on the strip, unless a change was recorded.
+    assert.deepEqual(suppliedImageIds(read.read, read.records), [x.current.id]);
     assert(!read.records.some((record) => record.id === x.older.id));
-    assert(read.records.some((record) => record.id === x.latest.id));
+    assert(!read.records.some((record) => record.id === x.latest.id));
     assert(read.records.some((record) => record.id === x.note.id));
     assert.equal(read.records.filter((record) => record.kind === 'action').length, 2);
     assert.equal(
@@ -158,14 +159,22 @@ test('An older empty focus comparison stays original but does not add a third an
   }
 });
 
-for (const options of [
-  { key: 'Enter' },
-  { price: 0 },
-  { price: 24 },
-  { price: 0, losePrice: true },
-  { changedUrl: true },
-]) {
-  test(`Material or changed-page history stays supplied: ${JSON.stringify(options)}`, () => {
+for (const options of [{ key: 'Enter' }, { changedUrl: true }]) {
+  test(`An input or page change with no recorded price or choice adds no earlier picture: ${JSON.stringify(options)}`, () => {
+    const x = fixture(options);
+    try {
+      const read = x.read();
+      assert(!read.records.some((record) => record.id === x.older.id));
+      assert.deepEqual(suppliedImageIds(read.read, read.records), [x.current.id]);
+      assert.equal(read.records.filter((record) => record.kind === 'action').length, 2);
+    } finally {
+      x.close();
+    }
+  });
+}
+
+for (const options of [{ price: 0 }, { price: 24 }, { price: 0, losePrice: true }]) {
+  test(`A recorded price between screens keeps both screens: ${JSON.stringify(options)}`, () => {
     const x = fixture(options);
     try {
       const read = x.read();
@@ -181,7 +190,7 @@ for (const options of [
   });
 }
 
-test('Existing claims keep all earlier comparison context for both analysis and independent review', () => {
+test('Existing claims keep earlier comparison context for the independent review; the analyst reads them as text', () => {
   const x = fixture();
   try {
     x.store.append(
@@ -191,15 +200,16 @@ test('Existing claims keep all earlier comparison context for both analysis and 
       { title: 'Saved claim', targetCaptureId: x.first.id },
       [x.older.id],
     );
-    for (const role of ['analyst', 'reviewer'] as const) {
-      const read = x.read(role);
-      assert(read.records.some((record) => record.id === x.older.id));
-      assert.deepEqual(suppliedImageIds(read.read, read.records), [
-        x.first.id,
-        x.second.id,
-        x.current.id,
-      ]);
-    }
+    const review = x.read('reviewer');
+    assert(review.records.some((record) => record.id === x.older.id));
+    assert.deepEqual(suppliedImageIds(review.read, review.records), [
+      x.first.id,
+      x.second.id,
+      x.current.id,
+    ]);
+    const analysis = x.read('analyst');
+    assert(analysis.records.some((record) => record.kind === 'candidate'));
+    assert.deepEqual(suppliedImageIds(analysis.read, analysis.records), [x.current.id]);
   } finally {
     x.close();
   }
@@ -268,17 +278,13 @@ for (const options of [
   });
 }
 
-test('The latest comparison stays supplied when the current original is an observation-only recapture', () => {
+test('An observation-only recapture after Tab presses that changed nothing adds no earlier picture', () => {
   const x = fixture();
   try {
     const current = x.store.append(x.run.id, 'capture', 'browser', x.current.payload);
     const read = requestEvidence(x.store, x.run.id, 'analyst', current);
-    assert(read.records.some((record) => record.id === x.latest.id));
-    assert.deepEqual(suppliedImageIds(read.read, read.records), [
-      x.second.id,
-      x.current.id,
-      current.id,
-    ]);
+    assert(!read.records.some((record) => record.id === x.latest.id));
+    assert.deepEqual(suppliedImageIds(read.read, read.records), [current.id]);
   } finally {
     x.close();
   }
@@ -288,7 +294,7 @@ test('The known unavailable-bundle limit does not discard complete empty choice 
   const x = fixture({ limits: [UNRECOGNISED_BUNDLE_LIMIT] });
   try {
     const read = x.read();
-    assert.deepEqual(suppliedImageIds(read.read, read.records), [x.second.id, x.current.id]);
+    assert.deepEqual(suppliedImageIds(read.read, read.records), [x.current.id]);
   } finally {
     x.close();
   }
