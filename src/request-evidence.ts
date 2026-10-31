@@ -1,13 +1,7 @@
 import { recordIsIntact, type Store } from './store.js';
 import type { RecordEntry, Role } from './types.js';
 import { reviewFeedbackIds } from './review-feedback.js';
-import {
-  JOURNEY_EVIDENCE_VERSION,
-  INCOMPARABLE_TOTALS_LIMIT,
-  JOURNEY_CONTEXT_LIMIT,
-  UNRECOGNISED_BUNDLE_LIMIT,
-  journeyDataSchema,
-} from './journey-evidence.js';
+import { INCOMPARABLE_TOTALS_LIMIT, journeyDataSchema } from './journey-evidence.js';
 import {
   makeImageReceipt,
   suppliedImageIds,
@@ -69,9 +63,10 @@ const comparisonFields = new Set([
 /** Whether a price comparison actually recorded something (owner, 31 Oct: "those are
  * different screens"). Moving to another page is not a change by itself; a choice that
  * only exists on one of the two pages is not either. Counted: a real price comparison
- * (it can prove a price result either way), a price that appeared, disappeared or
- * differs, a choice present on both screens whose state differs, or anything this check
- * cannot read cleanly (unrecognised fields, missing or unsettled contexts). */
+ * (it can prove a price result either way), a price on either side (it is copied into
+ * beforeTotal/afterTotal), a choice present on both screens whose state differs, or
+ * anything this check cannot read cleanly (unrecognised fields, missing or unsettled
+ * contexts). */
 function recordedChange(record: RecordEntry, records: RecordEntry[]) {
   const p = record.payload;
   if (record.kind !== 'observation' || p.method !== 'comparable_totals') return false;
@@ -124,11 +119,6 @@ function recordedChange(record: RecordEntry, records: RecordEntry[]) {
   const before = contextOf(p.beforeCaptureId),
     after = contextOf(p.afterCaptureId);
   if (!before || !after) return true;
-  if (
-    (before.commerce || after.commerce) &&
-    JSON.stringify(before.commerce) !== JSON.stringify(after.commerce)
-  )
-    return true;
   const later = new Map(after.choices.map((choice) => [choice.id, choice]));
   return before.choices.some((choice) => {
     const same = later.get(choice.id);
