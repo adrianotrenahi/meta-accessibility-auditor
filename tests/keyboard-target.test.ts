@@ -544,6 +544,76 @@ test('Arrow traversal requires focus in the same original native grid', async ()
   }
 });
 
+// A menubar with a roving focus, like Booking.com's: only the active item is Tab-reachable.
+const rovingMenubar =
+  '<button>Search</button><div role="menubar" aria-label="Products">' +
+  '<button role="menuitem" tabindex="0">Stays</button>' +
+  '<button role="menuitem" tabindex="-1">Vuelos</button></div>' +
+  '<script>document.querySelector("[role=menubar]").addEventListener("keydown", (e) => {' +
+  'const items = [...document.querySelectorAll("[role=menuitem]")];' +
+  'const i = items.indexOf(document.activeElement); if (i < 0) return;' +
+  'const next = e.key === "ArrowRight" ? items[i + 1] : e.key === "ArrowLeft" ? items[i - 1] : null;' +
+  'if (!next) return; e.preventDefault(); items[i].tabIndex = -1; next.tabIndex = 0; next.focus(); });</script>';
+
+test('An arrow request for a menu item from outside its menu Tabs into the menu, then uses arrows', async () => {
+  // Owner, 31 Oct: Booking.com's "Flights" item was refused twice and the walk ended.
+  const x = await setup('chromium', rovingMenubar);
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      { ...seek, targetRole: 'menuitem', targetName: 'Vuelos', traversalKey: 'ArrowRight' },
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'reached');
+    const keys = result.actions.map((action) => action.payload.action.key);
+    assert.equal(keys.at(-1), 'ArrowRight', 'the last move is an arrow inside the menu');
+    assert(keys.includes('Tab'), 'Tab brought focus into the menu first');
+    assert.equal(await x.walk.page.evaluate(() => document.activeElement?.textContent), 'Vuelos');
+  } finally {
+    await x.close();
+  }
+});
+
+test('Runner keeps navigating after requests refused before any key was sent', async () => {
+  const x = await setup(
+    'chromium',
+    '<button>A</button><table><tr><td><span role="checkbox" tabindex="0" aria-label="Target">1</span></td></tr></table>',
+  );
+  const runner = new Runner(x.app.store, x.app.origin);
+  let decisions = 0;
+  const reason = mock.method(MetaModels.prototype, 'reason', async () => {
+    decisions++;
+    // An arrow into a table cell from outside the table is refused with no key sent.
+    if (decisions <= 2) return { ...seek, targetRole: 'checkbox', traversalKey: 'ArrowRight' };
+    return { kind: 'finish', note: 'Synthetic finish.' };
+  });
+  const analyse = mock.method(
+    runner as any,
+    'analyse',
+    async (_m: any, _r: any, current: any) => current,
+  );
+  const review = mock.method(runner as any, 'review', async () => {});
+  try {
+    await (runner as any).live(x.run, x.walk, new VoiceOverProbe(x.walk), x.current, x.signal);
+    assert.equal(decisions, 3, 'the navigator decides again after two refusals with no key sent');
+    assert(
+      !x.app.store
+        .records(x.run.id)
+        .some((row) => row.kind === 'limit' && row.payload.method === 'unreached_targets'),
+    );
+    assert.equal(x.app.store.records(x.run.id).filter((row) => row.kind === 'action').length, 0);
+  } finally {
+    reason.mock.restore();
+    analyse.mock.restore();
+    review.mock.restore();
+    await x.close();
+  }
+});
+
 test('Runner refreshes a target that changed during the model decision without performing stale input', async () => {
   const x = await setup('chromium', '<h1>Original</h1><button>A</button><button>Target</button>');
   const runner = new Runner(x.app.store, x.app.origin);
