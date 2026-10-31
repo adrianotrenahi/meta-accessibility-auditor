@@ -12,6 +12,7 @@ import {
   ActionLimitReached,
   ActionStateChanged,
   InputRefused,
+  PageUnreadable,
 } from './browser.js';
 import { documentWasReplaced } from './page-observation.js';
 /** Attempts across page reloads before a scan stays unknown (owner, 30 Oct). */
@@ -996,11 +997,12 @@ export class Runner {
         }
       }
       } catch (error) {
-        // The navigator's share of the audit's money, or the audit's key-press limit, ends
-        // navigation cleanly: what the robot reached is still checked and reviewed below
-        // (owner, 31 Oct). Any other failure keeps the hard path.
+        // The navigator's share of the audit's money, the audit's key-press limit, or a page
+        // that stays unreadable ends navigation cleanly: what the robot reached is still checked
+        // and reviewed below (owner, 31 Oct). Any other failure keeps the hard path.
         if (
           !(error instanceof ActionLimitReached) &&
+          !(error instanceof PageUnreadable) &&
           !(error instanceof RoleAllowanceLimit && error.role === 'driver')
         )
           throw error;
@@ -1016,7 +1018,9 @@ export class Runner {
         );
         decisionAllowanceSpent = false;
         // Keys sent just before the stop may have changed the page; the final check reads it now.
-        current = await walk.captureSettled().catch(() => current);
+        // A page that just stayed unreadable is not waited for a second time.
+        if (!(error instanceof PageUnreadable))
+          current = await walk.captureSettled().catch(() => current);
       }
       if (this.stopForDeniedPage(run, walk, current)) return;
       if (decisionAllowanceSpent)

@@ -56,7 +56,11 @@ screenshot means the current one, the only one the navigator sees; the freshness
 check still runs before the step is recorded. Any other answer that breaks the
 decision rules is not acted on: a `navigator_answer_refused` limit says why, and
 the navigator is asked again within its usual allowance. Three refused answers in
-a row stop navigation (owner, 31 October). A `step_done` answer names that instruction
+a row stop navigation (owner, 31 October). A page slow to become readable after an
+input is read again for up to 30 seconds (a `slow_page_wait` limit says so; nothing is
+pressed again). If it is still unreadable, navigation stops cleanly with a
+`navigation_limit`, like the key-press limit, and what was reached is still checked and
+reviewed (owner, 31 October: Booking.com's results page after Search). A `step_done` answer names that instruction
 and the current stable original capture. The engine checks freshness and approved
 order before recording completion. This is a navigator claim, not an independent
 accessibility pass or proof of usable search results. An unfinished instruction

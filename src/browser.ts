@@ -1,5 +1,5 @@
 import { originalAriaName } from './aria-name.js';
-import { webkit, chromium, type Browser, type ElementHandle, type Page } from 'playwright';
+import { webkit, chromium, errors, type Browser, type ElementHandle, type Page } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
 import { Store, digest, recordIsIntact } from './store.js';
 import { LIMITS, type Capture, type RecordEntry } from './types.js';
@@ -110,6 +110,11 @@ export class MeasurementStateChanged extends Error {
 /** No input has been sent: the decision's original no longer matches the page. */
 export class ActionStateChanged extends Error {}
 export class ObservationUnsettled extends Error {}
+/** After an input, how long a page slow to become readable is retried before navigation stops
+ * cleanly (owner, 31 Oct: Booking.com's results page took longer than one read allows). */
+export const SLOW_PAGE_WAIT_MS = 30_000;
+/** The page stayed unreadable for SLOW_PAGE_WAIT_MS; no input was repeated. */
+export class PageUnreadable extends Error {}
 export function publicSearchInput(
   focus: {
     tag: string;
@@ -417,7 +422,47 @@ export class BrowserWalk {
       screenShape: await renderedScreenShape(this.page, this.pointerStateKey),
     };
   }
+  slowPageWaitMs = SLOW_PAGE_WAIT_MS;
   async capture(): Promise<RecordEntry> {
+    const deadline = performance.now() + this.slowPageWaitMs;
+    let waited = false;
+    for (;;) {
+      try {
+        return await this.captureOrWait();
+      } catch (error) {
+        // A stop takes precedence; only a read that ran out of time is tried again.
+        this.assertActive();
+        if (!(error instanceof errors.TimeoutError) || this.page.isClosed()) throw error;
+        if (performance.now() >= deadline)
+          throw new PageUnreadable(
+            `The page did not become readable within ${this.slowPageWaitMs / 1000} seconds of waiting. No input was repeated.`,
+          );
+        if (!waited) {
+          waited = true;
+          this.store.append(
+            this.runId,
+            'limit',
+            'browser',
+            {
+              method: 'slow_page_wait',
+              reason:
+                'The page is slow to become readable. The robot waits and reads it again; no input is repeated.',
+              maximumWaitMs: this.slowPageWaitMs,
+            },
+            this.lastOriginal ? [this.lastOriginal.id] : [],
+          );
+        }
+        await this.page
+          .waitForLoadState('domcontentloaded', {
+            timeout: Math.max(1, Math.floor(deadline - performance.now())),
+          })
+          .catch(() => undefined);
+        this.assertActive();
+        await this.page.waitForTimeout(Math.max(0, Math.min(1000, deadline - performance.now())));
+      }
+    }
+  }
+  private async captureOrWait(): Promise<RecordEntry> {
     const previous = this.lastOriginal;
     return readNavigationCapture(
       this.page,
