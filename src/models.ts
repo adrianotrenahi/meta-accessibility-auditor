@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CAPS } from './types.js';
+import { CAPS, tokenCostMicros } from './types.js';
 import { TARGET_ROLES } from './keyboard-target.js';
 import { postMeta, MetaTransportError } from './meta-transport.js';
 import type { Role, Approval, RecordEntry } from './types.js';
@@ -424,7 +424,7 @@ export class MetaModels {
       }
     }
     const body: any = {
-      model: 'muse-spark-1.3',
+      model: cap.model,
       store: false,
       instructions:
         purpose === 'planning'
@@ -512,7 +512,7 @@ export class MetaModels {
     if (!Number.isInteger(count) || count < 0)
       throw Error('The provider did not return a valid evidence input count.');
     if (count > cap.input) throw new EvidenceRequestLimit(role, 'input');
-    const reserved = Math.ceil(count * 1.25 + cap.output * 4.25); // integer millionths of a dollar
+    const reserved = tokenCostMicros(cap.model, count, cap.output);
     const id = this.store.reserve(runId, role, reserved, approved, final, purpose);
     try {
       const response = await this.post(runId, '/responses', body, signal, purpose);
@@ -524,7 +524,7 @@ export class MetaModels {
         u.output_tokens < 0
       )
         throw Error('Meta usage was missing; the spending reservation is retained.');
-      const actual = Math.ceil(u.input_tokens * 1.25 + u.output_tokens * 4.25);
+      const actual = tokenCostMicros(cap.model, u.input_tokens, u.output_tokens);
       this.store.settle(id, actual, response.status === 'completed' ? 'received' : 'incomplete');
       this.store.append(runId, 'model_response', role, {
         requestId: id,

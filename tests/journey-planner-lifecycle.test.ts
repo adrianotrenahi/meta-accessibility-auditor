@@ -8,7 +8,9 @@ import { Store, digest } from '../src/store.js';
 import { MetaModels, actionSchema } from '../src/models.js';
 import { JourneyPlanner, journeyPlanView } from '../src/journey-planner.js';
 import { journeyPlanSchema } from '../src/journey-steps.js';
-import type { Approval } from '../src/types.js';
+import { CAPS, tokenCostMicros, type Approval } from '../src/types.js';
+// The planner's 10 counted input and 20 output tokens, at the navigator model's price.
+const planCharge = tokenCostMicros(CAPS.driver.model, 10, 20);
 
 const result = {
   steps: [
@@ -150,13 +152,13 @@ test('A late completed response after Stop records its actual charge but cannot 
     await stopped;
     assert((await pending) instanceof Error);
     assert.equal(f.store.run(run.id).state, 'stopped');
-    assert.equal(f.store.usage(run.id).spent, 98);
+    assert.equal(f.store.usage(run.id).spent, planCharge);
     assert.equal(f.store.usage(run.id).reserved, 0);
     assert.equal(f.store.records(run.id).filter((record) => record.kind === 'plan').length, 0);
     assert.equal((await f.planner.prepare(f.binding)).run.state, 'stopped');
     f.store.discard(run.id);
     await assert.rejects(async () => f.planner.prepare(f.binding));
-    assert.equal(f.store.usage().spent, 98);
+    assert.equal(f.store.usage().spent, planCharge);
     assert.equal(f.store.hasRun(run.id), false);
     assert.equal(f.calls.length, 2);
   } finally {

@@ -10,7 +10,9 @@ import { MetaModels } from '../src/models.js';
 import { JourneyPlanner } from '../src/journey-planner.js';
 import { hostRequest } from '../server/host.js';
 import type { Runner } from '../src/runner.js';
-import type { Approval } from '../src/types.js';
+import { CAPS, tokenCostMicros, type Approval } from '../src/types.js';
+// The planner's 10 counted input and 20 output tokens, at the navigator model's price.
+const planCharge = tokenCostMicros(CAPS.driver.model, 10, 20);
 
 const steps = [
   { id: 'arrival', text: 'Open the search.', intent: 'navigate', success: 'The form is visible.' },
@@ -211,7 +213,7 @@ test('edited approved steps start the same charged run once, and retry cannot dr
     assert.equal(f.starts(), 1);
     assert.equal(f.remote(), 2);
     assert.equal(f.store.usage(proposal.id).requests.length, 1);
-    assert.equal(f.store.usage(proposal.id).spent, 98);
+    assert.equal(f.store.usage(proposal.id).spent, planCharge);
     assert.equal(
       (await f.request('/api/host/runs', { ...body, journeyPlan: undefined })).status,
       400,

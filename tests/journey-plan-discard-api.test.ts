@@ -12,7 +12,9 @@ import { MetaModels } from '../src/models.js';
 import { JourneyPlanner } from '../src/journey-planner.js';
 import { Runner } from '../src/runner.js';
 import { hostRequest } from '../server/host.js';
-import type { Approval } from '../src/types.js';
+import { CAPS, tokenCostMicros, type Approval } from '../src/types.js';
+// The planner's 10 counted input and 20 output tokens, at the navigator model's price.
+const planCharge = tokenCostMicros(CAPS.driver.model, 10, 20);
 
 const steps = [
   {
@@ -162,7 +164,7 @@ test('Cancel after private job persistence removes the charged proposal even bef
     assert.equal(f.store.hasRun(prepared.run.id), false);
     assert.deepEqual(f.store.records(prepared.run.id), []);
     assert.equal(f.store.record(prepared.run.id, prepared.plan!.id), undefined);
-    assert.equal(f.store.usage().spent, 98);
+    assert.equal(f.store.usage().spent, planCharge);
     assert.equal(f.store.journeyDraftDiscarded(f.binding), true);
     await assert.rejects(async () => f.planner.prepare(f.binding));
     assert.equal((await f.post('/api/host/journey-plans/discard', f.body)).status, 200);
@@ -206,7 +208,7 @@ test('A pending planner discard waits for its late charge, deletes every origina
     assert.equal((await removal).status, 200);
     assert((await pending) instanceof Error);
     assert.equal(f.store.hasRun(runId), false);
-    assert.equal(f.store.usage().spent, 98);
+    assert.equal(f.store.usage().spent, planCharge);
     assert.equal(f.store.records(runId).length, 0);
     await assert.rejects(async () => f.planner.prepare(f.binding));
     assert.equal(f.remote(), 2);
@@ -288,7 +290,7 @@ test('A proposal deleted through an already-started request remains idempotent i
     assert.equal((await f.post(`/api/host/requests/${requestId}/discard`, {})).status, 200);
     assert.equal(f.store.hasRun(prepared.run.id), false);
     assert.equal((await f.post('/api/host/journey-plans/discard', f.body)).status, 200);
-    assert.equal(f.store.usage().spent, 98);
+    assert.equal(f.store.usage().spent, planCharge);
     assert.equal(f.remote(), 2);
   } finally {
     await f.close();
