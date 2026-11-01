@@ -213,7 +213,8 @@ const ANSWER_LISTS: Partial<Record<Role, Record<string, number>>> = {
     coverage: VISUAL_COVERAGE_ROWS,
     visualObservations: VISUAL_OBSERVATIONS,
     criterionProposals: CRITERION_PROPOSALS,
-    missingEvidence: 2,
+    // missingEvidence is left to normalizeMissingEvidence, which drops incomplete requests
+    // before keeping two (Codex, PR 72: trimming first could drop a valid request).
   },
   reviewer: { decisions: MAX_FINDINGS, criterionDecisions: CRITERION_REVIEW_BATCH },
 };
@@ -228,6 +229,18 @@ export function keepWhatFits(role: Role, answer: unknown) {
     if (!Array.isArray(items) || items.length <= kept) continue;
     trimmed.push({ list, returned: items.length, kept });
     copy[list] = items.slice(0, kept);
+  }
+  // A finding may only point at one of the visual notes the format allows; one pointing
+  // further is left out, rather than the whole answer being refused.
+  if (Array.isArray(copy.findings)) {
+    const findings = copy.findings as { visualObservationIndex?: unknown }[];
+    const pointed = findings.filter(
+      (f) => typeof f?.visualObservationIndex === 'number' && f.visualObservationIndex >= VISUAL_OBSERVATIONS,
+    );
+    if (pointed.length) {
+      trimmed.push({ list: 'findings', returned: findings.length, kept: findings.length - pointed.length });
+      copy.findings = findings.filter((f) => !pointed.includes(f));
+    }
   }
   return { answer: copy, trimmed };
 }
@@ -693,6 +706,8 @@ export class MetaModels {
       let result: T;
       try {
         const kept = keepWhatFits(role, JSON.parse(raw));
+        result = schema.parse(kept.answer);
+        // Noted only once the shortened answer is accepted (Loca, PR 72).
         for (const { list, returned, kept: limit } of kept.trimmed)
           this.store.append(runId, 'limit', role, {
             method: 'answer_list_trimmed',
@@ -700,9 +715,8 @@ export class MetaModels {
             list,
             returned,
             kept: limit,
-            reason: `The answer listed ${returned} ${list}; the first ${limit} were kept and the other ${returned - limit} were left out.`,
+            reason: `The answer listed ${returned} ${list}; ${limit} were kept and the other ${returned - limit} were left out.`,
           });
-        result = schema.parse(kept.answer);
       } catch (error) {
         if (error instanceof z.ZodError)
           throw new InvalidModelAnswer(

@@ -96,8 +96,51 @@ test('A paid analyst answer with 30 findings keeps 25 instead of being lost', as
     const note = store.records(run.id).find((r) => r.payload?.method === 'answer_list_trimmed');
     assert.equal(note?.payload.returned, 30);
     assert.equal(note?.payload.kept, 25);
+    // Loca, PR 72: an answer refused after shortening leaves no "were kept" note behind.
+    result.findings[3] = { ...finding(3), severity: 'unknown' } as any;
+    await assert.rejects(models.reason(run.id, 'analyst', [], [], analysisSchema));
+    assert.equal(
+      store.records(run.id).filter((r) => r.payload?.method === 'answer_list_trimmed').length,
+      1,
+    );
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// Codex, PR 72: trimming extra-test requests before their own cleaning dropped a valid one.
+test('Extra-test requests are cleaned before being limited, so a valid one is never dropped', () => {
+  const request = (fields: Record<string, unknown>) => ({
+    captureId: 'c1',
+    criterionId: null,
+    reason: 'Check the focused search control.',
+    ...fields,
+  });
+  const kept = keepWhatFits('analyst', {
+    findings: [],
+    missingEvidence: [
+      request({ method: 'keyboard_activation', targetName: 'Search Flights' }),
+      request({ method: 'keyboard_activation', activationKey: 'Enter', targetName: 'Search' }),
+      request({ method: 'measurement' }),
+    ],
+  });
+  assert.deepEqual(kept.trimmed, []);
+  assert.deepEqual(
+    analysisSchema.parse(kept.answer).missingEvidence.map((r) => r.method),
+    ['keyboard_activation', 'measurement'],
+  );
+});
+
+test('A finding that points past the allowed visual notes is left out, not the whole answer', () => {
+  const answer = {
+    findings: [finding(0), { ...finding(1), visualObservationIndex: 13 }, finding(2)],
+  };
+  const kept = keepWhatFits('analyst', answer);
+  assert.deepEqual(kept.trimmed, [{ list: 'findings', returned: 3, kept: 2 }]);
+  assert.deepEqual(
+    analysisSchema.parse(kept.answer).findings.map((f) => f.issueKey),
+    ['issue_0', 'issue_2'],
+  );
+  assert(!analysisSchema.safeParse(answer).success, 'without it the whole answer was refused');
 });
