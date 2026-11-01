@@ -149,7 +149,7 @@ test('A screenshot gets its own 20-second limit, not the usual 8', () =>
 // Owner, 1 Nov: a Tab on a frozen page used a quicker focus read that had no slow-page wait,
 // so it could still end the audit on a raw time-out. It now hands over to the full reading.
 test('A Tab on a frozen page gets the slow-page wait, not a raw time-out', () =>
-  slowPage('Frozen after Tab', async (walk) => {
+  slowPage('Frozen after Tab', async (walk, app, run) => {
     await walk.page.setContent('<button>One</button><button>Two</button><button>Three</button>');
     const tab = async () => {
       const before = await walk.captureSettled();
@@ -166,6 +166,24 @@ test('A Tab on a frozen page gets the slow-page wait, not a raw time-out', () =>
     };
     const after = await walk.observeKeyboardMovement(step.before, step.performed);
     assert.equal(after.kind, 'capture', 'the full reading recorded the page');
+    // Loca, PR 66: any other failure of the quick read is passed on at once, not waited for.
+    (walk as any).observedState = real;
+    step = await tab();
+    const kinds = () => app.store.records(run.id).map((r: any) => r.payload.method ?? r.kind);
+    const before = kinds();
+    // Only the quick read fails, so a fallback to the full reading would succeed and be caught.
+    let broken = true;
+    (walk as any).observedState = async () => {
+      if (broken) {
+        broken = false;
+        throw Error('boom');
+      }
+      return real();
+    };
+    const started = performance.now();
+    await assert.rejects(walk.observeKeyboardMovement(step.before, step.performed), /boom/);
+    assert(performance.now() - started < 1000, 'no slow-page wait');
+    assert.deepEqual(kinds(), before, 'no screenshot or slow-page note was saved');
     // A page that stays frozen ends with the plain slow-page reason.
     (walk as any).observedState = real;
     step = await tab();
