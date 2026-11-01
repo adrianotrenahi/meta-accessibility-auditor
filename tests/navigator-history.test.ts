@@ -224,3 +224,12 @@ test('The analyst and reviewer can check far more than eight screens in one audi
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Owner, 1 Nov: eDreams offers keyboard users an accessible mode ("press Enter"); a keyboard
+// user would take it, so the navigator may too, but never for account or payment steps.
+test("The navigator takes a site's own accessible way through, never for account or payment", async () => {
+  const { jobInstructions } = await import('../src/models.js');
+  assert.match(jobInstructions.driver, /press Enter for accessible navigation/);
+  assert.match(jobInstructions.driver, /take it with Enter as a keyboard user would/);
+  assert.match(jobInstructions.driver, /Never use it for login, account, booking, payment/);
+});

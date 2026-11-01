@@ -371,7 +371,7 @@ test('Cancelled traversal and stale source refuse before a key; physical action 
   }
 });
 
-test('A bounded traversal stops after24 real keys when no earlier condition stops it', async () => {
+test('A bounded traversal stops at its key bound when no earlier condition stops it', async () => {
   const x = await setup(
     'chromium',
     Array.from({ length: 28 }, (_, i) => `<button>B${i}</button>`).join('') +
@@ -386,9 +386,10 @@ test('A bounded traversal stops after24 real keys when no earlier condition stop
       seek,
       x.signal.signal,
       x.step,
+      { tab: 24 },
     );
     assert.equal(result.outcome, 'limit');
-    assert.equal(result.actions.length, MAX_TARGET_KEYS);
+    assert.equal(result.actions.length, 24);
   } finally {
     await x.close();
   }
@@ -1796,6 +1797,7 @@ const farTarget = (before: number) =>
   '<button>Target</button>';
 test('A control not reached within the key bound is saved as measured keyboard evidence', async () => {
   const x = await setup('chromium', farTarget(40));
+  const bound = 24;
   try {
     const result = await walkToKeyboardTarget(
       x.walk,
@@ -1805,24 +1807,25 @@ test('A control not reached within the key bound is saved as measured keyboard e
       seek,
       x.signal.signal,
       x.step,
+      { tab: bound },
     );
     assert.equal(result.outcome, 'limit');
-    assert.equal(result.actions.length, MAX_TARGET_KEYS);
+    assert.equal(result.actions.length, bound);
     const reach = x.app.store
       .records(x.run.id)
       .find((row) => row.kind === 'observation' && row.payload.method === 'keyboard_reach/1');
     assert(reach, 'the missed bound is a measurement the analyst receives');
     assert.equal(reach.payload.reached, false);
     assert.equal(reach.payload.fullCycle, false);
-    assert.equal(reach.payload.keysPressed, MAX_TARGET_KEYS);
+    assert.equal(reach.payload.keysPressed, bound);
     assert.equal(reach.payload.target.name, 'Target');
     // Codex and Loca, PR 75: the order ends where the last press landed.
-    assert.equal(reach.payload.focusOrder.at(-1).name, `Stop ${MAX_TARGET_KEYS}`);
+    assert.equal(reach.payload.focusOrder.at(-1).name, `Stop ${bound}`);
     assert(result.actions.every((action) => reach.sources.includes(action.id)));
     const limit = x.app.store
       .records(x.run.id)
       .findLast((row) => row.payload?.method === 'keyboard_target_traversal');
-    assert.match(limit!.payload.reason, new RegExp(`after ${MAX_TARGET_KEYS} key presses`));
+    assert.match(limit!.payload.reason, new RegExp(`after ${bound} key presses`));
   } finally {
     await x.close();
   }
@@ -1838,35 +1841,63 @@ test('Only a measured Tab walk that runs out of presses counts toward the unreac
   assert(!countsAsUnreached({ outcome: 'reached' }));
 });
 
-test('Runner ends navigation after two tries in a row that run out of keys', async () => {
+// Owner, 1 Nov: "yes it should" keep pressing Tab until it has gone all the way round. A
+// control 60 stops away is now reached in one try instead of two misses of 24.
+test('A Tab walk keeps going past 24 presses until it reaches the control', async () => {
   const x = await setup('chromium', farTarget(60));
-  const runner = new Runner(x.app.store, x.app.origin);
-  let decisions = 0;
-  const reason = mock.method(MetaModels.prototype, 'reason', async () => {
-    decisions++;
-    return seek;
-  });
-  const analyse = mock.method(
-    runner as any,
-    'analyseCheckpoint',
-    async (_m: any, _r: any, current: any) => current,
-  );
-  const review = mock.method(runner as any, 'review', async () => {});
   try {
-    await (runner as any).live(x.run, x.walk, new VoiceOverProbe(x.walk), x.current, x.signal);
-    assert.equal(decisions, 2, 'no third decision is bought for the same unreached control');
-    const records = x.app.store.records(x.run.id);
-    assert(records.some((row) => row.payload?.method === 'unreached_targets'));
-    assert.equal(
-      records.filter((row) => row.payload?.method === 'keyboard_reach/1').length,
-      2,
-      'each try is saved as evidence',
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
     );
-    assert.equal(analyse.mock.callCount(), 1, 'the final analysis still runs');
+    assert.equal(result.outcome, 'reached');
+    assert.equal(result.actions.length, 61);
+    assert(MAX_TARGET_KEYS >= 300, 'a full loop of a long page fits one try');
   } finally {
-    reason.mock.restore();
-    analyse.mock.restore();
-    review.mock.restore();
+    await x.close();
+  }
+});
+
+// Owner, 1 Nov: "we should not miss anything": an arrow walk that stops at its bound is saved
+// too, and counts toward the stuck-twice stop.
+test('An arrow walk that stops at its bound is saved as measured keyboard evidence', async () => {
+  const cells = Array.from(
+    { length: 10 },
+    (_, i) =>
+      `<span role="gridcell" tabindex="${i === 0 ? 0 : -1}" aria-label="${i === 9 ? 'Target' : `Day ${i + 1}`}">${i + 1}</span>`,
+  ).join('');
+  const x = await setup(
+    'chromium',
+    `<div role="grid"><div role="row">${cells}</div></div><script>document.querySelectorAll("[role=gridcell]").forEach((cell,i,all)=>cell.addEventListener("keydown",e=>{if(e.key==="ArrowRight"&&all[i+1]){e.preventDefault();cell.tabIndex=-1;all[i+1].tabIndex=0;all[i+1].focus();}}));</script>`,
+  );
+  try {
+    await x.walk.act({ kind: 'press', key: 'Tab', note: 'Enter the grid' }, x.current);
+    const inGrid = await x.walk.captureSettled();
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      inGrid,
+      { ...seek, targetRole: 'gridcell', traversalKey: 'ArrowRight' },
+      x.signal.signal,
+      x.step,
+      { arrow: 3 },
+    );
+    assert.equal(result.outcome, 'limit');
+    assert.equal((result as any).evidenceSaved, true);
+    assert(countsAsUnreached(result as any));
+    const reach = x.app.store
+      .records(x.run.id)
+      .find((row) => row.payload?.method === 'keyboard_reach/1');
+    assert.equal(reach?.payload.key, 'ArrowRight');
+    assert.equal(reach?.payload.fullCycle, false);
+    assert.equal(reach?.payload.keysPressed, 3);
+  } finally {
     await x.close();
   }
 });

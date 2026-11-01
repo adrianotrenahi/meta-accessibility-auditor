@@ -177,7 +177,7 @@ personal, account or payment details) refusing an input no longer ends the audit
 `input_refused` limit records why, nothing is typed, and the navigator is asked again;
 three refused inputs in a row stop navigation. The navigator is told that date
 pickers, day and month selectors, dropdowns and option lists are chosen with the arrow
-keys and Enter or Space, not typed into (owner, 31 October). Each navigator decision
+keys and Enter or Space, not typed into (owner, 31 October). When a page offers keyboard or screen-reader users their own way through (a notice to press Enter for accessible navigation, a skip link or an accessible mode), the navigator takes it with Enter, as a keyboard user would, and notes it; never for login, account, booking, payment or personal details (owner, 1 November: eDreams). Each navigator decision
 is one request to Meta: audits estimate its size locally and generously instead of
 asking Meta first; the estimate counts text bytes (very likely an upper bound), asks Meta when it looks too big, and records a `reservation_exceeded` warning if a charge ever exceeds what was set aside.
 
