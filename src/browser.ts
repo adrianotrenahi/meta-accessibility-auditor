@@ -122,6 +122,38 @@ export const SCREENSHOT_WAIT_MS = 20_000;
 export class PageUnreadable extends Error {}
 /** One page reading's slow-page wait; it starts at the first read that runs out of time. */
 export type SlowPageWait = { since?: number; deadline?: number };
+/** Whether Page Down or Page Up on the focused element would change or move within it rather
+ * than scroll the page: text and number fields, dropdowns, lists, grids, sliders and the like. */
+export function keyboardScrollChangesValue(focus: { tag: string; type: string; role: string }) {
+  const tag = focus.tag.toLowerCase();
+  const type = focus.type.toLowerCase();
+  const role = focus.role.toLowerCase().split(/\s+/)[0] ?? '';
+  if (tag === 'select' || tag === 'textarea' || tag === 'iframe') return true;
+  if (tag === 'input' && !['button', 'submit', 'reset', 'image', 'checkbox'].includes(type))
+    return true;
+  return [
+    'textbox',
+    'searchbox',
+    'combobox',
+    'listbox',
+    'option',
+    'grid',
+    'gridcell',
+    'treegrid',
+    'tree',
+    'treeitem',
+    'menu',
+    'menubar',
+    'menuitem',
+    'slider',
+    'spinbutton',
+    'scrollbar',
+    'radiogroup',
+    'radio',
+    'tablist',
+    'tab',
+  ].includes(role);
+}
 export function publicSearchInput(
   focus: {
     tag: string;
@@ -1243,8 +1275,15 @@ export class BrowserWalk {
       action = { ...action, key, presses } as Action;
       if (!chosen) outcome = 'option_not_reached';
     } else if (action.kind === 'scroll') {
+      // Owner, 1 Nov: a keyboard user scrolls with Page Down and Page Up, not a mouse wheel.
+      if (keyboardScrollChangesValue(before))
+        throw new InputRefused(
+          'Focus is inside a field, dropdown or list, where Page Down would change its value instead of scrolling; move focus out with Escape or Tab first.',
+        );
+      const key = action.direction === 'up' ? 'PageUp' : 'PageDown';
       this.count();
-      await this.page.mouse.wheel(0, action.direction === 'up' ? -600 : 600);
+      await this.page.keyboard.press(key);
+      action = { ...action, key };
     } else if (action.kind === 'back') {
       this.count();
       await this.page.goBack({ waitUntil: 'domcontentloaded' });

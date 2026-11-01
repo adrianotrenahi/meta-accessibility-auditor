@@ -5,7 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { MAX_FINDINGS } from '../src/types.js';
-import { MetaModels, analysisSchema, keepWhatFits, reviewSchema } from '../src/models.js';
+import {
+  MetaModels,
+  NAVIGATOR_NOTE_LIMIT,
+  analysisSchema,
+  keepWhatFits,
+  navigationActionSchema,
+  reviewSchema,
+} from '../src/models.js';
 
 // Owner, 1 Nov: "Why are we limiting the amount of findings?" — "OK do 2": up to 25 findings per
 // look, and an answer over a limit keeps what fits instead of being thrown away.
@@ -143,4 +150,68 @@ test('A finding that points past the allowed visual notes is left out, not the w
     ['issue_0', 'issue_2'],
   );
   assert(!analysisSchema.safeParse(answer).success, 'without it the whole answer was refused');
+});
+
+// Loca, PR 77: the navigator's notes now quote the site and say where focus was, so one can run
+// past its limit. Its start is kept and marked as cut, instead of the paid decision being refused.
+test('An over-long navigator note keeps its start, marked as cut, and the move still counts', async () => {
+  const long = 'Saw: ' + 'the error reads "Something went wrong" under the Search button; '.repeat(12);
+  assert(long.length > NAVIGATOR_NOTE_LIMIT);
+  const kept = keepWhatFits('driver', { kind: 'press', key: 'Tab', note: long });
+  const note = (kept.answer as any).note as string;
+  assert(note.length <= NAVIGATOR_NOTE_LIMIT);
+  assert(note.endsWith('[note cut]'));
+  assert(long.startsWith(note.slice(0, 200)), 'the start of the note is kept');
+  assert.deepEqual(kept.trimmed, [
+    { list: 'note', returned: long.length, kept: NAVIGATOR_NOTE_LIMIT },
+  ]);
+  assert(navigationActionSchema.safeParse(kept.answer).success);
+  // A note within the limit is left exactly as written.
+  const short = keepWhatFits('driver', { kind: 'press', key: 'Tab', note: 'x'.repeat(500) });
+  assert.equal((short.answer as any).note, 'x'.repeat(500));
+  assert.deepEqual(short.trimmed, []);
+
+  const dir = mkdtempSync(join(tmpdir(), 'answer-limits-note-'));
+  const store = new Store(dir);
+  const run = store.create('Note limit', 'http://127.0.0.1:4317/shop/', 'offline');
+  const models = new MetaModels(
+    store,
+    (async (url: unknown) =>
+      Response.json(
+        String(url).endsWith('/input_tokens')
+          ? { input_tokens: 1000 }
+          : {
+              status: 'completed',
+              usage: { input_tokens: 1000, output_tokens: 20 },
+              output: [
+                {
+                  type: 'function_call',
+                  name: 'return_result',
+                  arguments: JSON.stringify({ kind: 'press', key: 'Tab', note: long }),
+                },
+              ],
+            },
+      )) as typeof fetch,
+    () => ({
+      approvedBy: 'Adriano',
+      maxUsd: 10,
+      maxRunUsd: 3,
+      approvedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }),
+    () => 'mock-key-no-provider-access',
+  );
+  try {
+    const action = await models.reason(run.id, 'driver', [], [], navigationActionSchema);
+    assert.equal(action.note, note);
+    assert.equal(store.usage(run.id).requests[0]!.status, 'completed');
+    const limit = store
+      .records(run.id)
+      .find((r) => r.payload?.method === 'navigator_note_trimmed');
+    assert.equal(limit?.payload.returned, long.length);
+    assert.match(limit?.payload.reason, /marked as cut/);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

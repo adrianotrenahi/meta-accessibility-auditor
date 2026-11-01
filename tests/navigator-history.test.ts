@@ -226,13 +226,54 @@ test('The analyst and reviewer can check far more than eight screens in one audi
 });
 
 // Owner, 1 Nov: eDreams offers keyboard users an accessible mode ("press Enter"); a keyboard
-// user would take it, so the navigator may too, but never for account or payment steps.
-test("The navigator takes a site's own accessible way through, never to sign in or pay", async () => {
+// user would take it, so the navigator does too. Owner, PR 77: the accessible mode carries no
+// rule of its own about accounts or payment; the instructions' one commitment line covers it.
+test("The navigator takes a site's own accessible way through", async () => {
   const { jobInstructions } = await import('../src/models.js');
   assert.match(jobInstructions.driver, /press Enter for accessible navigation/);
   assert.match(jobInstructions.driver, /take it with Enter as a keyboard user would/);
-  // Loca, PR 76: reaching search fields such as dates is the point, so "booking" means only
-  // confirming one.
-  assert.match(jobInstructions.driver, /reach search fields such as dates is fine/);
-  assert.match(jobInstructions.driver, /never use it to sign in, create an account, pay/);
+  assert.doesNotMatch(jobInstructions.driver, /never use it to sign in/);
+  assert.match(jobInstructions.driver, /THE LINE YOU NEVER CROSS/);
+});
+
+// Owner, PR 77: the instructions describe the keyboard walk as PRs 75 and 76 left it. Tab goes
+// round the whole page, a miss is saved as evidence, and two misses in a row end the walk.
+test('The navigator knows how a keyboard walk ends and that a miss is not retried', async () => {
+  const { jobInstructions } = await import('../src/models.js');
+  const { MAX_TARGET_KEYS, MAX_ARROW_KEYS } = await import('../src/keyboard-target.js');
+  assert.match(jobInstructions.driver, new RegExp(`at most ${MAX_TARGET_KEYS} presses`));
+  assert.match(
+    jobInstructions.driver,
+    new RegExp(`arrow keys were pressed ${MAX_ARROW_KEYS} times`),
+  );
+  assert.match(
+    jobInstructions.driver,
+    /Two unreached controls in a row, with no other move between/,
+  );
+  assert.match(jobInstructions.driver, /the miss is already saved as evidence/);
+  assert.doesNotMatch(jobInstructions.driver, /Try one other real keyboard route/);
+});
+
+// Owner, 1 Nov: the navigator was told only how to move and what not to claim, so its notes
+// said little about what a keyboard user met. It now records what it sees on every decision,
+// without inventing screen-reader speech, and its examples are not tied to one flight site.
+test('The navigator records what a keyboard user meets, without inventing speech', async () => {
+  const { jobInstructions } = await import('../src/models.js');
+  const text = jobInstructions.driver;
+  assert.match(text, /Be the witness/);
+  assert.match(text, /"Did:" what you did and why/);
+  assert.match(text, /"Saw:" what the keyboard user met on this screen/);
+  assert.match(text, /Write "Saw: nothing new" when nothing new appeared/);
+  assert.match(
+    text,
+    /Never say what a screen reader announces, says or reads unless a voiceover check in this run recorded that speech/,
+  );
+  assert.match(text, /Never purchase, pay, subscribe, register, create an account, sign in/);
+  // Owner, 1 Nov: scrolling is Page Down / Page Up, and the screen reader has no limit per audit.
+  assert.match(text, /scroll presses Page Down \(direction down\) or Page Up/);
+  assert.match(text, /There is no limit per audit, but each screen gets one check/);
+  assert.doesNotMatch(text, /mouse wheel|two such checks/);
+  // The no-commitment rule is stated once, not repeated in several places.
+  assert.equal(text.match(/Never purchase/g)?.length, 1);
+  assert.doesNotMatch(text, /London|airport/i);
 });
