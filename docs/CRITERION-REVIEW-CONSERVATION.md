@@ -8,7 +8,7 @@ The reviewer now receives every criterion proposal still owed a review, with its
 
 Before adding an earlier picture, selection checks its stored bytes, the exact proposal and its sources against the analyst's saved read. An earlier source rewritten with a fresh valid hash still cannot replace the version the analyst read. Missing, changed or unstable optional evidence leaves that proposal unassessed while intact findings remain reviewable.
 
-Each excluded proposal receives a saved reason identifying the exact proposal and checkpoint: unavailable originals, the picture bound, or the batch of 60 newest owed proposals one review can answer (older owed proposals stay for the next checkpoint or the final review). A supplied proposal the reviewer returns no decision for gets a `criterion_review_missing` record and is offered again. This is a record of selection at that checkpoint, not a criterion decision. Newer valid selections can still reconsider the unchanged proposal. The engine creates no automatic review, pass, finding or score.
+Each excluded proposal receives a saved reason identifying the exact proposal and checkpoint: unavailable originals, the picture bound, or the batch of 60 owed proposals (oldest first) one review can answer (older owed proposals stay for the next checkpoint or the final review). A supplied proposal the reviewer returns no decision for gets a `criterion_review_missing` record and is offered again. This is a record of selection at that checkpoint, not a criterion decision. Newer valid selections can still reconsider the unchanged proposal. The engine creates no automatic review, pass, finding or score.
 
 ## Impact on the UX
 
