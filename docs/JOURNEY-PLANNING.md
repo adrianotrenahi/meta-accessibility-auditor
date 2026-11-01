@@ -61,7 +61,9 @@ input is read again for up to 90 seconds, counted from the first read that ran o
 (a `slow_page_wait` limit says so; nothing is pressed again), and each screenshot may take
 20 seconds instead of the browser's usual 8 (owner, 1 November: the first read of Booking.com's
 results page alone used up the earlier 30 seconds). When the page becomes readable, a
-`slow_page_readable` note saves how long it really took. If it is still unreadable, navigation
+`slow_page_readable` note saves how long it really took. A Tab press normally saves only where focus
+landed; if that quick read runs out of time on a frozen page, the full reading with this wait
+takes over (owner, 1 November). If it is still unreadable, navigation
 stops cleanly with a `navigation_limit`, like the key-press limit, and what was reached is
 still checked and reviewed (owner, 31 October: Booking.com's results page after Search). A `step_done` answer names that instruction
 and the current stable original capture. The engine checks freshness and approved
