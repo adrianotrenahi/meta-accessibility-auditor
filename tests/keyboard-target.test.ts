@@ -12,7 +12,7 @@ import {
   MAX_TARGET_KEYS,
 } from '../src/keyboard-target.js';
 import { MetaModels, navigationActionSchema, type Action } from '../src/models.js';
-import { Runner } from '../src/runner.js';
+import { Runner, countsAsUnreached } from '../src/runner.js';
 import { VoiceOverProbe } from '../src/voiceover.js';
 import { RoleAllowanceLimit } from '../src/role-allowance.js';
 import { PHASE } from '../src/types.js';
@@ -1816,6 +1816,8 @@ test('A control not reached within the key bound is saved as measured keyboard e
     assert.equal(reach.payload.fullCycle, false);
     assert.equal(reach.payload.keysPressed, MAX_TARGET_KEYS);
     assert.equal(reach.payload.target.name, 'Target');
+    // Codex and Loca, PR 75: the order ends where the last press landed.
+    assert.equal(reach.payload.focusOrder.at(-1).name, `Stop ${MAX_TARGET_KEYS}`);
     assert(result.actions.every((action) => reach.sources.includes(action.id)));
     const limit = x.app.store
       .records(x.run.id)
@@ -1824,6 +1826,16 @@ test('A control not reached within the key bound is saved as measured keyboard e
   } finally {
     await x.close();
   }
+});
+
+// Loca, PR 75: an arrow walk that runs out of presses saves no evidence and must not end the
+// step, as it never did before.
+test('Only a measured Tab walk that runs out of presses counts toward the unreached stop', () => {
+  assert(countsAsUnreached({ outcome: 'limit', evidenceSaved: true }));
+  assert(!countsAsUnreached({ outcome: 'limit' }), 'an unmeasured (arrow) limit does not count');
+  assert(countsAsUnreached({ outcome: 'cycle' }));
+  assert(countsAsUnreached({ outcome: 'unavailable' }));
+  assert(!countsAsUnreached({ outcome: 'reached' }));
 });
 
 test('Runner ends navigation after two tries in a row that run out of keys', async () => {
