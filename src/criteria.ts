@@ -234,7 +234,12 @@ export type CriteriaReport = {
   };
   limits: string[];
 };
-export type CriteriaOptions = { imageAvailable?: (capture: RecordEntry) => boolean };
+export type CriteriaOptions = {
+  imageAvailable?: (capture: RecordEntry) => boolean;
+  /** Screens an analyst actually read. When given, only their checks are owed (owner, 1 Nov:
+   * 15 checks on all 34 Booking.com screenshots made 510 owed checks for 8 analysed screens). */
+  analysedCaptureIds?: ReadonlySet<string>;
+};
 
 const kind = (record: RecordEntry, expected: string) => String(record.kind) === expected;
 const objectPayload = (value: unknown) =>
@@ -1152,8 +1157,19 @@ function buildReport(
     validScopes.push(scope);
   }
   if (!scopes.length) limits.push('Required criterion scope was not recorded before analysis.');
+  const analysed = options.analysedCaptureIds;
+  const counted = (captureId: string) => !analysed || analysed.has(captureId);
+  const notAnalysed = records.filter(
+    (r) => r.runId === runId && kind(r, 'capture') && !counted(r.id),
+  ).length;
+  // A note, not a limit: screens left unanalysed do not withhold the analysed screens' result.
+  const notes: string[] = [];
+  if (notAnalysed)
+    notes.push(
+      `${notAnalysed} original screenshot${notAnalysed === 1 ? ' was' : 's were'} not analysed. They stay in the audit's records as part of the journey, but their checks are not counted.`,
+    );
   const unscopedCaptures = records.filter(
-    (r) => r.runId === runId && kind(r, 'capture') && !seenCaptures.has(r.id),
+    (r) => r.runId === runId && kind(r, 'capture') && !seenCaptures.has(r.id) && counted(r.id),
   );
   if (unscopedCaptures.length)
     limits.push('Some original captured states have no verified required criterion scope.');
@@ -1173,8 +1189,9 @@ function buildReport(
       (kind(record, 'criterion_proposal') || kind(record, 'criterion_review')) &&
       !objectPayload(record.payload),
   );
+  const countedScopes = validScopes.filter((scope) => counted(scope.payload.captureId));
   const results: CriterionResult[] = CRITERIA.map((criterion) => {
-    const checks: CriterionCheckResult[] = validScopes.map((scope) =>
+    const checks: CriterionCheckResult[] = countedScopes.map((scope) =>
       checkedResult(
         records,
         runId,
@@ -1259,6 +1276,6 @@ function buildReport(
       assessedCriteria: counts.PASS + counts.FAIL + counts.NOT_APPLICABLE,
       unassessedCriteria: counts.INCONCLUSIVE + counts.NOT_TESTED,
     },
-    limits: [...new Set(limits)],
+    limits: [...new Set([...limits, ...notes])],
   };
 }

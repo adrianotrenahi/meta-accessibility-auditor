@@ -421,14 +421,16 @@ test('Offline criterion-only review keeps the original scope after recapture and
       store.finish(x.run.id, 'partial', 'Offline saved-response control.');
       const report = assessmentForRun(store, x.run.id);
       assert.equal(report.criteria.coverage.assessedChecks, outcome === 'keep' ? 1 : 0);
-      assert.equal(report.criteria.coverage.remainingChecks, outcome === 'keep' ? 29 : 30);
+      // Owner, 1 Nov: the recapture nobody analysed owes no checks; the analysed screen owes 15.
+      assert.equal(report.criteria.coverage.requiredChecks, 15);
+      assert.equal(report.criteria.coverage.remainingChecks, outcome === 'keep' ? 14 : 15);
       assert.equal(report.criteria.score, null);
       const naming = report.criteria.results.find((result) => result.id === 'C02')!;
       assert.equal(
         naming.checks.find((check) => check.captureId === x.capture.id)?.complete,
         outcome === 'keep',
       );
-      assert.equal(naming.checks.find((check) => check.captureId === after.id)?.complete, false);
+      assert(!naming.checks.some((check) => check.captureId === after.id), 'the recapture owes none');
       assert.equal(store.records(x.run.id).filter((record) => record.kind === 'action').length, 0);
       assert.equal(store.usage(x.run.id).requests.length, 0);
       const saved = JSON.stringify(store.records(x.run.id));
@@ -524,16 +526,21 @@ test('Every new captured state declares its own checks without duplicating scope
     declareCriterionScopes(store, x.run.id);
     declareCriterionScopes(store, x.run.id);
     assert.equal(store.records(x.run.id).filter((r) => r.kind === 'criterion_scope').length, 1);
+    // Owner, 1 Nov: checks are owed only on analysed screens; nothing here was analysed, so
+    // the declared scopes stay on record while the report counts none and says why.
     const first = assessmentForRun(store, x.run.id);
-    assert.equal(first.criteria.coverage.requiredChecks, 15);
+    assert.equal(first.criteria.coverage.requiredChecks, 0);
+    assert(first.criteria.limits.some((l) => /^1 original screenshot was not analysed/.test(l)));
     store.append(x.run.id, 'capture', 'browser', {
       ...x.capture.payload,
       title: 'Another observed state',
     });
     declareCriterionScopes(store, x.run.id);
+    assert.equal(store.records(x.run.id).filter((r) => r.kind === 'criterion_scope').length, 2);
     const before = JSON.stringify(store.records(x.run.id));
     const second = assessmentForRun(store, x.run.id);
-    assert.equal(second.criteria.coverage.requiredChecks, 30);
+    assert.equal(second.criteria.coverage.requiredChecks, 0);
+    assert(second.criteria.limits.some((l) => /^2 original screenshots were not analysed/.test(l)));
     assert.equal(second.criteria.score, null);
     assert.equal(second.criteria.counts.NOT_TESTED, 15);
     assert.equal(JSON.stringify(store.records(x.run.id)), before);

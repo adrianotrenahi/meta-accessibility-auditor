@@ -200,7 +200,8 @@ export const analysisSchema = z.object({
   findings: z.array(candidateSchema).max(12),
   coverage: visualCoverageListSchema.default([]),
   visualObservations: visualObservationListSchema.default([]),
-  criterionProposals: z.array(criterionAssessmentSchema).max(15).default([]),
+  // Fifteen checks for each picture of a look (the 1 Nov Booking.com audit sent up to six).
+  criterionProposals: z.array(criterionAssessmentSchema).max(150).default([]),
   missingEvidence: z
     .preprocess(normalizeMissingEvidence, z.array(missingEvidenceSchema).max(2))
     .default([]),
@@ -289,7 +290,7 @@ const jobInstructions = {
     'An observation with method keyboard_reach/1 and reached false is measured keyboard evidence, not a robot limit: real Tab presses went round the page (its focusOrder) and never focused a control that was visible and enabled in its target capture. When that control is needed for the task, report it as a C05 finding with basis measured, scope element, the target capture and target id, and cite the observation and that capture as sources; describe which controls Tab reaches instead. ' +
     'An automatic scan whose comparison is page-state-and-bounded-content-drift read the live page while the copy in its contentDrift.lines differed from the original screenshot (a rotating promotion, for example); never claim those lines are visible in that screenshot. ' +
     'Use null visual references for a purely measured claim. Ask at most two specific missingEvidence checks on the currently supplied original capture when needed; allowed methods are measurement, keyboard_focus, keyboard_activation or voiceover. keyboard_focus sends exactly one Tab and does not activate a control. To test an already focused named control, use keyboard_activation with its exact targetName from the current focus and explicit activationKey Enter or Space; do not ask for activation only in the reason. The ordinary no-booking/payment/login and fresh-screen guards still apply. They are requests, not completed evidence. ' +
-    'Prioritise up to five well-supported criterion assessments per checkpoint, one per captureId and criterionId pair, using the latest original capture and related supplied states as evidence. Other declared checks remain owed; do not fill a quota or write long speculative proposals. Claims with missing facts remain unaccepted or uncertain.',
+    'Every supplied original picture is an analysed screen whose fifteen declared checks are owed. For each supplied picture, settle every check its evidence supports, one per captureId and criterionId pair: PASS or FAIL with the facts that show it, or NOT_APPLICABLE when that screen has nothing the criterion is about (for example C11 on a home page that shows no price), citing that picture. Keep each reason to one or two sentences. Leave out a check whose evidence is missing; it stays owed. Do not write speculative proposals. Claims with missing facts remain unaccepted or uncertain.',
   reviewer:
     instructions.reviewer +
     criterionInstructions +

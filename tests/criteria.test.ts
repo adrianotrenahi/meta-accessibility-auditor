@@ -239,8 +239,9 @@ function fixture() {
     review(p);
     return p;
   }
-  const report = () =>
+  const report = (analysedCaptureIds?: ReadonlySet<string>) =>
     evaluateCriteria(store.records(run.id), run.id, {
+      analysedCaptureIds,
       imageAvailable: (capture) => {
         store.image(run.id, capture.payload.imageFile);
         return true;
@@ -776,6 +777,33 @@ test('Unknown or mixed versions and unscoped captured states block a complete sc
   }
 });
 
+// Owner, 1 Nov: a Booking.com audit owed 15 checks on all 34 screenshots (510) while the analyst
+// read 8 screens; only 2 checks passed. Only screens an analyst read now owe checks.
+test('Only analysed screens owe checks; the others are noted, not counted', () => {
+  const x = fixture();
+  try {
+    const read = x.capture(),
+      s = x.scope(read),
+      f = x.facts(read);
+    for (let i = 0; i < 3; i++) x.scope(x.capture());
+    x.approve(s, 'C02', [read.id, f.id]);
+    const everything = x.report();
+    assert.equal(everything.coverage.requiredChecks, 60, 'without the list, every screenshot owes');
+    const analysed = x.report(new Set([read.id]));
+    assert.equal(analysed.coverage.requiredChecks, 15);
+    assert.equal(row(analysed, 'C02').requiredChecks, 1);
+    assert.equal(row(analysed, 'C02').verdict, 'PASS');
+    assert.equal(row(analysed, 'C02').coverageComplete, true);
+    assert(analysed.limits.some((l) => /^3 original screenshots were not analysed/.test(l)));
+    // The note alone never blocks a result: a fully settled analysed screen is still complete.
+    const none = x.report(new Set());
+    assert.equal(none.coverage.requiredChecks, 0);
+    assert.equal(none.coverage.complete, false);
+  } finally {
+    x.close();
+  }
+});
+
 test('Complete reviewed coverage scores criteria, excluding genuine N/A, independently of finding grouping', () => {
   const x = fixture();
   try {
@@ -881,6 +909,13 @@ test('Complete reviewed coverage scores criteria, excluding genuine N/A, indepen
       [one.id],
     );
     assert.equal(x.report().score, 75, 'A finding never changes the criterion denominator.');
+    // Owner, 1 Nov: a later screenshot nobody analysed is noted, and the result stands.
+    x.scope(x.capture());
+    const analysed = x.report(new Set(captures.map((c) => c.id)));
+    assert.equal(analysed.coverage.complete, true);
+    assert.equal(analysed.score, 75);
+    assert(analysed.limits.some((l) => /^1 original screenshot was not analysed/.test(l)));
+    assert.equal(x.report().coverage.complete, false, 'without the list it is owed');
   } finally {
     x.close();
   }

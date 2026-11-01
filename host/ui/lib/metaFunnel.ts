@@ -60,7 +60,7 @@ export function metaWalkSession(
         createdAt: snapshot.run.createdAt,
         keyboardJourneyNote: [
           snapshot.run.state !== "running" && snapshot.run.state !== "complete" && snapshot.run.stopReason
-            ? `Run stopped: ${snapshot.run.stopReason}`
+            ? `${snapshot.run.state === "stopped" ? "Run stopped" : "Run ended"}: ${snapshot.run.stopReason}`
             : null,
           warning ?? keyboardNote,
           assessment ? metaAssessmentNote(assessment) : assessmentLimit,

@@ -15,6 +15,7 @@ import type { CriteriaReport } from './criteria.js';
 import { safeError } from './config.js';
 import { originalClosure } from './request-evidence.js';
 import { readHashMatches, suppliedImageIds } from './image-receipt.js';
+import { exportHostAnalysis } from './host-analysis.js';
 
 /** Bind only an exact declared scope already present in this verified analyst read. */
 function criterionBinding(
@@ -339,8 +340,23 @@ export function assessmentForRun(store: Store, runId: string) {
     }
     return images.get(capture.id)!;
   };
+  // The screens shown in the report are the ones a completed analyst request read; only
+  // their checks are owed. A screen with any recorded check answer (an offline saved example,
+  // say) was assessed too. Every other screenshot stays a record of the journey.
+  const scopeCapture = new Map(
+    records.filter((r) => r.kind === 'criterion_scope').map((r) => [r.id, r.payload?.captureId]),
+  );
+  const analysedCaptureIds = new Set<string>([
+    ...exportHostAnalysis(records, runId, store.usage(runId).requests)
+      .completed.filter((row) => row.role === 'analyst')
+      .flatMap((row) => row.captureIds),
+    ...records
+      .filter((r) => r.kind === 'criterion_proposal')
+      .map((r) => scopeCapture.get(r.payload?.scopeId))
+      .filter((id): id is string => typeof id === 'string'),
+  ]);
   const criteria = finalCriteriaReport(
-    evaluateCriteria(records, runId, { imageAvailable }),
+    evaluateCriteria(records, runId, { imageAvailable, analysedCaptureIds }),
     run.state,
   );
   const availableImageIds = records

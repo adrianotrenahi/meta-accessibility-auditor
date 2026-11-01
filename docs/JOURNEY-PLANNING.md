@@ -147,9 +147,23 @@ robot still uses only the keyboard, never books, pays or signs in, and takes no
 data. It does not route through rented addresses or solve "prove you're human"
 checks. The controlled shop keeps Playwright's test browsers.
 
-Findings and the strip also show every screenshot that proved a finished journey
-step, marked as not analysed when Meta's analysis of it never came back, so a
-failed analysis no longer hides how far the robot got (owner, 31 October).
+While an audit runs, the strip also shows every screenshot that proved a finished journey
+step, marked as pending until Meta's analysis of it comes back (owner, 31 October). Once the
+audit has ended, the Findings and report tabs show only the screens an analyst read, plus any
+screen a finding points to (owner, 1 November: "we should not even be displaying the pages we
+did not analyze"). The other screenshots are not deleted: they stay in the audit's records as the
+trail of the whole journey, attached to the next analysed screen. An audit in which nothing was
+analysed still shows where the robot got to.
+
+The checks follow the same screens (owner, 1 November). Each of the fifteen checks is owed only
+on a screen an analyst read; the 1 November Booking.com audit owed 510 checks on 34 screenshots
+when the analyst had read 8 screens. The report notes how many screenshots were not analysed,
+and that note never holds back the analysed screens' result. The analyst settles every check
+its evidence supports on each screen it is shown (pass, fail, or does not apply, for example the
+price check on a home page with no price), instead of at most five per look. An audit that
+completed every approved step ends with "Journey finished: all N approved steps were completed";
+it stays partial while checks remain unsettled, and the page says "Run ended" rather than "Run
+stopped" unless the owner pressed Stop.
 
 The robot's typing guard (it types only a short search term into a search box, never
 personal, account or payment details) refusing an input no longer ends the audit: an

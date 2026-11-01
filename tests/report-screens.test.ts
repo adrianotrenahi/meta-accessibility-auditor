@@ -145,3 +145,49 @@ test('A screen that proved a finished step still shows when its analysis never c
     ],
   );
 });
+
+// Owner, 1 Nov: "we should not even be displaying the pages we did not analyze in the findings
+// and report tabs". After the audit, only analysed screens show; the others' pictures stay
+// attached to the next analysed screen so the whole journey is still on record.
+test('After the audit, only analysed screens are shown and every picture stays attached', () => {
+  const captures = [capture(1, home), capture(2, flights), capture(3, flights), capture(4, home)];
+  const snapshot = (state: string) => ({
+    run: { state },
+    captures,
+    analysis: { completed: [{ role: 'analyst', captureIds: ['c2'] }] },
+    findings: [],
+    journey: { completed: [{ captureId: 'c1' }, { captureId: 'c2' }, { captureId: 'c4' }] },
+  });
+  const ended = metaReportScreens(snapshot('partial'), key);
+  assert.deepEqual(
+    ended.map((s) => [s.primary.id, s.analysed, s.captures.map((c) => c.id)]),
+    [['c2', true, ['c1', 'c2', 'c3', 'c4']]],
+  );
+  // While it runs, a screen still waiting for analysis stays visible.
+  assert.deepEqual(
+    metaReportScreens(snapshot('running'), key).map((s) => [s.primary.id, s.analysed]),
+    [
+      ['c1', false],
+      ['c2', true],
+      ['c4', false],
+    ],
+  );
+  // A finding keeps its screen, even outside the analyst's list.
+  assert.deepEqual(
+    metaReportScreens(
+      { ...snapshot('stopped'), findings: [{ captureIds: ['c4'], anchor: null }] },
+      key,
+    ).map((s) => [s.primary.id, s.captures.map((c) => c.id)]),
+    [
+      ['c2', ['c1', 'c2', 'c3']],
+      ['c4', ['c4']],
+    ],
+  );
+  // An audit with nothing analysed still shows where the robot got to.
+  assert.deepEqual(
+    metaReportScreens({ ...snapshot('partial'), analysis: { completed: [] } }, key).map(
+      (s) => s.primary.id,
+    ),
+    ['c1', 'c2', 'c4'],
+  );
+});
