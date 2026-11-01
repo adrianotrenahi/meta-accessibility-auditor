@@ -208,16 +208,46 @@ test('Every proposal still owed a review is supplied; judged and replaced ones a
   }
 });
 
-test('Mandatory finding originals above the documented provider limit still refuse before a reviewer read', () => {
+// Loca, PR 73: a finding whose pictures can never fit one review used to refuse every review,
+// so later findings were never reviewed either. It is now set aside with a single note.
+test('A finding too big for any review is set aside with one note; newer findings still go', () => {
+  const x = fixture(52);
+  try {
+    const huge = x.candidate(x.captures.slice(1, 51).map((capture) => capture.id));
+    const small = x.candidate([x.captures[51]!.id]);
+    const sent = () =>
+      requestEvidence(x.store, x.run.id, 'reviewer', x.captures[0]!)
+        .records.filter((r) => r.kind === 'candidate')
+        .map((r) => r.id);
+    assert.deepEqual(sent(), [small.id]);
+    assert.deepEqual(sent(), [small.id]);
+    const notes = x.store
+      .records(x.run.id)
+      .filter((r) => r.payload?.method === 'finding_review_selection');
+    assert.deepEqual(notes.map((r) => r.payload.candidateId), [huge.id], 'noted once');
+  } finally {
+    x.close();
+  }
+});
+
+test('A batch takes the waiting findings whose pictures fit; the rest wait silently', () => {
   const x = fixture(51);
   try {
-    x.candidate(x.captures.slice(1).map((capture) => capture.id));
-    const before = x.store.records(x.run.id).length;
-    assert.throws(
-      () => requestEvidence(x.store, x.run.id, 'reviewer', x.captures[0]),
-      (error) => error instanceof EvidenceRequestLimit && error.role === 'reviewer',
+    // 24 findings of two pictures each: 48 pictures plus the current screen fit (49).
+    const pairs = Array.from({ length: 24 }, (_, i) =>
+      x.candidate([x.captures[2 * i + 1]!.id, x.captures[2 * i + 2]!.id]),
     );
-    assert.equal(x.store.records(x.run.id).length, before);
+    const tooMany = x.candidate([x.captures[49]!.id, x.captures[50]!.id]); // would make 51
+    const fits = x.candidate([x.captures[1]!.id]); // already selected
+    const sent = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[0]!).records.filter(
+      (r) => r.kind === 'candidate',
+    );
+    assert.deepEqual(sent.map((r) => r.id), [...pairs, fits].map((c) => c.id));
+    assert(!sent.some((r) => r.id === tooMany.id), 'it waits for the next review');
+    assert(
+      !x.store.records(x.run.id).some((r) => r.payload?.method === 'finding_review_selection'),
+      'no note for a finding that merely waits',
+    );
   } finally {
     x.close();
   }

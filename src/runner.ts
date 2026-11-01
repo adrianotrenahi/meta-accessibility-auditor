@@ -58,7 +58,7 @@ import {
 } from './journey-steps.js';
 import { approval, safeError } from './config.js';
 import { mapElement } from './segmentation.js';
-import { EvidenceRequestLimit, requestEvidence } from './request-evidence.js';
+import { EvidenceRequestLimit, owedForReview, requestEvidence } from './request-evidence.js';
 import {
   AnalysisNetworkUnavailable,
   analysisNetworkDeferred,
@@ -1073,7 +1073,7 @@ export class Runner {
         !this.stopForDeniedPage(run, walk, current)
       ) {
         try {
-          await this.review(models, run, current, walk, signal, true);
+          await this.finalReviews(models, run, current, walk, signal);
         } catch (e) {
           if (e instanceof AnalysisNetworkUnavailable)
             this.incompleteCheckpoint(e, run, current, signal, true);
@@ -1706,6 +1706,34 @@ export class Runner {
       }
     return next;
   }
+  /** Owner, 1 Nov: every finding and check answer gets reviewed. The final review repeats,
+   * one batch at a time, while anything waits and each round makes progress, within the
+   * reviewer's money share and request allowance (each round reserves as the final review). */
+  private async finalReviews(
+    models: MetaModels,
+    run: Run,
+    current: RecordEntry,
+    walk: BrowserWalk,
+    signal: AbortSignal,
+  ) {
+    const waiting = () => {
+      const owed = owedForReview(this.store.records(run.id));
+      return owed.candidates.length + owed.proposals.length;
+    };
+    let before = waiting();
+    await this.review(models, run, current, walk, signal, true);
+    for (
+      let after = waiting();
+      after > 0 &&
+      after < before &&
+      !signal.aborted &&
+      this.store.run(run.id).state === 'running';
+      after = waiting()
+    ) {
+      before = after;
+      await this.review(models, run, current, walk, signal, true);
+    }
+  }
   private async review(
     models: MetaModels,
     run: Run,
@@ -1716,9 +1744,12 @@ export class Runner {
     throughSeq?: number,
   ) {
     const candidates = this.store.records(run.id).filter((r) => r.kind === 'candidate');
-    const proposals = this.store.records(run.id).filter((r) => r.kind === 'criterion_proposal');
-    if (!candidates.length && !proposals.length) return;
+    // Nothing waiting for a verdict means no paid review (each item is judged once).
+    const owed = owedForReview(this.store.records(run.id));
+    if (!owed.candidates.length && !owed.proposals.length) return;
     const snapshot = requestEvidence(this.store, run.id, 'reviewer', current, throughSeq);
+    if (!snapshot.records.some((r) => r.kind === 'candidate' || r.kind === 'criterion_proposal'))
+      return;
     const images = walk.images(imageRecordsForRead(snapshot));
     if (analysisNetworkDeferred(this.store.records(run.id), 'reviewer')) return;
     const result = await optionalAnalysisRequest('reviewer', () =>
@@ -1757,6 +1788,27 @@ export class Runner {
         [...d.sources, c.id, snapshot.read.id],
       );
     }
+    // A supplied finding the reviewer did not answer is recorded too; it stays owed.
+    const judgedFindings = new Set(result.decisions.map((d) => d.candidateId));
+    for (const finding of snapshot.records.filter(
+      (r) => r.kind === 'candidate' && owed.candidates.some((c) => c.id === r.id),
+    ))
+      if (!judgedFindings.has(finding.id))
+        this.store.append(
+          run.id,
+          'limit',
+          'reviewer',
+          {
+            method: 'finding_review_missing',
+            state: 'INCONCLUSIVE',
+            candidateId: finding.id,
+            candidateHash: finding.hash,
+            readSnapshotId: snapshot.read.id,
+            reason:
+              'The reviewer returned no decision for this supplied finding. It stays owed and is offered again at the next review.',
+          },
+          [finding.id],
+        );
     // Loca, PR 71: a supplied proposal the reviewer did not answer is recorded, so it is
     // clear it was skipped rather than lost; it stays owed and is offered again.
     const answered = new Set((result.criterionDecisions ?? []).map((d) => d.proposalId));

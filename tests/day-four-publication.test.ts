@@ -258,12 +258,11 @@ test('A corrected finding is a distinct reviewed version before unchanged host-v
       detail: 'A screen-reader user hears no purpose and keyboard checkout is blocked.',
     });
     const retainedOld = JSON.stringify(old);
-    await x.review(() => ({ verdict: 'rewrite' }));
-    assert.deepEqual(x.store.published(x.run.id), []);
-    assert.deepEqual(exportHostSnapshot(x.store, x.run.id).snapshot.findings, []);
-
     // Altering a review title cannot remove the old body's unsupported hearing/keyboard words.
+    // (A finding sent back for rewriting is not sent again: owner, 1 Nov, each item is judged
+    // once; the analyst's rewrite is a new finding.)
     await x.review(() => ({ verdict: 'keep', title: x.content.title }));
+    assert.deepEqual(x.store.published(x.run.id), []);
     const titleOnly = x.store
       .records(x.run.id)
       .filter((record) => record.kind === 'review')

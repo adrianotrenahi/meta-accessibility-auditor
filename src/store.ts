@@ -42,6 +42,28 @@ export const NAVIGATOR_RECENT_DECISIONS = 8;
  * blocks of eight, so each request opens with the same records as the previous one for up to
  * eight decisions and Meta can reuse that opening (owner, 1 Nov: prompt caching). It holds the
  * latest 8 to 15 decisions. */
+/** Whether a reviewer's read still covers the whole walk: no walk evidence came after it,
+ * and it read every step recorded before it. A check-up on the analysis track reads the walk
+ * only up to its hand-over (Codex, PR 73), so a step recorded between that cut-off and the
+ * read was never read. Judged by positions and pinned ids, not saved numbers, so an audit
+ * pulled from another copy (whose records are renumbered) is judged the same way. Shared by
+ * the report (published) and the reviewer's queue (owedForReview). */
+export function reviewReadIsCurrent(read: RecordEntry, records: RecordEntry[]) {
+  const evidence = ['action', 'capture', 'at_check', 'observation', 'navigator_note'];
+  const latestEvidence = records.filter((r) => evidence.includes(r.kind)).at(-1)?.seq ?? 0;
+  if (latestEvidence > read.seq) return false;
+  const pinned = new Set(
+    Array.isArray(read.payload?.records) ? read.payload.records.map((pin: any) => pin.id) : [],
+  );
+  // Every walk step the reader is always given (its keys, notes and checks) must be pinned.
+  return !records.some(
+    (r) =>
+      r.seq < read.seq &&
+      ['action', 'navigator_note', 'at_check'].includes(r.kind) &&
+      !pinned.has(r.id),
+  );
+}
+
 export const navigatorWindowStart = (decisions: number) =>
   Math.floor(Math.max(0, decisions - NAVIGATOR_RECENT_DECISIONS) / NAVIGATOR_RECENT_DECISIONS) *
   NAVIGATOR_RECENT_DECISIONS;
@@ -763,15 +785,7 @@ export class Store {
       )
         continue;
       // New evidence requires a fresh review. Conservative Day 1 rule avoids stale live claims.
-      const latestEvidence =
-        records
-          .filter((r) =>
-            ['action', 'capture', 'at_check', 'observation', 'navigator_note'].includes(r.kind),
-          )
-          .at(-1)?.seq ?? 0;
-      // Compared with the review record's own position, not its saved number, so an audit
-      // pulled from another copy (whose records are renumbered here) is judged the same way.
-      if (latestEvidence > read.seq) continue;
+      if (!reviewReadIsCurrent(read, records)) continue;
       try {
         if (!readHashMatches(read, review.payload.readSnapshotHash)) continue;
         const reviewerImages = suppliedImageIds(read, records);
