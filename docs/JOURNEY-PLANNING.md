@@ -57,10 +57,13 @@ check still runs before the step is recorded. Any other answer that breaks the
 decision rules is not acted on: a `navigator_answer_refused` limit says why, and
 the navigator is asked again within its usual allowance. Three refused answers in
 a row stop navigation (owner, 31 October). A page slow to become readable after an
-input is read again for about 30 seconds in all (a `slow_page_wait` limit says so; nothing is
-pressed again). If it is still unreadable, navigation stops cleanly with a
-`navigation_limit`, like the key-press limit, and what was reached is still checked and
-reviewed (owner, 31 October: Booking.com's results page after Search). A `step_done` answer names that instruction
+input is read again for up to 90 seconds, counted from the first read that ran out of time
+(a `slow_page_wait` limit says so; nothing is pressed again), and each screenshot may take
+20 seconds instead of the browser's usual 8 (owner, 1 November: the first read of Booking.com's
+results page alone used up the earlier 30 seconds). When the page becomes readable, a
+`slow_page_readable` note saves how long it really took. If it is still unreadable, navigation
+stops cleanly with a `navigation_limit`, like the key-press limit, and what was reached is
+still checked and reviewed (owner, 31 October: Booking.com's results page after Search). A `step_done` answer names that instruction
 and the current stable original capture. The engine checks freshness and approved
 order before recording completion. This is a navigator claim, not an independent
 accessibility pass or proof of usable search results. An unfinished instruction
