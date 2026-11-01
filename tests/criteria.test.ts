@@ -804,6 +804,64 @@ test('Only analysed screens owe checks; the others are noted, not counted', () =
   }
 });
 
+// Codex, PR 68: the audits page still required one check per screenshot, so it would have
+// replaced this report with "details are unavailable" on every partly analysed audit.
+test('The audits page accepts checks on analysed screens only, and never one that drops one', async () => {
+  // Loaded by path so the type check, which leaves the page's code (and its Cavioo screen
+  // types) out, does not follow it; the test still runs the page's own reader.
+  const page = '../host/ui/lib/metaAssessment.js';
+  const { metaAssessmentNote, readMetaAssessment } = await import(page);
+  const x = fixture();
+  try {
+    const read = x.capture(),
+      s = x.scope(read),
+      f = x.facts(read),
+      later = x.capture();
+    x.scope(later);
+    x.approve(s, 'C02', [read.id, f.id]);
+    const records = x.store.records(x.run.id);
+    const value = (criteria: ReturnType<typeof evaluateCriteria>) => ({
+      protocol: 'access-walk/assessment-v1',
+      runId: x.run.id,
+      version: CRITERIA_VERSION,
+      sequence: records.at(-1)!.seq,
+      scope: 'Fifteen criteria for the recorded journey.',
+      criteria,
+      visualCoverage: [],
+      visualLimits: [],
+    });
+    const snapshot = (analysed: string[]) =>
+      ({
+        run: { id: x.run.id, state: 'partial' },
+        captures: [read, later].map((c) => ({ id: c.id, sequence: c.seq })),
+        analysis: { runId: x.run.id, completed: [{ role: 'analyst', captureIds: analysed }] },
+      }) as any;
+    const data = readMetaAssessment(value(x.report(new Set([read.id]))), snapshot([read.id]));
+    assert.match(metaAssessmentNote(data, read.id), /C02: Pass/);
+    assert.match(metaAssessmentNote(data, later.id), /has not been analysed/);
+    assert.match(metaAssessmentNote(data), /1 of 15 required checks settled/);
+    // A report that leaves out a screen the analyst read is still refused.
+    assert.throws(() =>
+      readMetaAssessment(value(x.report(new Set([read.id]))), snapshot([read.id, later.id])),
+    );
+    // So is one whose criteria disagree about which screens were checked.
+    const uneven = value(x.report(new Set([read.id, later.id])));
+    uneven.criteria.results[3]!.checks = uneven.criteria.results[3]!.checks.slice(0, 1);
+    uneven.criteria.results[3]!.requiredChecks = 1;
+    uneven.criteria.coverage.requiredChecks -= 1;
+    uneven.criteria.coverage.remainingChecks -= 1;
+    assert.throws(() => readMetaAssessment(uneven, snapshot([read.id])), /original-screen/);
+    // An offline audit has no analyst list; its saved-example screens still read.
+    const offline = { ...snapshot([]), analysis: { runId: x.run.id, completed: [] } };
+    assert.match(
+      metaAssessmentNote(readMetaAssessment(value(x.report(new Set([read.id]))), offline), read.id),
+      /C02: Pass/,
+    );
+  } finally {
+    x.close();
+  }
+});
+
 test('Complete reviewed coverage scores criteria, excluding genuine N/A, independently of finding grouping', () => {
   const x = fixture();
   try {
