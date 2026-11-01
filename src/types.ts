@@ -189,9 +189,13 @@ export const tokenCostMicros = (
 };
 /** Criterion proposals one reviewer request judges, oldest first (Loca and Codex, PR 71):
  * about 200 answer tokens each, so 60 use about 12,000 of the reviewer's 32,768, leaving room
- * for up to 20 finding decisions and its own thinking. Owed proposals beyond it stay for the
+ * for up to 25 finding decisions and its own thinking. Owed proposals beyond it stay for the
  * next checkpoint or the final review. The answer format allows exactly this many. */
 export const CRITERION_REVIEW_BATCH = 60;
+/** Findings one analyst look may propose, and one reviewer reply may judge (owner, 1 Nov:
+ * "Why are we limiting the amount of findings?"; raised from 12 and 20). A longer list keeps
+ * the first ones and records what was left out, instead of losing the whole answer. */
+export const MAX_FINDINGS = 25;
 // Each role names its own model (owner, 31 Oct: Contributor mode for all three).
 // Journey planning is a navigator request and uses the navigator's model.
 export const CAPS = {
@@ -204,10 +208,13 @@ export const CAPS = {
   // Owner, 1 Nov: a Booking.com review ran out of its 8,192 answer space mid-answer and returned
   // nothing usable. The analyst now settles every check on each screen, and the reviewer
   // judges each of those answers, so both need more room. Unused space costs nothing.
+  // Owner, 1 Nov: 25 findings and up to 90 check answers (six pictures, the most a Booking.com
+  // look used) need more than 16,384. The format allows 150; an answer that still runs out of
+  // space leaves that checkpoint unfinished and navigation continues.
   analyst: {
     model: 'muse-spark-1.3-contributor',
-    input: MODEL_CONTEXT_TOKENS - 16384,
-    output: 16384,
+    input: MODEL_CONTEXT_TOKENS - 32768,
+    output: 32768,
     effort: 'low',
   },
   reviewer: {

@@ -8,7 +8,7 @@ import { CRITERIA, CRITERIA_VERSION, evaluateCriteria, makeCriterionScope } from
 import { EvidenceRequestLimit, requestEvidence } from '../src/request-evidence.js';
 import { reviewSchema } from '../src/models.js';
 import { Runner } from '../src/runner.js';
-import { CAPS, CRITERION_REVIEW_BATCH } from '../src/types.js';
+import { CAPS, CRITERION_REVIEW_BATCH, MAX_FINDINGS } from '../src/types.js';
 import type { RecordEntry } from '../src/types.js';
 
 function fixture(count: number) {
@@ -435,8 +435,8 @@ test('The answer format and answer space fit exactly one review batch', () => {
   const answer = (n: number) => ({ decisions: [], criterionDecisions: Array(n).fill(decision) });
   assert(reviewSchema.safeParse(answer(CRITERION_REVIEW_BATCH)).success);
   assert(!reviewSchema.safeParse(answer(CRITERION_REVIEW_BATCH + 1)).success);
-  // About 200 answer tokens per decision, 20 finding decisions and room for its own thinking.
-  assert(CRITERION_REVIEW_BATCH * 200 + 20 * 250 + 12_000 <= CAPS.reviewer.output);
+  // About 200 answer tokens per decision, 250 per finding decision and room for its thinking.
+  assert(CRITERION_REVIEW_BATCH * 200 + MAX_FINDINGS * 250 + 12_000 <= CAPS.reviewer.output);
 });
 
 // Loca, PR 71: a supplied proposal the reviewer did not answer left no trace.

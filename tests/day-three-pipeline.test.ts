@@ -91,10 +91,7 @@ test('The existing model adapter serializes Day 3 schemas and records the instru
     assert.deepEqual(review.criterionDecisions, []);
     for (const request of sent) {
       assert.equal(request.model, 'muse-spark-1.3-contributor');
-      assert.equal(
-        request.max_output_tokens,
-        request.text.format.name === 'analyst_result' ? 16384 : 32768,
-      );
+      assert.equal(request.max_output_tokens, 32768);
       assert(request.instructions.includes(CRITERIA_VERSION));
       assert(request.instructions.includes('screenReaderClaimed'));
       assert.equal(request.tools, undefined);
