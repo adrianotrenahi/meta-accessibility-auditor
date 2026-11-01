@@ -66,6 +66,7 @@ test('Each request carries its audit and role label; the size check does not', a
     const count = sent.find((r) => r.url.endsWith('/input_tokens'))!;
     const generation = sent.find((r) => r.url.endsWith('/responses'))!;
     assert(!('prompt_cache_key' in count.body), 'the size check is sent without the label');
+    assert(!('stream' in count.body), 'the size check is not streamed');
     assert.equal(generation.body.prompt_cache_key, `analyst:${run.id}`);
     // The reused part is charged at the cached rate, as Meta bills it.
     const model_ = CAPS.analyst.model;

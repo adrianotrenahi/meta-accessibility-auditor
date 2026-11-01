@@ -21,7 +21,7 @@ import {
   actionSchema,
 } from '../src/models.js';
 // Owner, 1 Nov: generations carry the prompt-cache label; the size check is sent without it.
-const unlabelled = ({ prompt_cache_key: _key, ...body }: any) => body;
+const unlabelled = ({ prompt_cache_key: _key, stream: _stream, ...body }: any) => body;
 
 const analysisResult = {
   findings: [],
@@ -104,6 +104,7 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
         'Counting and generation use the same constrained request.',
       );
       assert.equal(body.prompt_cache_key, `${role}:${x.run.id}`);
+      assert.equal(body.stream, true, 'streamed, so a long answer is not cut at 60 s');
       assert.equal(body.text.format.type, 'json_schema');
       assert.equal(body.text.format.name, `${role}_result`);
       assert.deepEqual(body.text.format.schema, z.toJSONSchema(schema));
@@ -112,7 +113,7 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
       assert.equal(Object.hasOwn(body, 'parallel_tool_calls'), false);
       assert.equal(body.model, CAPS[role].model);
       assert.equal(body.reasoning.effort, role === 'analyst' ? 'low' : 'medium');
-      assert.equal(body.max_output_tokens, 8192);
+      assert.equal(body.max_output_tokens, role === 'analyst' ? 16384 : 32768);
       assert.equal(body.store, false);
       assert.match(body.instructions, /Return only the schema-constrained JSON result/);
       assert(!body.instructions.includes('Use return_result.'));
@@ -304,14 +305,15 @@ test('Invalid negative or fractional provider counts remain errors rather than r
   }
 });
 
-test('All roles share the documented model window with unchanged output allowances', () => {
+// Owner, 1 Nov: a review was cut at its 8,192 answer space; the analyst and reviewer get more.
+test('All roles share the documented model window; the analyst and reviewer have more answer space', () => {
   assert.equal(MODEL_CONTEXT_TOKENS, 1_048_576);
   assert.deepEqual(
     Object.values(CAPS).map(({ input, output }) => [input + output, output]),
     [
       [1_048_576, 4096],
-      [1_048_576, 8192],
-      [1_048_576, 8192],
+      [1_048_576, 16384],
+      [1_048_576, 32768],
     ],
   );
 });
@@ -430,6 +432,11 @@ test('The complete context still refuses a request beyond its unchanged phase mo
 
 test('The existing final-review money reserve stays available independently of context capacity', () => {
   assert.equal(FINAL_REVIEW_RESERVE_MICROS, 109816);
+  // Loca, PR 70: the reserve still covers a full-context review at the larger answer space.
+  assert(
+    tokenCostMicros(CAPS.reviewer.model, CAPS.reviewer.input, CAPS.reviewer.output) <=
+      FINAL_REVIEW_RESERVE_MICROS,
+  );
   const x = setup({});
   const approved = {
     approvedBy: 'Adriano' as const,
