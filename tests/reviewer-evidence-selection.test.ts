@@ -4,8 +4,11 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store, digest } from '../src/store.js';
-import { CRITERIA_VERSION, evaluateCriteria, makeCriterionScope } from '../src/criteria.js';
+import { CRITERIA, CRITERIA_VERSION, evaluateCriteria, makeCriterionScope } from '../src/criteria.js';
 import { EvidenceRequestLimit, requestEvidence } from '../src/request-evidence.js';
+import { reviewSchema } from '../src/models.js';
+import { Runner } from '../src/runner.js';
+import { CAPS, CRITERION_REVIEW_BATCH } from '../src/types.js';
 import type { RecordEntry } from '../src/types.js';
 
 function fixture(count: number) {
@@ -171,30 +174,35 @@ test('A fitting criterion carries its exact complete source closure into the rev
   }
 });
 
-test('Fitting optional criteria are selected newest first and never exceed five proposals', () => {
+// Owner, 1 Nov: the reviewer saw only the five newest proposals, including ones it had already
+// judged, so in a Booking.com audit a proposal was left unreviewed 43 times.
+test('Every proposal still owed a review is supplied; judged and replaced ones are not', () => {
   const x = fixture(9);
   try {
     x.candidate(x.captures.slice(1, 7).map((capture) => capture.id));
-    const many = Array.from({ length: 6 }, (_, i) => x.proposal(x.captures[i]));
-    const extraCapture = x.proposal(x.captures[8]);
-    const bounded = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[0]);
-    const selected = bounded.records.filter((record) => record.kind === 'criterion_proposal');
-    assert.equal(selected.length, 5);
-    assert(selected.some((record) => record.id === extraCapture.id));
-    assert(bounded.records.some((record) => record.id === x.captures[8].id));
-    assert(
-      many.slice(0, 2).every((proposal) => !selected.some((record) => record.id === proposal.id)),
+    const many = Array.from({ length: 7 }, (_, i) => x.proposal(x.captures[i + 1]));
+    // One was already judged at an earlier checkpoint; another check got a newer proposal.
+    const judged = many[0]!;
+    x.store.append(
+      x.run.id,
+      'criterion_review',
+      'reviewer',
+      { proposalId: judged.id, proposalHash: judged.hash, verdict: 'keep' },
+      [judged.id],
     );
-    assert(many.slice(2).every((proposal) => selected.some((record) => record.id === proposal.id)));
-    for (const omitted of many.slice(0, 2))
-      assert(
-        bounded.records.some(
-          (record) =>
-            record.kind === 'limit' &&
-            record.payload.proposalId === omitted.id &&
-            /five newer/.test(record.payload.reason),
-        ),
-      );
+    const replaced = many[1]!;
+    const replacement = x.proposal(x.captures[2]);
+    const read = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[0]);
+    const selected = new Set(
+      read.records.filter((record) => record.kind === 'criterion_proposal').map((r) => r.id),
+    );
+    assert.deepEqual(
+      [...selected].sort(),
+      [...many.slice(2), replacement].map((p) => p.id).sort(),
+      'six owed proposals, more than the old five',
+    );
+    assert(!selected.has(judged.id) && !selected.has(replaced.id));
+    assert(read.records.some((record) => record.id === x.captures[7]!.id));
   } finally {
     x.close();
   }
@@ -362,6 +370,124 @@ test('Restoring the exact optional image restores proposal selection without rew
       x.store.records(x.run.id).filter((record) => record.kind === 'criterion_review').length,
       0,
     );
+  } finally {
+    x.close();
+  }
+});
+
+// Loca and Codex, PR 71: an unlimited list could outgrow the reviewer's answer space and its
+// answer format, losing the whole paid review. Each review judges one batch, oldest first.
+test('One review judges at most one batch of owed proposals, oldest first', () => {
+  const x = fixture(5);
+  try {
+    const read = x.store.snapshot(x.run.id, 'analyst').read;
+    const owed = x.captures.flatMap((capture, i) =>
+      CRITERIA.map((criterion) =>
+        x.store.append(
+          x.run.id,
+          'criterion_proposal',
+          'analyst',
+          {
+            version: CRITERIA_VERSION,
+            scopeId: x.scopes[i]!.id,
+            checkId: `${capture.id}:${criterion.id}`,
+            criterionId: criterion.id,
+            verdict: 'NOT_APPLICABLE',
+            reason: 'Controlled proposal, pending independent review.',
+            sources: [capture.id],
+            missingEvidence: [],
+            screenReaderClaimed: false,
+            readSnapshotId: read.id,
+          },
+          [x.scopes[i]!.id, capture.id],
+        ),
+      ),
+    );
+    assert.equal(owed.length, 75);
+    const picked = () =>
+      requestEvidence(x.store, x.run.id, 'reviewer', x.captures[0]!)
+        .records.filter((record) => record.kind === 'criterion_proposal')
+        .map((record) => record.id);
+    assert.deepEqual(picked().sort(), owed.slice(0, CRITERION_REVIEW_BATCH).map((p) => p.id).sort());
+    picked();
+    const waiting = x.store
+      .records(x.run.id)
+      .filter((r) => r.kind === 'limit' && /stays owed for a later review/.test(r.payload.reason));
+    assert.deepEqual(
+      waiting.map((r) => r.payload.proposalId).sort(),
+      owed.slice(CRITERION_REVIEW_BATCH).map((p) => p.id).sort(),
+      'each waiting proposal is noted once per checkpoint',
+    );
+  } finally {
+    x.close();
+  }
+});
+
+test('The answer format and answer space fit exactly one review batch', () => {
+  const decision = {
+    proposalId: 'p',
+    proposalHash: 'a'.repeat(64),
+    verdict: 'keep',
+    premise: 'supported',
+    reason: 'Supported by the original.',
+    sources: ['c'],
+  };
+  const answer = (n: number) => ({ decisions: [], criterionDecisions: Array(n).fill(decision) });
+  assert(reviewSchema.safeParse(answer(CRITERION_REVIEW_BATCH)).success);
+  assert(!reviewSchema.safeParse(answer(CRITERION_REVIEW_BATCH + 1)).success);
+  // About 200 answer tokens per decision, 20 finding decisions and room for its own thinking.
+  assert(CRITERION_REVIEW_BATCH * 200 + 20 * 250 + 12_000 <= CAPS.reviewer.output);
+});
+
+// Loca, PR 71: a supplied proposal the reviewer did not answer left no trace.
+test('A supplied proposal the reviewer does not answer is noted and offered again', async () => {
+  const x = fixture(2);
+  try {
+    const [answered, skipped] = [x.proposal(x.captures[0]!), x.proposal(x.captures[1]!)];
+    const models = {
+      async reason() {
+        return {
+          decisions: [],
+          criterionDecisions: [
+            {
+              proposalId: answered.id,
+              proposalHash: answered.hash,
+              verdict: 'unresolved',
+              premise: 'unverified',
+              reason: 'Controlled response; no model judgement is claimed.',
+              sources: [x.captures[0]!.id],
+            },
+          ],
+        };
+      },
+    };
+    const walk = {
+      images: (records: RecordEntry[]) =>
+        records.map((record) => ({
+          captureId: record.id,
+          image:
+            'data:image/png;base64,' +
+            x.store.image(x.run.id, record.payload.imageFile).toString('base64'),
+        })),
+    };
+    await (new Runner(x.store, 'http://127.0.0.1:4317') as any).review(
+      models,
+      x.run,
+      x.captures[1],
+      walk,
+      new AbortController().signal,
+      false,
+    );
+    const records = x.store.records(x.run.id);
+    assert.equal(records.filter((r) => r.kind === 'criterion_review').length, 1);
+    const missing = records.filter((r) => r.payload?.method === 'criterion_review_missing');
+    assert.deepEqual(
+      missing.map((r) => r.payload.proposalId),
+      [skipped.id],
+    );
+    const again = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[1]!);
+    assert(again.records.some((r) => r.id === skipped.id), 'it is offered again');
+    assert(!again.records.some((r) => r.id === answered.id), 'the judged one is not');
   } finally {
     x.close();
   }

@@ -1,4 +1,5 @@
 import { recordIsIntact, type Store } from './store.js';
+import { CRITERION_REVIEW_BATCH } from './types.js';
 import type { RecordEntry, Role } from './types.js';
 import { reviewFeedbackIds } from './review-feedback.js';
 import { INCOMPARABLE_TOTALS_LIMIT, journeyDataSchema } from './journey-evidence.js';
@@ -282,14 +283,33 @@ export function requestEvidence(
         [current.id],
       );
     };
-    let selectedProposals = 0;
-    for (const proposal of records
+    // Owner, 1 Nov: the reviewer saw only the five newest proposals, counting ones it had
+    // already judged, so 43 times in a Booking.com audit a proposal waited unreviewed. Every
+    // proposal still owed a review is now supplied: one already reviewed keeps that review,
+    // and one replaced by a newer proposal for the same check no longer counts in the report.
+    const reviewed = new Set(
+      records
+        .filter((record) => record.kind === 'criterion_review')
+        .map((record) => `${record.payload?.proposalId}:${record.payload?.proposalHash}`),
+    );
+    const newer = new Set<string>();
+    const owed = records
       .filter((record) => record.kind === 'criterion_proposal')
-      .reverse()) {
-      if (selectedProposals === 5) {
+      .reverse()
+      .filter((proposal) => {
+        const check = `${proposal.payload?.scopeId}:${proposal.payload?.checkId}`;
+        const replaced = newer.has(check);
+        newer.add(check);
+        return !replaced && !reviewed.has(`${proposal.id}:${proposal.hash}`);
+      })
+      // Oldest first, so a long backlog is cleared in order and nothing waits forever.
+      .reverse();
+    let selectedProposals = 0;
+    for (const proposal of owed) {
+      if (selectedProposals === CRITERION_REVIEW_BATCH) {
         omit(
           proposal,
-          'This checkpoint already supplies five newer criterion proposals. This exact proposal remains unassessed here.',
+          `This checkpoint already supplies ${CRITERION_REVIEW_BATCH} older criterion proposals still owed a review. This exact proposal stays owed for a later review.`,
         );
         continue;
       }

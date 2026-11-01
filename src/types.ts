@@ -187,6 +187,11 @@ export const tokenCostMicros = (
     ((input - reused) * price.input + reused * price.cachedInput + output * price.output) / 1000,
   );
 };
+/** Criterion proposals one reviewer request judges, oldest first (Loca and Codex, PR 71):
+ * about 200 answer tokens each, so 60 use about 12,000 of the reviewer's 32,768, leaving room
+ * for up to 20 finding decisions and its own thinking. Owed proposals beyond it stay for the
+ * next checkpoint or the final review. The answer format allows exactly this many. */
+export const CRITERION_REVIEW_BATCH = 60;
 // Each role names its own model (owner, 31 Oct: Contributor mode for all three).
 // Journey planning is a navigator request and uses the navigator's model.
 export const CAPS = {

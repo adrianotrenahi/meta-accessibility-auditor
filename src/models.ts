@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CAPS, tokenCostMicros } from './types.js';
+import { CAPS, CRITERION_REVIEW_BATCH, tokenCostMicros } from './types.js';
 import { TARGET_ROLES } from './keyboard-target.js';
 import { postMeta, MetaTransportError } from './meta-transport.js';
 import type { Role, Approval, RecordEntry } from './types.js';
@@ -220,9 +220,10 @@ export const reviewSchema = z.object({
       }),
     )
     .max(20),
+  // One decision for each supplied proposal, at most one review batch.
   criterionDecisions: z
     .array(criterionReviewSchema.omit({ readSnapshotId: true }))
-    .max(30)
+    .max(CRITERION_REVIEW_BATCH)
     .default([]),
 });
 const criterionInstructions =
@@ -295,7 +296,7 @@ const jobInstructions = {
     instructions.reviewer +
     criterionInstructions +
     VISUAL_INSPECTION_GUIDANCE +
-    ' Also independently review the exact criterion_proposal versions in this request and return criterionDecisions. Use their proposalId and proposalHash; keep only the unchanged verdict/reason/scope supported by the original facts. ' +
+    ' Also independently review every exact criterion_proposal version in this request and return one criterionDecision for each. Use their proposalId and proposalHash; keep each reason to one or two sentences; keep only the unchanged verdict/reason/scope supported by the original facts. ' +
     'A rewrite/unresolved decision leaves the criterion unsettled. Positive results and genuine inapplicability need review too. Visual observations are analyst interpretations to inspect, not new factual proof. ' +
     'Do not equate examined visual coverage with a pass. A sound expert judgement need not have a numeric measurement unless its scored criterion requires it. ' +
     'An automatic scan whose comparison is page-state-and-bounded-content-drift read the live page while the copy in its contentDrift.lines differed from the original screenshot; a measured claim about other elements is not contradicted by that copy difference, and a claim that a contentDrift line is visible in the screenshot is unsupported.',
