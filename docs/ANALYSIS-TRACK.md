@@ -45,7 +45,7 @@ Two exceptions add earlier pictures:
   by itself, and a choice that exists on only one of the two pages is not either. A change is
   a real price comparison, a price that appeared, disappeared or differs, a choice present on
   both screens whose state differs, or anything that cannot be read cleanly;
-- a control Tab never reached (`keyboard_reach/1` with `reached: false`, latest two).
+- a control Tab never reached (`keyboard_reach/1` with `reached: false`, latest two). Since 1 November this includes a try that ran out of its 24 key presses without reaching the control (`fullCycle: false`, with `keysPressed`), not only one where focus went round the whole page; the analyst reports it as "not reached after that many presses", never as "can never be reached". Two such tries in a row end navigation, as two full cycles do (owner, 1 November: eDreams' date field spent the whole step retrying).
 
 Tab steps, earlier pages and comparisons that recorded no change are not sent as
 pictures. The walk's actions and notes still reach the analyst as text, and the reviewer

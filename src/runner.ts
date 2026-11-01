@@ -830,7 +830,9 @@ export class Runner {
             if (traversed.actions.length) refusedInputs = 0;
             unreachedTargets = refusedUnsent
               ? unreachedTargets
-              : ['cycle', 'unavailable'].includes(traversed.outcome)
+              : // Owner, 1 Nov: 24 Tabs that never reach the control count too (eDreams' date
+                // field spent the whole step allowance on such tries).
+                ['cycle', 'unavailable', 'limit'].includes(traversed.outcome)
                 ? unreachedTargets + 1
                 : 0;
             if (unreachedTargets >= 2) {

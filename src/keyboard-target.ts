@@ -420,6 +420,23 @@ export async function walkToKeyboardTarget(
         );
       }
     }
+    // What the robot typed never appears in saved keyboard evidence.
+    const typedRedactor = () => {
+      const typed = store
+        .records(runId)
+        .filter(
+          (record) =>
+            record.kind === 'action' &&
+            record.payload.action?.kind === 'type' &&
+            typeof record.payload.action.text === 'string',
+        )
+        .map((record) => record.payload.action.text as string)
+        .filter(Boolean);
+      return (value: string) => {
+        for (const input of typed) value = value.split(input).join('[redacted input]');
+        return value;
+      };
+    };
     for (let i = 0; i <= MAX_TARGET_KEYS; i++) {
       active();
       if (
@@ -478,11 +495,46 @@ export async function walkToKeyboardTarget(
         }
         return { current, actions, outcome: 'reached' as const };
       }
-      if (i === MAX_TARGET_KEYS)
-        return stop(
+      if (i === MAX_TARGET_KEYS) {
+        const result = stop(
           'limit',
-          'The keyboard target was not reached within this bounded traversal. This does not establish a website keyboard barrier.',
+          `The keyboard target was not reached after ${actions.length} key presses. The measured presses are saved as keyboard evidence; on their own they do not prove the control can never be reached.`,
+          {},
+          [start.id, ...actions.map((record) => record.id)],
         );
+        // Owner, 1 Nov: eDreams' date field was never reached by Tab, but each try ended at
+        // this bound rather than a full cycle, so no keyboard evidence reached the analyst.
+        if (!arrow && !rovingTarget && actions.length > 0 && (await connected())) {
+          const redact = typedRedactor();
+          store.append(
+            runId,
+            'observation',
+            'browser',
+            {
+              method: 'keyboard_reach/1',
+              reached: false,
+              fullCycle: false,
+              target: {
+                captureId: start.id,
+                id: decision.targetId ?? null,
+                role: decision.targetRole ?? null,
+                name: redact(targetName),
+                visibleAndEnabledAtStart: true,
+              },
+              keysPressed: actions.length,
+              key: requestedKey,
+              focusOrder: focusFacts.map((fact) => ({
+                role: fact.role,
+                name: redact(fact.name),
+              })),
+              limit:
+                'Measured with real key presses in this browser, up to the robot\'s bound per try. It is not a screen-reader test.',
+            },
+            [...new Set([start.id, current.id, ...actions.map((record) => record.id)])],
+          );
+        }
+        return result;
+      }
       const activeHandle = await readTarget(() =>
         walk.page.evaluateHandle(() => document.activeElement),
       );
@@ -531,20 +583,7 @@ export async function walkToKeyboardTarget(
             );
         if (seen.some(Boolean)) {
           const begin = seen.findIndex(Boolean);
-          const typed = store
-            .records(runId)
-            .filter(
-              (record) =>
-                record.kind === 'action' &&
-                record.payload.action?.kind === 'type' &&
-                typeof record.payload.action.text === 'string',
-            )
-            .map((record) => record.payload.action.text as string)
-            .filter(Boolean);
-          const redact = (value: string) => {
-            for (const input of typed) value = value.split(input).join('[redacted input]');
-            return value;
-          };
+          const redact = typedRedactor();
           const sourceKind =
             current.kind === 'capture' ||
             (current.kind === 'observation' && current.payload.method === 'keyboard_focus/1')
