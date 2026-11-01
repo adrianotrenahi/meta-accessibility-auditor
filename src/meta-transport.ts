@@ -196,6 +196,14 @@ async function readStreamedResponse(response: Response) {
     if (!data || data === '[DONE]') return undefined;
     const parsed = JSON.parse(data);
     if (parsed?.type === 'error') throw new MetaStreamEnded('Meta reported a streaming error.');
+    // A failed answer without its cost is an uncertain charge, like a dropped connection,
+    // so the walk carries on (before streaming, the same server failure was an HTTP 500).
+    const usage = parsed?.response?.usage;
+    if (
+      parsed?.type === 'response.failed' &&
+      !(Number.isInteger(usage?.input_tokens) && Number.isInteger(usage?.output_tokens))
+    )
+      throw new MetaStreamEnded('Meta reported a failed answer without its usage.');
     return terminalEvents.has(parsed?.type) && parsed.response ? parsed.response : undefined;
   };
   try {
