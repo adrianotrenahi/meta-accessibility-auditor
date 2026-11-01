@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CAPS, CRITERION_REVIEW_BATCH, tokenCostMicros } from './types.js';
+import { CAPS, CRITERION_REVIEW_BATCH, MAX_FINDINGS, tokenCostMicros } from './types.js';
 import { TARGET_ROLES } from './keyboard-target.js';
 import { postMeta, MetaTransportError } from './meta-transport.js';
 import type { Role, Approval, RecordEntry } from './types.js';
@@ -17,7 +17,9 @@ import {
   visualTopicSchema,
   visualCoverageListSchema,
   visualObservationListSchema,
+  VISUAL_COVERAGE_ROWS,
   VISUAL_INSPECTION_GUIDANCE,
+  VISUAL_OBSERVATIONS,
 } from './visual-inspection.js';
 import { missingEvidenceSchema, normalizeMissingEvidence } from './evidence-checks.js';
 import { EvidenceRequestLimit } from './request-evidence.js';
@@ -188,7 +190,13 @@ export const candidateSchema = z.object({
   detail: z.string().max(1500),
   criterion: criterionIdSchema.nullable(),
   visualTopic: visualTopicSchema.nullable().default(null),
-  visualObservationIndex: z.number().int().min(0).max(11).nullable().default(null),
+  visualObservationIndex: z
+    .number()
+    .int()
+    .min(0)
+    .max(VISUAL_OBSERVATIONS - 1)
+    .nullable()
+    .default(null),
   basis: z.enum(['measured', 'expert_visual', 'mixed']),
   severity: z.enum(['blocker', 'serious', 'minor']),
   sources: z.array(z.string()).min(1),
@@ -196,12 +204,39 @@ export const candidateSchema = z.object({
   targetId: z.string().nullable(),
   recommendation: z.string().max(700),
 });
+/** The longest list each answer may hold. A longer one keeps its first items, and a
+ * limit record says what was left out, so one extra item never loses the whole answer. */
+const CRITERION_PROPOSALS = 150;
+const ANSWER_LISTS: Partial<Record<Role, Record<string, number>>> = {
+  analyst: {
+    findings: MAX_FINDINGS,
+    coverage: VISUAL_COVERAGE_ROWS,
+    visualObservations: VISUAL_OBSERVATIONS,
+    criterionProposals: CRITERION_PROPOSALS,
+    missingEvidence: 2,
+  },
+  reviewer: { decisions: MAX_FINDINGS, criterionDecisions: CRITERION_REVIEW_BATCH },
+};
+export function keepWhatFits(role: Role, answer: unknown) {
+  const lists = ANSWER_LISTS[role];
+  const trimmed: { list: string; returned: number; kept: number }[] = [];
+  if (!lists || !answer || typeof answer !== 'object' || Array.isArray(answer))
+    return { answer, trimmed };
+  const copy: Record<string, unknown> = { ...(answer as Record<string, unknown>) };
+  for (const [list, kept] of Object.entries(lists)) {
+    const items = copy[list];
+    if (!Array.isArray(items) || items.length <= kept) continue;
+    trimmed.push({ list, returned: items.length, kept });
+    copy[list] = items.slice(0, kept);
+  }
+  return { answer: copy, trimmed };
+}
 export const analysisSchema = z.object({
-  findings: z.array(candidateSchema).max(12),
+  findings: z.array(candidateSchema).max(MAX_FINDINGS),
   coverage: visualCoverageListSchema.default([]),
   visualObservations: visualObservationListSchema.default([]),
   // Fifteen checks for each picture of a look (the 1 Nov Booking.com audit sent up to six).
-  criterionProposals: z.array(criterionAssessmentSchema).max(150).default([]),
+  criterionProposals: z.array(criterionAssessmentSchema).max(CRITERION_PROPOSALS).default([]),
   missingEvidence: z
     .preprocess(normalizeMissingEvidence, z.array(missingEvidenceSchema).max(2))
     .default([]),
@@ -219,7 +254,7 @@ export const reviewSchema = z.object({
         sources: z.array(z.string()).min(1),
       }),
     )
-    .max(20),
+    .max(MAX_FINDINGS),
   // One decision for each supplied proposal, at most one review batch.
   criterionDecisions: z
     .array(criterionReviewSchema.omit({ readSnapshotId: true }))
@@ -657,7 +692,17 @@ export class MetaModels {
       if (!raw) throw Error('The model did not return a valid result.');
       let result: T;
       try {
-        result = schema.parse(JSON.parse(raw));
+        const kept = keepWhatFits(role, JSON.parse(raw));
+        for (const { list, returned, kept: limit } of kept.trimmed)
+          this.store.append(runId, 'limit', role, {
+            method: 'answer_list_trimmed',
+            requestId: id,
+            list,
+            returned,
+            kept: limit,
+            reason: `The answer listed ${returned} ${list}; the first ${limit} were kept and the other ${returned - limit} were left out.`,
+          });
+        result = schema.parse(kept.answer);
       } catch (error) {
         if (error instanceof z.ZodError)
           throw new InvalidModelAnswer(

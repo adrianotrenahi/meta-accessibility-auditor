@@ -192,5 +192,8 @@ box. An option the dropdown does not offer, or no focused dropdown, is a refused
 nothing is pressed and the navigator is asked again.
 
 The analyst checks every screen that goes to the strip and the reviewer reviews each
-check (owner, 31 October). Their request counts are only backstops (60 and 61, with
+check (owner, 31 October). Each analyst look may propose up to 25 findings and each reviewer reply may judge up
+to 25 (owner, 1 November; raised from 12 and 20). An answer whose list runs over its limit keeps
+the first items and records an `answer_list_trimmed` limit naming what was left out, instead of
+losing the whole answer. Their request counts are only backstops (60 and 61, with
 one final review always kept back); the audit's money shares remain the real limit.

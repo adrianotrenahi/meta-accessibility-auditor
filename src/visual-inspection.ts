@@ -53,7 +53,8 @@ export const visualCoverageSchema = z
     if (new Set(row.sources).size !== row.sources.length)
       ctx.addIssue({ code: 'custom', message: 'Original source references must not repeat.' });
   });
-export const visualCoverageListSchema = z.array(visualCoverageSchema).max(18);
+export const VISUAL_COVERAGE_ROWS = 18;
+export const visualCoverageListSchema = z.array(visualCoverageSchema).max(VISUAL_COVERAGE_ROWS);
 export type VisualCoverage = z.infer<typeof visualCoverageSchema>;
 
 export const visualObservationSchema = z
@@ -72,7 +73,10 @@ export const visualObservationSchema = z
     if (new Set(row.sources).size !== row.sources.length)
       ctx.addIssue({ code: 'custom', message: 'Original source references must not repeat.' });
   });
-export const visualObservationListSchema = z.array(visualObservationSchema).max(12);
+export const VISUAL_OBSERVATIONS = 12;
+export const visualObservationListSchema = z
+  .array(visualObservationSchema)
+  .max(VISUAL_OBSERVATIONS);
 export type VisualObservation = z.infer<typeof visualObservationSchema>;
 
 const originalKinds = new Set([
