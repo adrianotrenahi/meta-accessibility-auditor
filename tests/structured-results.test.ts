@@ -112,7 +112,7 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
       assert.equal(Object.hasOwn(body, 'parallel_tool_calls'), false);
       assert.equal(body.model, CAPS[role].model);
       assert.equal(body.reasoning.effort, role === 'analyst' ? 'low' : 'medium');
-      assert.equal(body.max_output_tokens, 8192);
+      assert.equal(body.max_output_tokens, role === 'analyst' ? 16384 : 32768);
       assert.equal(body.store, false);
       assert.match(body.instructions, /Return only the schema-constrained JSON result/);
       assert(!body.instructions.includes('Use return_result.'));
@@ -304,14 +304,15 @@ test('Invalid negative or fractional provider counts remain errors rather than r
   }
 });
 
-test('All roles share the documented model window with unchanged output allowances', () => {
+// Owner, 1 Nov: a review was cut at its 8,192 answer space; the analyst and reviewer get more.
+test('All roles share the documented model window; the analyst and reviewer have more answer space', () => {
   assert.equal(MODEL_CONTEXT_TOKENS, 1_048_576);
   assert.deepEqual(
     Object.values(CAPS).map(({ input, output }) => [input + output, output]),
     [
       [1_048_576, 4096],
-      [1_048_576, 8192],
-      [1_048_576, 8192],
+      [1_048_576, 16384],
+      [1_048_576, 32768],
     ],
   );
 });
