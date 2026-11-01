@@ -23,7 +23,13 @@ export const TARGET_ROLES = [
   'option',
   'spinbutton',
 ] as const;
-export const MAX_TARGET_KEYS = 24;
+/** Owner, 1 Nov: Tab keeps going until it reaches the control or focus comes back to a control
+ * it already visited (a full loop of the page, which proves the control unreachable). Each
+ * press records where focus landed, not a screenshot, unless the page changes; about 0.6 s a
+ * press on eDreams. The bound only stops a page with more than this many stops. */
+export const MAX_TARGET_KEYS = 300;
+/** Arrow keys inside a grid or list, for example a calendar: about two months of days. */
+export const MAX_ARROW_KEYS = 62;
 export const MAX_FOCUS_STALLS = 3;
 class TraversalObservationChanged extends Error {}
 const controls =
@@ -124,6 +130,8 @@ export async function walkToKeyboardTarget(
   decision: Action,
   signal: AbortSignal,
   step: TargetStep,
+  // Tests use smaller bounds; audits use the defaults above.
+  bounds: { tab?: number; arrow?: number } = {},
 ) {
   let current = start;
   const actions: RecordEntry[] = [];
@@ -437,7 +445,8 @@ export async function walkToKeyboardTarget(
         return value;
       };
     };
-    for (let i = 0; i <= MAX_TARGET_KEYS; i++) {
+    const maxKeys = arrow ? (bounds.arrow ?? MAX_ARROW_KEYS) : (bounds.tab ?? MAX_TARGET_KEYS);
+    for (let i = 0; i <= maxKeys; i++) {
       active();
       if (
         !(await connected()) ||
@@ -495,11 +504,11 @@ export async function walkToKeyboardTarget(
         }
         return { current, actions, outcome: 'reached' as const };
       }
-      if (i === MAX_TARGET_KEYS) {
-        // Owner, 1 Nov: eDreams' date field was never reached by Tab, but each try ended at
-        // this bound rather than a full cycle, so no keyboard evidence reached the analyst.
-        // A Tab walk saves what it measured; it is not proof the control is unreachable.
-        const measured = !arrow && !rovingTarget && actions.length > 0 && (await connected());
+      if (i === maxKeys) {
+        // Owner, 1 Nov: eDreams' date field was never reached, and nothing was saved for the
+        // analyst. A try that stops at its bound saves what it measured, whatever the key
+        // ("we should not miss anything"); it is not proof the control is unreachable.
+        const measured = actions.length > 0 && (await connected());
         const result = stop(
           'limit',
           measured

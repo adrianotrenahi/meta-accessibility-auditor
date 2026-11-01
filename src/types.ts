@@ -130,6 +130,8 @@ export const LIMITS = {
   // Owner, 31 Oct: the navigator's allowance is per journey step (below), so the whole-audit
   // time and key limits must leave room for several steps.
   // One key-press decision can send up to 24 keys, so a 32-decision form step can need 768.
+  // A focus_target Tab walk can send up to 300 (owner, 1 Nov: until a full loop); two walks
+  // in a row that stop at their bound end navigation, so at most 600 of these go to one control.
   actions: 1200,
   minutes: 45,
   // Only a backstop: the real navigator limit is per step (DECISIONS_PER_STEP below). At most

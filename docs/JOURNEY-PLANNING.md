@@ -18,7 +18,7 @@ The same saved run moves through `planning`, `prepared` and, only on explicit
 Start, `running`. Planning keeps its charge in that run and the per-audit spending
 ceiling. The navigator's decisions are counted per journey step (owner, 31 October):
 24 per step, or 32 once the step's page shows a form (somewhere to type, pick a date
-or choose an option). The audit-wide limits are 45 minutes and 600 key presses, with
+or choose an option). The audit-wide limits are 45 minutes and 1,200 key presses, with
 the approved spending ceiling as the money limit. A repeated draft
 reads the same result or uncertainty; it never silently generates again.
 If only the input-count request failed and no generation was ever sent or
@@ -177,7 +177,7 @@ personal, account or payment details) refusing an input no longer ends the audit
 `input_refused` limit records why, nothing is typed, and the navigator is asked again;
 three refused inputs in a row stop navigation. The navigator is told that date
 pickers, day and month selectors, dropdowns and option lists are chosen with the arrow
-keys and Enter or Space, not typed into (owner, 31 October). Each navigator decision
+keys and Enter or Space, not typed into (owner, 31 October). When a page offers keyboard or screen-reader users their own way through (a notice to press Enter for accessible navigation, a skip link or an accessible mode), the navigator takes it with Enter, as a keyboard user would, and notes it. Using it to reach search fields such as dates is fine; never to sign in, create an account, pay, enter personal details or confirm a booking (owner, 1 November: eDreams). Each navigator decision
 is one request to Meta: audits estimate its size locally and generously instead of
 asking Meta first; the estimate counts text bytes (very likely an upper bound), asks Meta when it looks too big, and records a `reservation_exceeded` warning if a charge ever exceeds what was set aside.
 
