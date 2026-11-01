@@ -1,4 +1,5 @@
 import { recordIsIntact, type Store } from './store.js';
+import { CRITERION_REVIEW_BATCH } from './types.js';
 import type { RecordEntry, Role } from './types.js';
 import { reviewFeedbackIds } from './review-feedback.js';
 import { INCOMPARABLE_TOTALS_LIMIT, journeyDataSchema } from './journey-evidence.js';
@@ -292,13 +293,26 @@ export function requestEvidence(
         .map((record) => `${record.payload?.proposalId}:${record.payload?.proposalHash}`),
     );
     const newer = new Set<string>();
-    for (const proposal of records
+    const owed = records
       .filter((record) => record.kind === 'criterion_proposal')
-      .reverse()) {
-      const check = `${proposal.payload?.scopeId}:${proposal.payload?.checkId}`;
-      const replaced = newer.has(check);
-      newer.add(check);
-      if (replaced || reviewed.has(`${proposal.id}:${proposal.hash}`)) continue;
+      .reverse()
+      .filter((proposal) => {
+        const check = `${proposal.payload?.scopeId}:${proposal.payload?.checkId}`;
+        const replaced = newer.has(check);
+        newer.add(check);
+        return !replaced && !reviewed.has(`${proposal.id}:${proposal.hash}`);
+      })
+      // Oldest first, so a long backlog is cleared in order and nothing waits forever.
+      .reverse();
+    let selectedProposals = 0;
+    for (const proposal of owed) {
+      if (selectedProposals === CRITERION_REVIEW_BATCH) {
+        omit(
+          proposal,
+          `This checkpoint already supplies ${CRITERION_REVIEW_BATCH} older criterion proposals still owed a review. This exact proposal stays owed for a later review.`,
+        );
+        continue;
+      }
       let closure: RecordEntry[];
       try {
         closure = originalClosure(records, [proposal.id]);
@@ -350,6 +364,7 @@ export function requestEvidence(
           originals.push(record);
         }
       for (const id of addedCaptures) captureIds.add(id);
+      selectedProposals++;
     }
   }
   roots = originals.map((r) => r.id);

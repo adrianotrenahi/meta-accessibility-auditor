@@ -1743,6 +1743,36 @@ export class Runner {
         [...d.sources, c.id, snapshot.read.id],
       );
     }
+    // Loca, PR 71: a supplied proposal the reviewer did not answer is recorded, so it is
+    // clear it was skipped rather than lost; it stays owed and is offered again.
+    const answered = new Set((result.criterionDecisions ?? []).map((d) => d.proposalId));
+    const judged = new Set(
+      this.store
+        .records(run.id)
+        .filter((r) => r.kind === 'criterion_review')
+        .map((r) => `${r.payload?.proposalId}:${r.payload?.proposalHash}`),
+    );
+    for (const proposal of snapshot.records.filter(
+      (r) =>
+        r.kind === 'criterion_proposal' &&
+        !answered.has(r.id) &&
+        !judged.has(`${r.id}:${r.hash}`),
+    ))
+      this.store.append(
+        run.id,
+        'limit',
+        'reviewer',
+        {
+          method: 'criterion_review_missing',
+          state: 'INCONCLUSIVE',
+          proposalId: proposal.id,
+          proposalHash: proposal.hash,
+          readSnapshotId: snapshot.read.id,
+          reason:
+            'The reviewer returned no decision for this supplied proposal. It stays owed and is offered again at the next review.',
+        },
+        [proposal.id],
+      );
     for (const decision of result.criterionDecisions ?? []) {
       const proposal = snapshot.records.find(
         (r) => r.id === decision.proposalId && r.kind === 'criterion_proposal',

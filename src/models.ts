@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CAPS, tokenCostMicros } from './types.js';
+import { CAPS, CRITERION_REVIEW_BATCH, tokenCostMicros } from './types.js';
 import { TARGET_ROLES } from './keyboard-target.js';
 import { postMeta, MetaTransportError } from './meta-transport.js';
 import type { Role, Approval, RecordEntry } from './types.js';
@@ -219,10 +219,10 @@ export const reviewSchema = z.object({
       }),
     )
     .max(20),
-  // One decision for each supplied proposal: up to fifteen checks on each analysed screen.
+  // One decision for each supplied proposal, at most one review batch.
   criterionDecisions: z
     .array(criterionReviewSchema.omit({ readSnapshotId: true }))
-    .max(150)
+    .max(CRITERION_REVIEW_BATCH)
     .default([]),
 });
 const criterionInstructions =
