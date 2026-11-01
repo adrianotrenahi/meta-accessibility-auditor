@@ -432,6 +432,11 @@ test('The complete context still refuses a request beyond its unchanged phase mo
 
 test('The existing final-review money reserve stays available independently of context capacity', () => {
   assert.equal(FINAL_REVIEW_RESERVE_MICROS, 109816);
+  // Loca, PR 70: the reserve still covers a full-context review at the larger answer space.
+  assert(
+    tokenCostMicros(CAPS.reviewer.model, CAPS.reviewer.input, CAPS.reviewer.output) <=
+      FINAL_REVIEW_RESERVE_MICROS,
+  );
   const x = setup({});
   const approved = {
     approvedBy: 'Adriano' as const,
