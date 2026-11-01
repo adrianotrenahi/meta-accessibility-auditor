@@ -874,6 +874,21 @@ export class BrowserWalk {
     const original = this.store.record(this.runId, originalId);
     if (!original || original.kind !== 'capture' || !recordIsIntact(original))
       throw Error('The lightweight focus observation lost its original screen.');
+    try {
+      return await this.focusFacts(source, performed, original);
+    } catch (error) {
+      // A page frozen after the Tab: the quick focus read ran out of time, so the full reading
+      // takes over with its slow-page wait instead of ending the audit on a raw time-out.
+      this.assertActive();
+      if (!(error instanceof errors.TimeoutError) || this.page.isClosed()) throw error;
+      return this.captureSettled();
+    }
+  }
+  private async focusFacts(
+    source: RecordEntry,
+    performed: RecordEntry,
+    original: RecordEntry,
+  ): Promise<RecordEntry> {
     const state = await readPage(this.page, () => this.observedState());
     const fingerprint = meaningfulScreenFingerprint(await this.meaningfulObservation(state));
     const previous =

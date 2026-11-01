@@ -145,3 +145,33 @@ test('A screenshot gets its own 20-second limit, not the usual 8', () =>
     await walk.capture();
     assert(limits.includes(SCREENSHOT_WAIT_MS), `screenshot limits: ${limits.join(', ')}`);
   }));
+
+// Owner, 1 Nov: a Tab on a frozen page used a quicker focus read that had no slow-page wait,
+// so it could still end the audit on a raw time-out. It now hands over to the full reading.
+test('A Tab on a frozen page gets the slow-page wait, not a raw time-out', () =>
+  slowPage('Frozen after Tab', async (walk) => {
+    await walk.page.setContent('<button>One</button><button>Two</button><button>Three</button>');
+    const tab = async () => {
+      const before = await walk.captureSettled();
+      const performed = await walk.act({ kind: 'press', key: 'Tab', note: 'Tab' }, before);
+      return { before, performed };
+    };
+    const real = (walk as any).observedState.bind(walk);
+    // The quick read times out once; the full reading that takes over then succeeds.
+    let step = await tab();
+    let failures = 1;
+    (walk as any).observedState = async () => {
+      if (failures-- > 0) throw timedOut();
+      return real();
+    };
+    const after = await walk.observeKeyboardMovement(step.before, step.performed);
+    assert.equal(after.kind, 'capture', 'the full reading recorded the page');
+    // A page that stays frozen ends with the plain slow-page reason.
+    (walk as any).observedState = real;
+    step = await tab();
+    walk.slowPageWaitMs = 1200;
+    (walk as any).observedState = async () => {
+      throw timedOut();
+    };
+    await assert.rejects(walk.observeKeyboardMovement(step.before, step.performed), PageUnreadable);
+  }));
