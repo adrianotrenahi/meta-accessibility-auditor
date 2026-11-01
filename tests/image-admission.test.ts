@@ -18,7 +18,7 @@ import { recordAnalysisDetails } from '../src/assessment.js';
 import { CAPS } from '../src/types.js';
 
 // Owner, 1 Nov: generations carry the prompt-cache label; the size check is sent without it.
-const unlabelled = ({ prompt_cache_key: _key, ...body }: any) => body;
+const unlabelled = ({ prompt_cache_key: _key, stream: _stream, ...body }: any) => body;
 
 function fixture(count: number) {
   const directory = mkdtempSync(join(tmpdir(), 'meta-required-images-'));

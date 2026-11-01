@@ -368,7 +368,7 @@ test('Count reconnects stay before one reservation; generation reconnects reuse 
     assert.equal(x.store.usage().requests[0].status, 'completed');
     assert.equal(x.store.usage().reserved, 0);
     // Owner, 1 Nov: generations add only the prompt-cache label to the counted request.
-    const unlabelled = ({ prompt_cache_key: _key, ...body }: any) => JSON.stringify(body);
+    const unlabelled = ({ prompt_cache_key: _key, stream: _stream, ...body }: any) => JSON.stringify(body);
     assert(requests.every((r) => unlabelled(r.body) === unlabelled(requests[0].body)));
     const retryRecords = x.store
       .records(x.run.id)

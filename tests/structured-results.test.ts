@@ -21,7 +21,7 @@ import {
   actionSchema,
 } from '../src/models.js';
 // Owner, 1 Nov: generations carry the prompt-cache label; the size check is sent without it.
-const unlabelled = ({ prompt_cache_key: _key, ...body }: any) => body;
+const unlabelled = ({ prompt_cache_key: _key, stream: _stream, ...body }: any) => body;
 
 const analysisResult = {
   findings: [],
@@ -104,6 +104,7 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
         'Counting and generation use the same constrained request.',
       );
       assert.equal(body.prompt_cache_key, `${role}:${x.run.id}`);
+      assert.equal(body.stream, true, 'streamed, so a long answer is not cut at 60 s');
       assert.equal(body.text.format.type, 'json_schema');
       assert.equal(body.text.format.name, `${role}_result`);
       assert.deepEqual(body.text.format.schema, z.toJSONSchema(schema));
