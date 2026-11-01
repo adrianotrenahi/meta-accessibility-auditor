@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NAVIGATOR_RECENT_DECISIONS, Store } from '../src/store.js';
+import { NAVIGATOR_RECENT_DECISIONS, Store, navigatorWindowStart } from '../src/store.js';
 import { navigationActionSchema } from '../src/models.js';
 import { completionOnScreen, checkpointReviewAllowed } from '../src/runner.js';
 
@@ -39,12 +39,15 @@ test('The navigator reads its recent steps; analysis and review still read the w
       new Set(store.snapshot(run.id, role, []).records.map((r) => r.id));
 
     const driver = ids('driver');
-    const recent = actions.slice(-NAVIGATOR_RECENT_DECISIONS);
+    // Owner, 1 Nov: the window moves in blocks of eight for prompt caching (30 decisions: 16-29).
+    const start = navigatorWindowStart(actions.length);
+    assert.equal(start, 16);
+    const recent = actions.slice(start);
     assert(
       recent.every((a) => driver.has(a.id)),
       'recent key presses',
     );
-    assert(actions.slice(0, -NAVIGATOR_RECENT_DECISIONS).every((a) => !driver.has(a.id)));
+    assert(actions.slice(0, start).every((a) => !driver.has(a.id)));
     assert(
       notes.slice(-NAVIGATOR_RECENT_DECISIONS).every((n) => driver.has(n.id)),
       'recent notes',

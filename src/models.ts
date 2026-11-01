@@ -299,6 +299,8 @@ const jobInstructions = {
     'Do not equate examined visual coverage with a pass. A sound expert judgement need not have a numeric measurement unless its scored criterion requires it. ' +
     'An automatic scan whose comparison is page-state-and-bounded-content-drift read the live page while the copy in its contentDrift.lines differed from the original screenshot; a measured claim about other elements is not contradicted by that copy difference, and a claim that a contentDrift line is visible in the screenshot is unsupported.',
 } as const;
+/** Meta does not document the grouping label for its size check; it is sent with generations only. */
+const withoutCacheKey = ({ prompt_cache_key: _key, ...body }: Record<string, unknown>) => body;
 export function outputText(response: any): string {
   if (typeof response.output_text === 'string') return response.output_text;
   return (response.output ?? [])
@@ -494,6 +496,9 @@ export class MetaModels {
               ? ' This run has an ordered, approved journey. Work only on its supplied currentStep and success condition. Other steps provide context, not permission to skip ahead. When the current condition is actually shown by the current stable original, return step_done with that exact stepId and current captureId, without a browser action. This records navigator progress only and never settles accessibility criteria. Do not use finish while an instruction remains. If blocked, record the actual limit without inventing completion.'
               : ''),
       reasoning: { effort: cap.effort },
+      // Groups this audit's requests for one role so Meta can reuse their identical opening
+      // (owner, 1 Nov: prompt caching, for a later move to a dearer model such as Muse Wonder).
+      prompt_cache_key: `${role}:${runId}`,
       max_output_tokens: cap.output,
       parallel_tool_calls: false,
       input: [
@@ -574,7 +579,8 @@ export class MetaModels {
     const count =
       estimated !== undefined && estimated <= cap.input
         ? estimated
-        : (await this.post(runId, '/responses/input_tokens', body, signal, purpose)).input_tokens;
+        : (await this.post(runId, '/responses/input_tokens', withoutCacheKey(body), signal, purpose))
+            .input_tokens;
     if (!Number.isInteger(count) || count < 0)
       throw Error('The provider did not return a valid evidence input count.');
     if (count > cap.input) throw new EvidenceRequestLimit(role, 'input');
@@ -590,7 +596,12 @@ export class MetaModels {
         u.output_tokens < 0
       )
         throw Error('Meta usage was missing; the spending reservation is retained.');
-      const actual = tokenCostMicros(cap.model, u.input_tokens, u.output_tokens);
+      const actual = tokenCostMicros(
+        cap.model,
+        u.input_tokens,
+        u.output_tokens,
+        u.input_tokens_details?.cached_tokens,
+      );
       this.store.settle(id, actual, response.status === 'completed' ? 'received' : 'incomplete');
       if (actual > reserved)
         this.store.append(runId, 'limit', 'runner', {

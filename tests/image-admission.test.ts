@@ -17,6 +17,9 @@ import { MetaModels, analysisSchema } from '../src/models.js';
 import { recordAnalysisDetails } from '../src/assessment.js';
 import { CAPS } from '../src/types.js';
 
+// Owner, 1 Nov: generations carry the prompt-cache label; the size check is sent without it.
+const unlabelled = ({ prompt_cache_key: _key, ...body }: any) => body;
+
 function fixture(count: number) {
   const directory = mkdtempSync(join(tmpdir(), 'meta-required-images-'));
   const store = new Store(directory);
@@ -278,7 +281,7 @@ test('All fifty actual image attachments still pass exact counting and unchanged
       if (count === 100) {
         await reason();
         assert.equal(calls.length, 2);
-        assert.deepEqual(calls[0].body, calls[1].body);
+        assert.deepEqual(calls[0].body, unlabelled(calls[1].body));
       } else {
         await assert.rejects(
           reason,

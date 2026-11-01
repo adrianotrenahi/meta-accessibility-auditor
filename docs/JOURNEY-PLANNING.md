@@ -47,9 +47,15 @@ cleanup and charge preservation remain mandatory.
 
 The navigator receives the original shared records plus one current instruction
 and its observable success condition. Of the walk itself it reads the plan, every
-finished step and its eight most recent decisions, each with its key presses,
+finished step and its recent decisions, each with its key presses,
 notes and limits; earlier presses made every decision slower (owner, 31 October: 6 s growing
 to 12 s per decision on Booking.com). Analysis and review still read the whole walk.
+The recent decisions move in blocks of eight, so the navigator reads the latest 8 to 15 and
+each request opens exactly like the previous one for up to eight decisions (owner, 1 November).
+Meta reuses an identical opening and bills it at its cached rate ($0.002 instead of $0.10 per
+million on Contributor mode); each request carries a `prompt_cache_key` naming its role and
+audit so related requests reach the same cache, and the recorded charge uses the cached rate
+Meta reports.
 A key press that arrives with a stray step or screenshot label is still that key
 press; those labels count only on `step_done`. A `step_done` that names no
 screenshot means the current one, the only one the navigator sees; the freshness

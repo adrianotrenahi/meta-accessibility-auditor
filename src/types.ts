@@ -167,14 +167,26 @@ export const FINAL_REVIEW_RESERVE_MICROS = 109_816;
 // Pay-as-you-go prices in billionths of a dollar per token, verified 31 October 2026 at
 // https://dev.meta.ai/docs/pricing-rate-limits. Contributor mode is the same model at a
 // lower price, in exchange for Meta being allowed to train on what is sent and returned.
+// Input Meta reuses from a recent identical opening ("cached") is billed at its own, lower rate.
 export const MODEL_PRICES = {
-  'muse-spark-1.3': { input: 1250, output: 4250 },
-  'muse-spark-1.3-contributor': { input: 100, output: 200 },
+  'muse-spark-1.3': { input: 1250, cachedInput: 150, output: 4250 },
+  'muse-spark-1.3-contributor': { input: 100, cachedInput: 2, output: 200 },
 } as const;
 export type ReasoningModel = keyof typeof MODEL_PRICES;
-/** Integer millionths of a dollar, rounded up, for one request's tokens. */
-export const tokenCostMicros = (model: ReasoningModel, input: number, output: number) =>
-  Math.ceil((input * MODEL_PRICES[model].input + output * MODEL_PRICES[model].output) / 1000);
+/** Integer millionths of a dollar, rounded up, for one request's tokens; `cached` is the part
+ * of `input` Meta reused, as its usage reports it. */
+export const tokenCostMicros = (
+  model: ReasoningModel,
+  input: number,
+  output: number,
+  cached = 0,
+) => {
+  const price = MODEL_PRICES[model];
+  const reused = Number.isInteger(cached) && cached > 0 ? Math.min(cached, input) : 0;
+  return Math.ceil(
+    ((input - reused) * price.input + reused * price.cachedInput + output * price.output) / 1000,
+  );
+};
 // Each role names its own model (owner, 31 Oct: Contributor mode for all three).
 // Journey planning is a navigator request and uses the navigator's model.
 export const CAPS = {

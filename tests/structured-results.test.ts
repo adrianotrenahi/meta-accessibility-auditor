@@ -20,6 +20,8 @@ import {
   reviewSchema,
   actionSchema,
 } from '../src/models.js';
+// Owner, 1 Nov: generations carry the prompt-cache label; the size check is sent without it.
+const unlabelled = ({ prompt_cache_key: _key, ...body }: any) => body;
 
 const analysisResult = {
   findings: [],
@@ -98,9 +100,10 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
       const body = x.requests[1].body;
       assert.deepEqual(
         x.requests[0].body,
-        body,
+        unlabelled(body),
         'Counting and generation use the same constrained request.',
       );
+      assert.equal(body.prompt_cache_key, `${role}:${x.run.id}`);
       assert.equal(body.text.format.type, 'json_schema');
       assert.equal(body.text.format.name, `${role}_result`);
       assert.deepEqual(body.text.format.schema, z.toJSONSchema(schema));
@@ -358,7 +361,7 @@ test('Simulated counts above the old role ceilings retain full selected original
         result,
       );
       assert.equal(x.requests.length, 2);
-      assert.deepEqual(x.requests[0].body, x.requests[1].body);
+      assert.deepEqual(x.requests[0].body, unlabelled(x.requests[1].body));
       // Owner, 31 Oct: the navigator skips the page's visible text, which its page structure
       // already holds; every other field and record reaches it unchanged.
       const { text: _text, ...withoutText } = capture.payload;
