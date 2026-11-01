@@ -100,7 +100,7 @@ test('The existing model adapter serializes Day 3 schemas and records the instru
       assert(!request.instructions.includes('Use return_result.'));
       assert(request.instructions.includes('without progress messages'));
     }
-    assert.equal(sent[0].reasoning.effort, 'low');
+    assert.equal(sent[0].reasoning.effort, 'medium');
     assert.equal(sent[1].reasoning.effort, 'medium');
     const responses = store.records(x.run.id).filter((r) => r.kind === 'model_response');
     assert.deepEqual(

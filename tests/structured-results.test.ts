@@ -112,7 +112,9 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
       assert.equal(Object.hasOwn(body, 'tool_choice'), false);
       assert.equal(Object.hasOwn(body, 'parallel_tool_calls'), false);
       assert.equal(body.model, CAPS[role].model);
-      assert.equal(body.reasoning.effort, role === 'analyst' ? 'low' : 'medium');
+      assert.equal(body.reasoning.effort, 'medium');
+      // Owner, 1 Nov: the analyst is told what to report, not only what not to claim.
+      if (role === 'analyst') assert.match(body.instructions, /Report the barriers you can see/);
       assert.equal(body.max_output_tokens, 32768);
       assert.equal(body.store, false);
       assert.match(body.instructions, /Return only the schema-constrained JSON result/);
