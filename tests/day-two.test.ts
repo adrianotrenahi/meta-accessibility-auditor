@@ -199,7 +199,15 @@ test('Review independently retrieves an older claim image, the complete walk and
       assert(review.records.some((item) => item.id === r.id && item.hash === r.hash));
     assert.equal(review.records.filter((r) => r.kind === 'capture').length, 2);
     x.store.db.prepare('UPDATE records SET body=? WHERE id=?').run('{"rewritten":true}', first.id);
-    assert.throws(() => requestEvidence(x.store, x.run.id, 'reviewer', current), /changed/);
+    // Loca, PR 73: a finding whose evidence cannot be supplied no longer blocks every review;
+    // it is left out with one note and stays unreviewed.
+    const setAside = requestEvidence(x.store, x.run.id, 'reviewer', current);
+    assert(!setAside.records.some((r) => r.kind === 'candidate'));
+    assert(
+      x.store
+        .records(x.run.id)
+        .some((r) => r.payload?.method === 'finding_review_selection' && /missing or changed/.test(r.payload.reason)),
+    );
   } finally {
     x.close();
   }

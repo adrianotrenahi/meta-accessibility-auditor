@@ -1,4 +1,4 @@
-import { recordIsIntact, type Store } from './store.js';
+import { recordIsIntact, reviewReadIsCurrent, type Store } from './store.js';
 import { CRITERION_REVIEW_BATCH, MAX_FINDINGS } from './types.js';
 import type { RecordEntry, Role } from './types.js';
 import { reviewFeedbackIds } from './review-feedback.js';
@@ -134,12 +134,6 @@ function recordedChange(record: RecordEntry, records: RecordEntry[]) {
  * shows a kept finding only while no walk evidence is newer than its review (store.published).
  * A rejected finding, or one sent back for rewriting (the rewrite is a new finding), is done. */
 export function owedForReview(records: RecordEntry[]) {
-  const latestEvidence =
-    records
-      .filter((r) =>
-        ['action', 'capture', 'at_check', 'observation', 'navigator_note'].includes(r.kind),
-      )
-      .at(-1)?.seq ?? 0;
   const byId = new Map(records.map((record) => [record.id, record]));
   const latestReview = new Map<string, RecordEntry>();
   for (const record of records)
@@ -149,7 +143,7 @@ export function owedForReview(records: RecordEntry[]) {
     if (!review || review.payload?.candidateHash !== candidate.hash) return true;
     if (!['keep', 'unresolved'].includes(review.payload?.verdict)) return false;
     const read = byId.get(review.payload?.readSnapshotId);
-    return !read || latestEvidence > read.seq;
+    return !read || !reviewReadIsCurrent(read, records);
   };
   const judgedAnswers = new Set(
     records
@@ -173,6 +167,41 @@ export function owedForReview(records: RecordEntry[]) {
   return { candidates, proposals };
 }
 
+/** Saved once per finding: why a waiting finding could not be put in a review. */
+function noteWaitingFinding(
+  store: Store,
+  runId: string,
+  finding: RecordEntry,
+  current: RecordEntry,
+  reason: string,
+) {
+  const records = store.records(runId);
+  if (
+    records.some(
+      (record) =>
+        record.kind === 'limit' &&
+        record.payload?.method === 'finding_review_selection' &&
+        record.payload?.candidateId === finding.id &&
+        record.payload?.candidateHash === finding.hash,
+    )
+  )
+    return;
+  store.append(
+    runId,
+    'limit',
+    'reviewer',
+    {
+      method: 'finding_review_selection',
+      state: 'INCONCLUSIVE',
+      candidateId: finding.id,
+      candidateHash: finding.hash,
+      checkpointCaptureId: current.id,
+      reason,
+    },
+    [current.id],
+  );
+}
+
 export function requestEvidence(
   store: Store,
   runId: string,
@@ -190,10 +219,38 @@ export function requestEvidence(
   const candidates = records.filter((r) => r.kind === 'candidate');
   const owedReview = role === 'reviewer' ? owedForReview(records) : undefined;
   let roots: string[] = [current.id];
-  // One review judges at most MAX_FINDINGS waiting findings, oldest first; the rest wait for
-  // the next review. A finding already judged is not sent again.
-  if (owedReview) roots.push(...owedReview.candidates.slice(0, MAX_FINDINGS).map((r) => r.id));
-  else if (role === 'analyst') {
+  // One review judges at most MAX_FINDINGS waiting findings, oldest first, taking each only
+  // while the request's pictures stay within the provider's limit (Loca, PR 73: a batch that
+  // could never fit blocked every later review). One that does not fit waits for the next
+  // review with a note; a finding already judged is not sent again.
+  if (owedReview) {
+    const pictures = (ids: string[]) =>
+      originalClosure(records, ids)
+        .filter((record) => record.kind === 'capture')
+        .map((record) => record.id);
+    const selected = new Set(pictures([current.id]));
+    let taken = 0;
+    for (const finding of owedReview.candidates) {
+      if (taken === MAX_FINDINGS) break;
+      let added: string[];
+      try {
+        added = pictures([finding.id]);
+      } catch {
+        noteWaitingFinding(store, runId, finding, current, 'Its original evidence is missing or changed, so it cannot be reviewed here.');
+        continue;
+      }
+      if (new Set([...selected, ...added]).size > PROVIDER_IMAGE_LIMIT) {
+        // One that does not fit this round simply waits for the next; one that cannot fit even
+        // beside this screen alone gets a single note (it stays owed, without blocking others).
+        if (new Set([...pictures([current.id]), ...added]).size > PROVIDER_IMAGE_LIMIT)
+          noteWaitingFinding(store, runId, finding, current, `Its pictures and this screen's exceed the ${PROVIDER_IMAGE_LIMIT}-picture limit of one review, so it cannot be reviewed here. It stays unreviewed.`);
+        continue;
+      }
+      for (const id of added) selected.add(id);
+      roots.push(finding.id);
+      taken++;
+    }
+  } else if (role === 'analyst') {
     // Owner, 30 Oct: the analyst reads the screens a customer sees on the strip: the screen
     // being checked and, after an input on that same page, the screen just before it (the
     // cookie pop-up before it was dismissed). Earlier pictures come only with a recorded

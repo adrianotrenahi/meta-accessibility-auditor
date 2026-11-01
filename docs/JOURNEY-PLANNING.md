@@ -205,5 +205,12 @@ rewrite is a new finding), is not sent again. Each review takes up to 25 waiting
 waiting check answers, oldest first, and makes no paid request when nothing waits. The final
 review repeats, one batch at a time, until nothing waits or a round judges nothing, within the
 reviewer's money share and request allowance. A supplied finding left without a decision gets a
-`finding_review_missing` record and is offered again. Their request counts are only backstops (60 and 61, with
+`finding_review_missing` record and is offered again. A review takes waiting findings one by one,
+oldest first, only while its pictures stay within the 50-picture limit; one that does not fit waits
+for the next review, and one too big for any review gets a single `finding_review_selection` note
+instead of blocking every review. Whether a verdict is still current is one shared rule for the
+report and the reviewer's queue: no walk evidence came after the reviewer's read, and the read
+contains every key press, note and check recorded before it (a check-up on the analysis track reads
+the walk only up to its hand-over). It compares positions and record ids, so an audit copied from
+shared storage, whose records are renumbered, is judged the same way. Their request counts are only backstops (60 and 61, with
 one final review always kept back); the audit's money shares remain the real limit.

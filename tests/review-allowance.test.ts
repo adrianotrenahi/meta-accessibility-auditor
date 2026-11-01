@@ -8,7 +8,9 @@ import { Runner } from '../src/runner.js';
 import type { RecordEntry } from '../src/types.js';
 import { VISUAL_TOPICS } from '../src/visual-inspection.js';
 
-test('A review beyond the documented fifty original screens stays incomplete while later checkpoints continue', async () => {
+// Loca, PR 73: findings whose pictures together exceed fifty no longer refuse every review;
+// each review takes the oldest that fit, and later checkpoints continue.
+test('Findings on more than fifty original screens are reviewed in batches that fit, while later checkpoints continue', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'access-walk-review-allowance-'));
   const store = new Store(dir);
   try {
@@ -54,11 +56,10 @@ test('A review beyond the documented fifty original screens stays incomplete whi
         images: { captureId: string }[],
       ) => {
         called.push(role);
-        assert.equal(
-          role,
-          'analyst',
-          'An over-limit reviewer request must not reach the provider.',
-        );
+        if (role === 'reviewer') {
+          assert(images.length <= 50, 'a review request stays within the fifty-picture limit');
+          return { decisions: [], criterionDecisions: [] };
+        }
         return {
           findings: [],
           coverage: images.flatMap(({ captureId }) =>
@@ -89,12 +90,12 @@ test('A review beyond the documented fifty original screens stays incomplete whi
     for (const current of [captures[49], captures[50]])
       await (runner as any).analyseCheckpoint(models, run, current, walk, signal);
 
-    const limits = store.records(run.id).filter((record) => record.kind === 'limit');
-    assert.equal(limits.length, 2);
-    assert(limits.every((record) => record.author === 'reviewer'));
-    assert(limits.every((record) => /review remains incomplete/i.test(record.payload.reason)));
-    assert(limits.every((record) => /navigation continues/i.test(record.payload.reason)));
-    assert.deepEqual(called, ['analyst', 'analyst']);
+    assert.deepEqual(called, ['analyst', 'reviewer', 'analyst', 'reviewer']);
+    // The stub judged nothing, so each supplied finding is noted as unanswered and stays owed.
+    const missing = store
+      .records(run.id)
+      .filter((record) => record.payload?.method === 'finding_review_missing');
+    assert(missing.length > 0 && missing.every((record) => record.author === 'reviewer'));
     assert.equal(store.run(run.id).state, 'running');
     assert.deepEqual(
       store
@@ -104,7 +105,6 @@ test('A review beyond the documented fifty original screens stays incomplete whi
       originalIds,
     );
     assert.deepEqual(store.published(run.id), []);
-    assert.equal(store.usage(run.id).requests.length, 0);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

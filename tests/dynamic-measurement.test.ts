@@ -415,7 +415,15 @@ test('Unstable automatic observations are excluded explicitly, but mandatory cit
     x.store.append(x.run.id, 'candidate', 'analyst', { title: 'Unsupported moving-page claim' }, [
       raw.id,
     ]);
-    assert.throws(() => requestEvidence(x.store, x.run.id, 'reviewer', source), /unstable/);
+    // Loca, PR 73: a finding whose evidence cannot be supplied no longer blocks every review;
+    // it is left out with one note and stays unreviewed.
+    const setAside = requestEvidence(x.store, x.run.id, 'reviewer', source);
+    assert(!setAside.records.some((r) => r.kind === 'candidate'));
+    assert(
+      x.store
+        .records(x.run.id)
+        .some((r) => r.payload?.method === 'finding_review_selection' && /missing or changed/.test(r.payload.reason)),
+    );
     x.store.db
       .prepare('UPDATE records SET body=? WHERE id=?')
       .run(JSON.stringify({ ...raw.payload, changed: true }), raw.id);
