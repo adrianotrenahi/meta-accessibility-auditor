@@ -177,6 +177,51 @@ export async function waitForMetaRetry(milliseconds: number, signal: AbortSignal
     if (signal.aborted) abort();
   });
 }
+/** A streamed answer that ended before Meta's final event: its charge stays uncertain. */
+export class MetaStreamEnded extends Error {}
+const terminalEvents = new Set(['response.completed', 'response.incomplete', 'response.failed']);
+/** Meta closes a silent (non-streamed) generation after about 60 s (owner, 1 Nov: the final
+ * Booking.com review was cut at 60.4 s); a streamed one is exempt because output keeps
+ * arriving. The final event carries the whole response, with its status, output and usage. */
+async function readStreamedResponse(response: Response) {
+  if (!response.body) throw new MetaStreamEnded('Meta sent no streamed answer.');
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffered = '';
+  const event = (block: string) => {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).replace(/^ /, ''))
+      .join('\n');
+    if (!data || data === '[DONE]') return undefined;
+    const parsed = JSON.parse(data);
+    if (parsed?.type === 'error') throw new MetaStreamEnded('Meta reported a streaming error.');
+    // A failed answer without its cost is an uncertain charge, like a dropped connection,
+    // so the walk carries on (before streaming, the same server failure was an HTTP 500).
+    const usage = parsed?.response?.usage;
+    if (
+      parsed?.type === 'response.failed' &&
+      !(Number.isInteger(usage?.input_tokens) && Number.isInteger(usage?.output_tokens))
+    )
+      throw new MetaStreamEnded('Meta reported a failed answer without its usage.');
+    return terminalEvents.has(parsed?.type) && parsed.response ? parsed.response : undefined;
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (value) buffered += value;
+      const blocks = buffered.split(/\r?\n\r?\n/);
+      buffered = done ? '' : blocks.pop()!;
+      for (const block of blocks) {
+        const final = event(block);
+        if (final) return final;
+      }
+      if (done) throw new MetaStreamEnded('Meta ended the streamed answer before its result.');
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
 export async function postMeta(options: MetaPostOptions): Promise<any> {
   const { phase, signal } = options;
   const path = phase === 'input_count' ? '/responses/input_tokens' : '/responses';
@@ -196,7 +241,13 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
       response = await options.fetcher('https://api.meta.ai/v1' + path, {
         method: 'POST',
         redirect: 'manual',
-        headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${options.apiKey}`,
+          'Content-Type': 'application/json',
+          ...((options.body as { stream?: unknown })?.stream === true
+            ? { Accept: 'text/event-stream' }
+            : {}),
+        },
         body,
         signal,
       });
@@ -216,11 +267,14 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
         await response.body?.cancel().catch(() => {});
       } else {
         stage = 'reading';
+        if (response.headers.get('content-type')?.includes('text/event-stream'))
+          return await readStreamedResponse(response);
         return await response.json();
       }
     } catch (error) {
       if (signal.aborted) throw signal.reason;
-      analysisMayContinue = transientNetworkException(error);
+      // A stream cut off before its final event is a dropped connection, like a closed socket.
+      analysisMayContinue = error instanceof MetaStreamEnded || transientNetworkException(error);
       const cancelled = isCancelled(error, signal);
       const codes = connectionCodes(error);
       const provedBeforeConnection =
@@ -238,7 +292,11 @@ export async function postMeta(options: MetaPostOptions): Promise<any> {
         code: mixedCauses
           ? 'MIXED_CAUSES'
           : (codes.find((code) => code !== 'OTHER') ??
-            (error instanceof SyntaxError ? 'INVALID_JSON' : 'CONNECTION_UNKNOWN')),
+            (error instanceof SyntaxError
+              ? 'INVALID_JSON'
+              : error instanceof MetaStreamEnded
+                ? 'STREAM_ENDED'
+                : 'CONNECTION_UNKNOWN')),
         ...(mixedCauses ? { causeCodes: [...new Set(codes)].slice(0, 16) } : {}),
         ...metaOperationEvidence(error, knownCodes),
       };
