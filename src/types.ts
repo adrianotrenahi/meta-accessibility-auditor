@@ -215,7 +215,11 @@ export const CAPS = {
     model: 'muse-spark-1.3-contributor',
     input: MODEL_CONTEXT_TOKENS - 32768,
     output: 32768,
-    effort: 'low',
+    // Owner, 1 Nov: on the saved Booking.com flights-page look, low thinking wrote 0 findings
+    // (twice) and medium wrote the pre-filled ATL/date mismatch as a finding, for $0.0113
+    // instead of $0.0103 and 92 s instead of 50 s. Checks run beside the walk, so the robot
+    // does not wait for them.
+    effort: 'medium',
   },
   reviewer: {
     model: 'muse-spark-1.3-contributor',
