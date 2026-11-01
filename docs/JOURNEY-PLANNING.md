@@ -195,5 +195,15 @@ The analyst checks every screen that goes to the strip and the reviewer reviews 
 check (owner, 31 October). Each analyst look may propose up to 25 findings and each reviewer reply may judge up
 to 25 (owner, 1 November; raised from 12 and 20). An answer whose list runs over its limit keeps
 the first items and records an `answer_list_trimmed` limit naming what was left out, instead of
-losing the whole answer. Their request counts are only backstops (60 and 61, with
+losing the whole answer.
+
+Every finding and every check answer is reviewed (owner, 1 November). A check answer is judged
+once. A finding waits for the reviewer until it is judged, and again only when a "keep" or
+"unresolved" verdict has gone out of date, because the report shows a kept finding only while no
+walk evidence is newer than its review; a rejected finding, or one sent back for rewriting (the
+rewrite is a new finding), is not sent again. Each review takes up to 25 waiting findings and 60
+waiting check answers, oldest first, and makes no paid request when nothing waits. The final
+review repeats, one batch at a time, until nothing waits or a round judges nothing, within the
+reviewer's money share and request allowance. A supplied finding left without a decision gets a
+`finding_review_missing` record and is offered again. Their request counts are only backstops (60 and 61, with
 one final review always kept back); the audit's money shares remain the real limit.

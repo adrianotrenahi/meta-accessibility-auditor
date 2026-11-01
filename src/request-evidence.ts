@@ -1,5 +1,5 @@
 import { recordIsIntact, type Store } from './store.js';
-import { CRITERION_REVIEW_BATCH } from './types.js';
+import { CRITERION_REVIEW_BATCH, MAX_FINDINGS } from './types.js';
 import type { RecordEntry, Role } from './types.js';
 import { reviewFeedbackIds } from './review-feedback.js';
 import { INCOMPARABLE_TOTALS_LIMIT, journeyDataSchema } from './journey-evidence.js';
@@ -127,6 +127,52 @@ function recordedChange(record: RecordEntry, records: RecordEntry[]) {
   });
 }
 
+/** What still waits for the reviewer, oldest first (owner, 1 Nov: "the reviewer should be able
+ * to check all answers the analyst provides"). A check answer is judged once; one replaced by a
+ * newer answer for the same check no longer counts in the report. A finding waits until it is
+ * reviewed, and again when a "keep" or "unresolved" verdict has gone out of date: the report
+ * shows a kept finding only while no walk evidence is newer than its review (store.published).
+ * A rejected finding, or one sent back for rewriting (the rewrite is a new finding), is done. */
+export function owedForReview(records: RecordEntry[]) {
+  const latestEvidence =
+    records
+      .filter((r) =>
+        ['action', 'capture', 'at_check', 'observation', 'navigator_note'].includes(r.kind),
+      )
+      .at(-1)?.seq ?? 0;
+  const byId = new Map(records.map((record) => [record.id, record]));
+  const latestReview = new Map<string, RecordEntry>();
+  for (const record of records)
+    if (record.kind === 'review') latestReview.set(String(record.payload?.candidateId), record);
+  const findingWaits = (candidate: RecordEntry) => {
+    const review = latestReview.get(candidate.id);
+    if (!review || review.payload?.candidateHash !== candidate.hash) return true;
+    if (!['keep', 'unresolved'].includes(review.payload?.verdict)) return false;
+    const read = byId.get(review.payload?.readSnapshotId);
+    return !read || latestEvidence > read.seq;
+  };
+  const judgedAnswers = new Set(
+    records
+      .filter((record) => record.kind === 'criterion_review')
+      .map((record) => `${record.payload?.proposalId}:${record.payload?.proposalHash}`),
+  );
+  const newer = new Set<string>();
+  const proposals = records
+    .filter((record) => record.kind === 'criterion_proposal')
+    .reverse()
+    .filter((proposal) => {
+      const check = `${proposal.payload?.scopeId}:${proposal.payload?.checkId}`;
+      const replaced = newer.has(check);
+      newer.add(check);
+      return !replaced && !judgedAnswers.has(`${proposal.id}:${proposal.hash}`);
+    })
+    .reverse();
+  const candidates = records.filter(
+    (record) => record.kind === 'candidate' && findingWaits(record),
+  );
+  return { candidates, proposals };
+}
+
 export function requestEvidence(
   store: Store,
   runId: string,
@@ -142,8 +188,11 @@ export function requestEvidence(
   const walked =
     throughSeq === undefined ? records : records.filter((record) => record.seq <= throughSeq);
   const candidates = records.filter((r) => r.kind === 'candidate');
+  const owedReview = role === 'reviewer' ? owedForReview(records) : undefined;
   let roots: string[] = [current.id];
-  if (role === 'reviewer') roots.push(...candidates.map((r) => r.id));
+  // One review judges at most MAX_FINDINGS waiting findings, oldest first; the rest wait for
+  // the next review. A finding already judged is not sent again.
+  if (owedReview) roots.push(...owedReview.candidates.slice(0, MAX_FINDINGS).map((r) => r.id));
   else if (role === 'analyst') {
     // Owner, 30 Oct: the analyst reads the screens a customer sees on the strip: the screen
     // being checked and, after an input on that same page, the screen just before it (the
@@ -285,25 +334,8 @@ export function requestEvidence(
     };
     // Owner, 1 Nov: the reviewer saw only the five newest proposals, counting ones it had
     // already judged, so 43 times in a Booking.com audit a proposal waited unreviewed. Every
-    // proposal still owed a review is now supplied: one already reviewed keeps that review,
-    // and one replaced by a newer proposal for the same check no longer counts in the report.
-    const reviewed = new Set(
-      records
-        .filter((record) => record.kind === 'criterion_review')
-        .map((record) => `${record.payload?.proposalId}:${record.payload?.proposalHash}`),
-    );
-    const newer = new Set<string>();
-    const owed = records
-      .filter((record) => record.kind === 'criterion_proposal')
-      .reverse()
-      .filter((proposal) => {
-        const check = `${proposal.payload?.scopeId}:${proposal.payload?.checkId}`;
-        const replaced = newer.has(check);
-        newer.add(check);
-        return !replaced && !reviewed.has(`${proposal.id}:${proposal.hash}`);
-      })
-      // Oldest first, so a long backlog is cleared in order and nothing waits forever.
-      .reverse();
+    // proposal still owed a review is now supplied, oldest first, one batch per review.
+    const owed = owedReview!.proposals;
     let selectedProposals = 0;
     for (const proposal of owed) {
       if (selectedProposals === CRITERION_REVIEW_BATCH) {

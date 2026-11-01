@@ -28,6 +28,10 @@ test('A review beyond the documented fifty original screens stays incomplete whi
         imageHash: image.hash,
       });
       captures.push(capture);
+    }
+    // Each review now takes at most 25 waiting findings (owner, 1 Nov), so each claim cites
+    // three screens: the 25 oldest still need all 51 pictures, above the 50-picture limit.
+    for (let n = 0; n < 51; n++)
       store.append(
         run.id,
         'candidate',
@@ -38,9 +42,8 @@ test('A review beyond the documented fifty original screens stays incomplete whi
           targetId: null,
           targetCaptureId: null,
         },
-        [capture.id],
+        [captures[n]!.id, captures[(n + 17) % 51]!.id, captures[(n + 34) % 51]!.id],
       );
-    }
     const originalIds = store.records(run.id).map((record) => record.id);
     const called: string[] = [];
     const models = {
