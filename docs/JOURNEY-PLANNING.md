@@ -60,8 +60,8 @@ Every answer request is streamed (owner, 1 November): Meta closes an answer that
 back for about 60 seconds, and the final Booking.com review was cut at 60.4 s, so the analyst's
 findings on the results page were never reviewed. A streamed answer keeps arriving piece by
 piece and is exempt; the engine reads it until Meta's final event, which carries the same
-result, status and usage as before. A stream that breaks off before that event is treated like
-a dropped connection: its possible charge stays reserved, it is never asked for twice, and the
+result, status and usage as before. A stream that breaks off before that event, or a failed answer that
+comes without its cost, is treated like a dropped connection: its possible charge stays reserved, it is never asked for twice, and the
 walk carries on. The size check is not streamed.
 A key press that arrives with a stray step or screenshot label is still that key
 press; those labels count only on `step_done`. A `step_done` that names no
