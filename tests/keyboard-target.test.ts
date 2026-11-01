@@ -12,7 +12,7 @@ import {
   MAX_TARGET_KEYS,
 } from '../src/keyboard-target.js';
 import { MetaModels, navigationActionSchema, type Action } from '../src/models.js';
-import { Runner } from '../src/runner.js';
+import { Runner, countsAsUnreached } from '../src/runner.js';
 import { VoiceOverProbe } from '../src/voiceover.js';
 import { RoleAllowanceLimit } from '../src/role-allowance.js';
 import { PHASE } from '../src/types.js';
@@ -1784,6 +1784,89 @@ test('A visible control that Tab never reaches is saved as measured keyboard evi
     const pack = requestEvidence(x.app.store, x.run.id, 'analyst', latest);
     assert(pack.records.some((row) => row.id === reach.id));
   } finally {
+    await x.close();
+  }
+});
+
+// Owner, 1 Nov: eDreams' date field was never reached by Tab, but every try ended at the
+// 24-key bound, so the analyst received no keyboard evidence and the robot spent its whole
+// step allowance retrying.
+const farTarget = (before: number) =>
+  Array.from({ length: before }, (_, i) => `<button>Stop ${i + 1}</button>`).join('') +
+  '<button>Target</button>';
+test('A control not reached within the key bound is saved as measured keyboard evidence', async () => {
+  const x = await setup('chromium', farTarget(40));
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'limit');
+    assert.equal(result.actions.length, MAX_TARGET_KEYS);
+    const reach = x.app.store
+      .records(x.run.id)
+      .find((row) => row.kind === 'observation' && row.payload.method === 'keyboard_reach/1');
+    assert(reach, 'the missed bound is a measurement the analyst receives');
+    assert.equal(reach.payload.reached, false);
+    assert.equal(reach.payload.fullCycle, false);
+    assert.equal(reach.payload.keysPressed, MAX_TARGET_KEYS);
+    assert.equal(reach.payload.target.name, 'Target');
+    // Codex and Loca, PR 75: the order ends where the last press landed.
+    assert.equal(reach.payload.focusOrder.at(-1).name, `Stop ${MAX_TARGET_KEYS}`);
+    assert(result.actions.every((action) => reach.sources.includes(action.id)));
+    const limit = x.app.store
+      .records(x.run.id)
+      .findLast((row) => row.payload?.method === 'keyboard_target_traversal');
+    assert.match(limit!.payload.reason, new RegExp(`after ${MAX_TARGET_KEYS} key presses`));
+  } finally {
+    await x.close();
+  }
+});
+
+// Loca, PR 75: an arrow walk that runs out of presses saves no evidence and must not end the
+// step, as it never did before.
+test('Only a measured Tab walk that runs out of presses counts toward the unreached stop', () => {
+  assert(countsAsUnreached({ outcome: 'limit', evidenceSaved: true }));
+  assert(!countsAsUnreached({ outcome: 'limit' }), 'an unmeasured (arrow) limit does not count');
+  assert(countsAsUnreached({ outcome: 'cycle' }));
+  assert(countsAsUnreached({ outcome: 'unavailable' }));
+  assert(!countsAsUnreached({ outcome: 'reached' }));
+});
+
+test('Runner ends navigation after two tries in a row that run out of keys', async () => {
+  const x = await setup('chromium', farTarget(60));
+  const runner = new Runner(x.app.store, x.app.origin);
+  let decisions = 0;
+  const reason = mock.method(MetaModels.prototype, 'reason', async () => {
+    decisions++;
+    return seek;
+  });
+  const analyse = mock.method(
+    runner as any,
+    'analyseCheckpoint',
+    async (_m: any, _r: any, current: any) => current,
+  );
+  const review = mock.method(runner as any, 'review', async () => {});
+  try {
+    await (runner as any).live(x.run, x.walk, new VoiceOverProbe(x.walk), x.current, x.signal);
+    assert.equal(decisions, 2, 'no third decision is bought for the same unreached control');
+    const records = x.app.store.records(x.run.id);
+    assert(records.some((row) => row.payload?.method === 'unreached_targets'));
+    assert.equal(
+      records.filter((row) => row.payload?.method === 'keyboard_reach/1').length,
+      2,
+      'each try is saved as evidence',
+    );
+    assert.equal(analyse.mock.callCount(), 1, 'the final analysis still runs');
+  } finally {
+    reason.mock.restore();
+    analyse.mock.restore();
+    review.mock.restore();
     await x.close();
   }
 });

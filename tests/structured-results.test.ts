@@ -114,7 +114,12 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
       assert.equal(body.model, CAPS[role].model);
       assert.equal(body.reasoning.effort, 'medium');
       // Owner, 1 Nov: the analyst is told what to report, not only what not to claim.
-      if (role === 'analyst') assert.match(body.instructions, /Report the barriers you can see/);
+      if (role === 'analyst') {
+        assert.match(body.instructions, /Report the barriers you can see/);
+        // Codex, PR 75: a try that ran out of presses is not keyboard-failure evidence.
+        assert.match(body.instructions, /fullCycle false .*not keyboard-failure evidence/);
+        assert.match(body.instructions, /must not settle C05 for that screen/);
+      }
       assert.equal(body.max_output_tokens, 32768);
       assert.equal(body.store, false);
       assert.match(body.instructions, /Return only the schema-constrained JSON result/);

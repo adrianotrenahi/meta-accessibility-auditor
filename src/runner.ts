@@ -124,6 +124,14 @@ export const showsForm = (capture: RecordEntry) =>
         String(element.role),
       ) || ['input', 'select', 'textarea'].includes(String(element.tag)),
   );
+/** A keyboard try that counts toward the "two unreached controls in a row" stop: a full cycle,
+ * an unavailable target, or (owner, 1 Nov: eDreams' date field spent the whole step on such
+ * tries) a Tab walk that ran out of presses and saved them as keyboard evidence. An arrow walk
+ * that runs out saves none and does not count (Loca, PR 75). */
+export const countsAsUnreached = (traversed: { outcome: string; evidenceSaved?: true }) =>
+  ['cycle', 'unavailable'].includes(traversed.outcome) ||
+  (traversed.outcome === 'limit' && traversed.evidenceSaved === true);
+
 /** Owner, 1 Nov: a Booking.com audit that finished all 7 steps still said "Journey stopped".
  * The audit stays partial (checks can remain unsettled); only the wording follows the journey. */
 export function journeyEndReason(records: RecordEntry[]) {
@@ -830,7 +838,7 @@ export class Runner {
             if (traversed.actions.length) refusedInputs = 0;
             unreachedTargets = refusedUnsent
               ? unreachedTargets
-              : ['cycle', 'unavailable'].includes(traversed.outcome)
+              : countsAsUnreached(traversed)
                 ? unreachedTargets + 1
                 : 0;
             if (unreachedTargets >= 2) {

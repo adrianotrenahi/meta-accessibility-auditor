@@ -420,6 +420,23 @@ export async function walkToKeyboardTarget(
         );
       }
     }
+    // What the robot typed never appears in saved keyboard evidence.
+    const typedRedactor = () => {
+      const typed = store
+        .records(runId)
+        .filter(
+          (record) =>
+            record.kind === 'action' &&
+            record.payload.action?.kind === 'type' &&
+            typeof record.payload.action.text === 'string',
+        )
+        .map((record) => record.payload.action.text as string)
+        .filter(Boolean);
+      return (value: string) => {
+        for (const input of typed) value = value.split(input).join('[redacted input]');
+        return value;
+      };
+    };
     for (let i = 0; i <= MAX_TARGET_KEYS; i++) {
       active();
       if (
@@ -478,11 +495,75 @@ export async function walkToKeyboardTarget(
         }
         return { current, actions, outcome: 'reached' as const };
       }
-      if (i === MAX_TARGET_KEYS)
-        return stop(
+      if (i === MAX_TARGET_KEYS) {
+        // Owner, 1 Nov: eDreams' date field was never reached by Tab, but each try ended at
+        // this bound rather than a full cycle, so no keyboard evidence reached the analyst.
+        // A Tab walk saves what it measured; it is not proof the control is unreachable.
+        const measured = !arrow && !rovingTarget && actions.length > 0 && (await connected());
+        const result = stop(
           'limit',
-          'The keyboard target was not reached within this bounded traversal. This does not establish a website keyboard barrier.',
+          measured
+            ? `The keyboard target was not reached after ${actions.length} key presses. The measured presses are saved as keyboard evidence; on their own they do not prove the control can never be reached.`
+            : 'The keyboard target was not reached within this bounded traversal. This does not establish a website keyboard barrier.',
+          {},
+          [start.id, ...actions.map((record) => record.id)],
         );
+        if (!measured) return result;
+        // Where the last press landed (Codex and Loca, PR 75), unless it is the page itself
+        // or the same control as before.
+        const last = await readTarget(() => walk.page.evaluateHandle(() => document.activeElement));
+        const lastFocus = last.asElement();
+        const isPage =
+          !lastFocus ||
+          (await readTarget(() =>
+            lastFocus.evaluate(
+              (element) => element === document.body || element === document.documentElement,
+            ),
+          ));
+        const repeated =
+          !!lastFocus &&
+          !!focusHandles.at(-1) &&
+          (await focusHandles
+            .at(-1)!
+            .evaluate((element, other) => element === other, lastFocus)
+            .catch(() => false));
+        if (lastFocus && !isPage && !repeated) {
+          const facts = current.payload.focus ?? {};
+          focusFacts.push({
+            role: facts.role || (facts.tag === 'a' ? 'link' : facts.tag || 'control'),
+            name: facts.name ?? '',
+          });
+        }
+        await last.dispose().catch(() => {});
+        const redact = typedRedactor();
+        store.append(
+          runId,
+          'observation',
+          'browser',
+          {
+            method: 'keyboard_reach/1',
+            reached: false,
+            fullCycle: false,
+            target: {
+              captureId: start.id,
+              id: decision.targetId ?? null,
+              role: decision.targetRole ?? null,
+              name: redact(targetName),
+              visibleAndEnabledAtStart: true,
+            },
+            keysPressed: actions.length,
+            key: requestedKey,
+            focusOrder: focusFacts.map((fact) => ({
+              role: fact.role,
+              name: redact(fact.name),
+            })),
+            limit:
+              "Measured with real key presses in this browser, up to the robot's bound per try. It is not a screen-reader test.",
+          },
+          [...new Set([start.id, current.id, ...actions.map((record) => record.id)])],
+        );
+        return { ...result, evidenceSaved: true as const };
+      }
       const activeHandle = await readTarget(() =>
         walk.page.evaluateHandle(() => document.activeElement),
       );
@@ -531,20 +612,7 @@ export async function walkToKeyboardTarget(
             );
         if (seen.some(Boolean)) {
           const begin = seen.findIndex(Boolean);
-          const typed = store
-            .records(runId)
-            .filter(
-              (record) =>
-                record.kind === 'action' &&
-                record.payload.action?.kind === 'type' &&
-                typeof record.payload.action.text === 'string',
-            )
-            .map((record) => record.payload.action.text as string)
-            .filter(Boolean);
-          const redact = (value: string) => {
-            for (const input of typed) value = value.split(input).join('[redacted input]');
-            return value;
-          };
+          const redact = typedRedactor();
           const sourceKind =
             current.kind === 'capture' ||
             (current.kind === 'observation' && current.payload.method === 'keyboard_focus/1')
