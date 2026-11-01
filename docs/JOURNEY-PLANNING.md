@@ -56,6 +56,13 @@ Meta reuses an identical opening and bills it at its cached rate ($0.002 instead
 million on Contributor mode); each request carries a `prompt_cache_key` naming its role and
 audit so related requests reach the same cache, and the recorded charge uses the cached rate
 Meta reports.
+Every answer request is streamed (owner, 1 November): Meta closes an answer that sends nothing
+back for about 60 seconds, and the final Booking.com review was cut at 60.4 s, so the analyst's
+findings on the results page were never reviewed. A streamed answer keeps arriving piece by
+piece and is exempt; the engine reads it until Meta's final event, which carries the same
+result, status and usage as before. A stream that breaks off before that event is treated like
+a dropped connection: its possible charge stays reserved, it is never asked for twice, and the
+walk carries on. The size check is not streamed.
 A key press that arrives with a stray step or screenshot label is still that key
 press; those labels count only on `step_done`. A `step_done` that names no
 screenshot means the current one, the only one the navigator sees; the freshness

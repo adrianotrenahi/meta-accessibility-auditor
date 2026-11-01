@@ -300,7 +300,11 @@ const jobInstructions = {
     'An automatic scan whose comparison is page-state-and-bounded-content-drift read the live page while the copy in its contentDrift.lines differed from the original screenshot; a measured claim about other elements is not contradicted by that copy difference, and a claim that a contentDrift line is visible in the screenshot is unsupported.',
 } as const;
 /** Meta does not document the grouping label for its size check; it is sent with generations only. */
-const withoutCacheKey = ({ prompt_cache_key: _key, ...body }: Record<string, unknown>) => body;
+const withoutCacheKey = ({
+  prompt_cache_key: _key,
+  stream: _stream,
+  ...body
+}: Record<string, unknown>) => body;
 export function outputText(response: any): string {
   if (typeof response.output_text === 'string') return response.output_text;
   return (response.output ?? [])
@@ -499,6 +503,8 @@ export class MetaModels {
       // Groups this audit's requests for one role so Meta can reuse their identical opening
       // (owner, 1 Nov: prompt caching, for a later move to a dearer model such as Muse Wonder).
       prompt_cache_key: `${role}:${runId}`,
+      // Streamed, so Meta's ~60 s limit on silent answers cannot cut a long review (owner, 1 Nov).
+      stream: true,
       max_output_tokens: cap.output,
       parallel_tool_calls: false,
       input: [
