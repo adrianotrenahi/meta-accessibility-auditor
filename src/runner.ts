@@ -159,12 +159,8 @@ export class Runner {
   private focusedBudgets = new Map<string, FocusedCheckBudget>();
   /** Key bounds for keyboard walks; tests use small ones, audits keep the defaults. */
   traversalBounds: { tab?: number; arrow?: number } = {};
-  private focusedBudget(runId: string, reserveVoiceOver = false) {
-    if (!this.focusedBudgets.has(runId))
-      this.focusedBudgets.set(
-        runId,
-        new FocusedCheckBudget({ reserveVoiceOver: reserveVoiceOver ? 2 : 0 }),
-      );
+  private focusedBudget(runId: string) {
+    if (!this.focusedBudgets.has(runId)) this.focusedBudgets.set(runId, new FocusedCheckBudget());
     return this.focusedBudgets.get(runId)!;
   }
   isWaiting(id: string) {
@@ -376,7 +372,7 @@ export class Runner {
           criteriaVersion: CRITERIA_VERSION,
           focusedChecks: {
             maximum: 2,
-            reservedForVoiceOver: withVoiceOver ? 2 : 0,
+            screenReader: withVoiceOver ? 'one per screen, no limit per audit' : 'unavailable',
             extraModelRequests: 0,
           },
           keyboardPattern:
@@ -422,7 +418,7 @@ export class Runner {
           run.id,
           walk,
           probe,
-          this.focusedBudget(run.id, true),
+          this.focusedBudget(run.id),
           current,
           {
             method: 'voiceover',

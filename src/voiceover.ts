@@ -69,7 +69,6 @@ export function voiceOverPreflight() {
   };
 }
 export class VoiceOverProbe {
-  checkpoints = 0;
   private startedByUs = false;
   private wasRunning = false;
   private starting?: Promise<void>;
@@ -96,8 +95,6 @@ export class VoiceOverProbe {
       throw Error('VoiceOver needs the exact stable original screen currently open in this run.');
     const logs: any[] = [];
     const began = new Date().toISOString();
-    if (this.checkpoints >= 2) throw Error('The two VoiceOver checkpoints have been used.');
-    this.checkpoints++;
     this.cleaning = undefined;
     if (!voiceOverPreflight().controlConfigured)
       return store.append(

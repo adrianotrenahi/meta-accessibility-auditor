@@ -252,8 +252,10 @@ test('The navigator records what a keyboard user meets, without inventing speech
     /Never say what a screen reader announces, says or reads unless a voiceover check in this run recorded that speech/,
   );
   assert.match(text, /Never purchase, pay, subscribe, register, create an account, sign in/);
-  assert.match(text, /scroll moves the view with the mouse wheel, not the keyboard/);
-  assert.match(text, /the whole audit has two such checks/);
+  // Owner, 1 Nov: scrolling is Page Down / Page Up, and the screen reader has no limit per audit.
+  assert.match(text, /scroll presses Page Down \(direction down\) or Page Up/);
+  assert.match(text, /There is no limit per audit, but each screen gets one check/);
+  assert.doesNotMatch(text, /mouse wheel|two such checks/);
   // The no-commitment rule is stated once, not repeated in several places.
   assert.equal(text.match(/Never purchase/g)?.length, 1);
   assert.doesNotMatch(text, /London|airport/i);

@@ -30,6 +30,10 @@ import {
 } from './journey-steps.js';
 import { PLANNER_INSTRUCTIONS } from './planner-instructions.js';
 import { requireCurrentModelApproval } from './model-approval.js';
+/** The longest navigator note. It also becomes a screen-reader check's reason, which allows 700
+ * (`missingEvidenceSchema`), so it must stay at or below that. */
+export const NAVIGATOR_NOTE_LIMIT = 500;
+const NOTE_CUT = ' … [note cut]';
 export const actionSchema = z.object({
   kind: z.enum([
     'press',
@@ -58,6 +62,9 @@ export const actionSchema = z.object({
       'ArrowUp',
       'ArrowLeft',
       'ArrowRight',
+      // Recorded by a keyboard scroll; the navigator asks for those with scroll, not press.
+      'PageDown',
+      'PageUp',
     ])
     .optional(),
   targetId: z
@@ -75,7 +82,7 @@ export const actionSchema = z.object({
   /** choose_option only: the exact visible text of the option to choose in the focused dropdown. */
   option: z.string().trim().min(1).max(120).optional(),
   direction: z.enum(['up', 'down']).optional(),
-  note: z.string().max(500),
+  note: z.string().max(NAVIGATOR_NOTE_LIMIT),
 });
 export type Action = z.infer<typeof actionSchema>;
 // Old requested/actual key records remain readable; fresh decisions request portable keys.
@@ -221,9 +228,19 @@ const ANSWER_LISTS: Partial<Record<Role, Record<string, number>>> = {
 export function keepWhatFits(role: Role, answer: unknown) {
   const lists = ANSWER_LISTS[role];
   const trimmed: { list: string; returned: number; kept: number }[] = [];
-  if (!lists || !answer || typeof answer !== 'object' || Array.isArray(answer))
-    return { answer, trimmed };
+  if (!answer || typeof answer !== 'object' || Array.isArray(answer)) return { answer, trimmed };
   const copy: Record<string, unknown> = { ...(answer as Record<string, unknown>) };
+  // A navigator note past its limit keeps its start, marked as cut, rather than the whole paid
+  // decision being refused (Loca, PR 77). The note puts its most important point first.
+  if (
+    role === 'driver' &&
+    typeof copy.note === 'string' &&
+    copy.note.length > NAVIGATOR_NOTE_LIMIT
+  ) {
+    trimmed.push({ list: 'note', returned: copy.note.length, kept: NAVIGATOR_NOTE_LIMIT });
+    copy.note = copy.note.slice(0, NAVIGATOR_NOTE_LIMIT - NOTE_CUT.length).trimEnd() + NOTE_CUT;
+  }
+  if (!lists) return { answer: copy, trimmed };
   for (const [list, kept] of Object.entries(lists)) {
     const items = copy[list];
     if (!Array.isArray(items) || items.length <= kept) continue;
@@ -318,9 +335,9 @@ const NAVIGATOR_INSTRUCTIONS = [
   '- type puts text into the text or search box that has focus, and only there. If the box already holds a different entry, clear it by keyboard first, then type the wanted value once. Typing into a box that offers suggestions chooses nothing: when the list appears, move to the suggestion that matches the task with ArrowDown and press Enter (or focus_target that suggestion with activation Enter), then check the box now shows it.',
   '- choose_option is for a dropdown that the accessible page lists as a combobox with its options. Reach it first with focus_target, then give the option\'s exact text as listed (for example "12, Saturday" or "Medium"). The robot presses keys until the dropdown shows that option. Never type into a date picker, a dropdown or an option list.',
   '- For other pickers and lists, use the arrow keys until the wanted value has focus, press Enter or Space, and check the field now shows it.',
-  '- voiceover runs the real screen reader (VoiceOver) from where you are on the page and records what it actually says. It is scarce: the whole audit has two such checks, shared with the analyst, and one may already have been used at the start. Spend it where hearing the control matters most to the task: the main search box, a date picker, an error message, the last button before the commitment line. Say in your note why you chose that moment.',
+  '- voiceover runs the real screen reader (VoiceOver) from where you are on the page and records what it actually says. Use it whenever hearing a control matters to the task: the main search box, a date picker, an error message, the last button before the commitment line. There is no limit per audit, but each screen gets one check: a second check on the same unchanged screen is refused. Say in your note why you chose that moment.',
   '- wait (waitMs from 800 to 10000) while a page or results are still loading. A spinner or a blank screen is not progress and not the end of a step.',
-  '- scroll moves the view with the mouse wheel, not the keyboard. Use it only to look at more of the page, never to reach a control.',
+  '- scroll presses Page Down (direction down) or Page Up (direction up), as a keyboard user does to read more of the page. Use it to look, not to reach a control: focus does not move. Inside a text box, a dropdown or a list those keys change the value instead, so the robot refuses to scroll there: first move focus out with Escape or Tab.',
   "- back is the browser's Back. Use it only to return from a page you reached by mistake, or when the step asks to check what going back keeps.",
   "- step_done, with the current step's exact stepId and the current captureId, when the current screen shows that step's done condition. It presses nothing.",
   '- finish when the task has reached the commitment line, or when you are blocked for good. The note says which, and why.',
@@ -333,7 +350,7 @@ const NAVIGATOR_INSTRUCTIONS = [
   '- When equal results are listed, take the first. Decline every optional extra the task does not ask for.',
   '',
   'WHAT TO WRITE IN YOUR NOTE',
-  'Every action carries a note of at most 500 characters. Write it in two parts:',
+  'Every action carries a note of at most 500 characters, quotes included. Write it in two parts:',
   '- "Did:" what you did and why, in one line.',
   '- "Saw:" what the keyboard user met on this screen. Facts only, and the most important first. Watch for:',
   '  - Focus: not visible in the screenshot; jumping somewhere unexpected; landing behind an open dialog or on something hidden; going back to the top of the page after an action; stuck in a place Tab cannot leave.',
@@ -344,7 +361,7 @@ const NAVIGATOR_INSTRUCTIONS = [
   '  Write "Saw: nothing new" when nothing new appeared. Never pad.',
   'Rules for notes:',
   '- Describe, do not judge. "The Search button has no accessible name" is a fact; whether it breaks a rule is the analyst\'s decision.',
-  "- Quote the site's words exactly, in quotation marks.",
+  "- Quote the site's words exactly, in quotation marks, but only the words that matter: a note longer than 500 characters is cut at the end, so the most important point goes first.",
   '- Never say what a screen reader announces, says or reads unless a voiceover check in this run recorded that speech. Without it, say what the accessible page exposes ("its accessible name is empty").',
   '- Put in the note anything you will need later, because older decisions drop out of view (for example: "Search box needed 14 Tab presses from the top of the page").',
   '',
@@ -775,12 +792,15 @@ export class MetaModels {
         // Noted only once the shortened answer is accepted (Loca, PR 72).
         for (const { list, returned, kept: limit } of kept.trimmed)
           this.store.append(runId, 'limit', role, {
-            method: 'answer_list_trimmed',
+            method: list === 'note' ? 'navigator_note_trimmed' : 'answer_list_trimmed',
             requestId: id,
             list,
             returned,
             kept: limit,
-            reason: `The answer listed ${returned} ${list}; ${limit} were kept and the other ${returned - limit} were left out.`,
+            reason:
+              list === 'note'
+                ? `The navigator's note had ${returned} characters; its first part was kept, up to ${limit} characters, and marked as cut.`
+                : `The answer listed ${returned} ${list}; ${limit} were kept and the other ${returned - limit} were left out.`,
           });
       } catch (error) {
         if (error instanceof z.ZodError)

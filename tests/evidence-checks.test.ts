@@ -129,28 +129,25 @@ test('An undersized target may satisfy spacing, with both small and large neighb
   );
 });
 
-test('Native checkpoints and other focused checks share one two-attempt allowance', () => {
-  const reserved = new FocusedCheckBudget({ reserveVoiceOver: 2 });
-  assert.equal(reserved.claim('measurement').allowed, false);
-  assert.equal(reserved.used, 0);
-  assert.equal(reserved.claim('voiceover').allowed, true);
-  assert.equal(reserved.claim('keyboard_focus').allowed, false);
-  assert.equal(reserved.claim('voiceover').allowed, true);
-  assert.equal(reserved.claim('voiceover').allowed, false);
-  assert.equal(reserved.used, 2);
-  assert.equal(reserved.remaining, 0);
-  const general = new FocusedCheckBudget();
-  assert.equal(general.claim('measurement').allowed, true);
+// Owner, 1 Nov: the real screen reader has no limit per audit (it is held to one check per
+// screen instead); the analyst's other follow-up checks still share two slots.
+test('Screen-reader checks take no slot; the other focused checks share two', () => {
+  const budget = new FocusedCheckBudget();
+  for (let i = 0; i < 5; i++) assert.equal(budget.claim('voiceover').allowed, true);
+  assert.equal(budget.used, 0);
+  assert.equal(budget.claim('measurement').allowed, true);
   // An execution failure does not return the claimed slot to the pool.
-  assert.equal(general.claim('keyboard_focus').allowed, true);
-  assert.equal(general.claim('measurement').allowed, false);
+  assert.equal(budget.claim('keyboard_focus').allowed, true);
+  assert.equal(budget.claim('measurement').allowed, false);
+  assert.equal(budget.claim('voiceover').allowed, true);
+  assert.equal(budget.used, 2);
+  assert.equal(budget.remaining, 0);
   assert.equal(
-    new FocusedCheckBudget({ usedMethods: ['voiceover'], reserveVoiceOver: 1 }).remaining,
+    new FocusedCheckBudget({ usedMethods: ['voiceover', 'voiceover', 'measurement'] }).remaining,
     1,
   );
-  assert.throws(() => new FocusedCheckBudget({ reserveVoiceOver: 3 }));
   assert.throws(
-    () => new FocusedCheckBudget({ usedMethods: ['measurement', 'measurement', 'voiceover'] }),
+    () => new FocusedCheckBudget({ usedMethods: ['measurement', 'measurement', 'keyboard_focus'] }),
   );
 });
 

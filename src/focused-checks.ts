@@ -11,7 +11,8 @@ import { safeError } from './config.js';
 import type { RecordEntry } from './types.js';
 import type { ElementHandle } from 'playwright';
 
-/** Shares the same two slots between native checks and missing-fact requests. */
+/** Missing-fact requests share two slots; a real screen-reader check takes none and is held to
+ * one per screen (owner, 1 Nov: no limit per audit). */
 export async function performFocusedCheck(
   store: Store,
   runId: string,
@@ -70,6 +71,12 @@ export async function performFocusedCheck(
     );
   if (request.method === 'voiceover' && !probe)
     return refuse('A real reader is unavailable in this check context.');
+  // One screen-reader check per screen: a later capture of the same page looking exactly the
+  // same (same address, same picture, so the same focus) is the same screen.
+  if (request.method === 'voiceover' && sameScreenAlreadyRead(store, runId, source))
+    return refuse(
+      'The screen reader already read this same screen; move focus or change the screen first.',
+    );
   const claim = budget.claim(request.method);
   if (!claim.allowed) return refuse(claim.reason);
   const begun = store.append(
@@ -155,4 +162,23 @@ export async function performFocusedCheck(
   } finally {
     await focusedTarget?.dispose().catch(() => {});
   }
+}
+
+function sameScreenAlreadyRead(store: Store, runId: string, source: RecordEntry) {
+  return store
+    .records(runId)
+    .filter(
+      (record) =>
+        record.kind === 'focused_check' &&
+        record.payload.method === 'voiceover' &&
+        record.payload.attempted === true,
+    )
+    .some((record) => {
+      const read = store.record(runId, record.payload.captureId);
+      return (
+        read?.kind === 'capture' &&
+        read.payload.url === source.payload.url &&
+        read.payload.imageHash === source.payload.imageHash
+      );
+    });
 }
