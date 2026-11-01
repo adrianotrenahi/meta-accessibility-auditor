@@ -1902,6 +1902,37 @@ test('An arrow walk that stops at its bound is saved as measured keyboard eviden
   }
 });
 
+// Loca, PR 76: the end-to-end proof that two walks stopping at their bound end navigation.
+test('Runner ends navigation after two walks in a row that stop at their bound', async () => {
+  const x = await setup('chromium', farTarget(60));
+  const runner = new Runner(x.app.store, x.app.origin);
+  runner.traversalBounds = { tab: 24 };
+  let decisions = 0;
+  const reason = mock.method(MetaModels.prototype, 'reason', async () => {
+    decisions++;
+    return seek;
+  });
+  const analyse = mock.method(
+    runner as any,
+    'analyseCheckpoint',
+    async (_m: any, _r: any, current: any) => current,
+  );
+  const review = mock.method(runner as any, 'review', async () => {});
+  try {
+    await (runner as any).live(x.run, x.walk, new VoiceOverProbe(x.walk), x.current, x.signal);
+    assert.equal(decisions, 2, 'no third decision is bought for the same unreached control');
+    const records = x.app.store.records(x.run.id);
+    assert(records.some((row) => row.payload?.method === 'unreached_targets'));
+    assert.equal(records.filter((row) => row.payload?.method === 'keyboard_reach/1').length, 2);
+    assert.equal(analyse.mock.callCount(), 1, 'the final analysis still runs');
+  } finally {
+    reason.mock.restore();
+    analyse.mock.restore();
+    review.mock.restore();
+    await x.close();
+  }
+});
+
 test('Runner ends navigation after two requested controls in a row cannot be reached', async () => {
   const x = await setup(
     'chromium',

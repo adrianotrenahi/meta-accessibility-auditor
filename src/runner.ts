@@ -126,8 +126,8 @@ export const showsForm = (capture: RecordEntry) =>
   );
 /** A keyboard try that counts toward the "two unreached controls in a row" stop: a full cycle,
  * an unavailable target, or (owner, 1 Nov: eDreams' date field spent the whole step on such
- * tries) a Tab walk that ran out of presses and saved them as keyboard evidence. An arrow walk
- * that runs out saves none and does not count (Loca, PR 75). */
+ * tries) a walk, Tab or arrow, that ran out of presses and saved them as keyboard evidence. A
+ * walk that sent no key saves none and does not count. */
 export const countsAsUnreached = (traversed: { outcome: string; evidenceSaved?: true }) =>
   ['cycle', 'unavailable'].includes(traversed.outcome) ||
   (traversed.outcome === 'limit' && traversed.evidenceSaved === true);
@@ -157,6 +157,8 @@ export class Runner {
   private waiting?: { runId: string; release: () => void };
   private discarding = new Map<string, Promise<void>>();
   private focusedBudgets = new Map<string, FocusedCheckBudget>();
+  /** Key bounds for keyboard walks; tests use small ones, audits keep the defaults. */
+  traversalBounds: { tab?: number; arrow?: number } = {};
   private focusedBudget(runId: string, reserveVoiceOver = false) {
     if (!this.focusedBudgets.has(runId))
       this.focusedBudgets.set(
@@ -823,6 +825,7 @@ export class Runner {
               action,
               signal,
               (before, key, guard) => this.targetKeyboardStep(run, walk, before, key, guard),
+              this.traversalBounds,
             );
             current =
               traversed.current.kind === 'capture'
