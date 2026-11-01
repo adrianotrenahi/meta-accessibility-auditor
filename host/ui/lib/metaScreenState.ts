@@ -68,9 +68,15 @@ export function metaScreenGroups<T extends StateCapture>(captures: readonly T[])
  * picture that proved a finished journey step is also its own
  * screen even when its analysis never came back (owner, 31 Oct: a failed analysis hid the
  * Barcelona to London screen the robot had reached); it is marked as not analysed. A visit
- * nobody checked shows its latest picture. Every original stays in `captures`. */
+ * nobody checked shows its latest picture. Every original stays in `captures`.
+ * Once the audit has ended, only analysed screens are shown (owner, 1 Nov: "we should not even
+ * be displaying the pages we did not analyze"); an unanalysed screen's pictures join the next
+ * analysed screen, or the last one, so the journey's records stay attached. While the audit
+ * runs, a screen still waiting for analysis stays visible as pending. An audit with no analysed
+ * screen at all keeps the old view, so its report still shows where the robot stopped. */
 export function metaReportScreens<T extends StateCapture>(
   snapshot: {
+    run?: { state: string };
     captures: readonly T[];
     analysis?: { completed: { role: string; captureIds: string[] }[] };
     findings: readonly { captureIds: string[]; anchor: { captureId: string } | null }[];
@@ -99,7 +105,7 @@ export function metaReportScreens<T extends StateCapture>(
       previous.captures.push(...group.originals);
     else visits.push({ first: group.primary, captures: [...group.originals] });
   }
-  return visits.flatMap(({ captures }) => {
+  const screens = visits.flatMap(({ captures }) => {
     if (!captures.some((capture) => shown.has(capture.id)))
       return [{ primary: captures.at(-1)!, originals: [captures.at(-1)!], captures, analysed: false }];
     // Unshown pictures belong to the screen they lead up to, or else the last one.
@@ -119,4 +125,18 @@ export function metaReportScreens<T extends StateCapture>(
     screens.at(-1)!.captures.push(...waiting);
     return screens;
   });
+  if (!snapshot.run || snapshot.run.state === 'running' || !screens.some((s) => s.analysed))
+    return screens;
+  const kept: typeof screens = [];
+  let carried: T[] = [];
+  for (const screen of screens) {
+    if (!screen.analysed) {
+      carried.push(...screen.captures);
+      continue;
+    }
+    kept.push({ ...screen, captures: [...carried, ...screen.captures] });
+    carried = [];
+  }
+  kept.at(-1)!.captures.push(...carried);
+  return kept;
 }

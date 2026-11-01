@@ -124,6 +124,20 @@ export const showsForm = (capture: RecordEntry) =>
         String(element.role),
       ) || ['input', 'select', 'textarea'].includes(String(element.tag)),
   );
+/** Owner, 1 Nov: a Booking.com audit that finished all 7 steps still said "Journey stopped".
+ * The audit stays partial (checks can remain unsettled); only the wording follows the journey. */
+export function journeyEndReason(records: RecordEntry[]) {
+  let journey: ReturnType<typeof readOrderedJourney> = null;
+  try {
+    journey = readOrderedJourney(records);
+  } catch {
+    journey = null;
+  }
+  if (journey && journey.steps.length && !currentJourneyInstruction(journey).currentStep)
+    return `Journey finished: all ${journey.steps.length} approved steps were completed. Checks without a reviewed result stay marked as not tested.`;
+  return 'Journey stopped. Required tests and coverage remain explicitly scoped.';
+}
+
 /** Every checkpoint is reviewed (owner, 31 Oct: "It should check all screens that go to the
  * strip"), up to the reviewer backstop, keeping the last request for the final review. */
 export const checkpointReviewAllowed = (store: Store, runId: string) =>
@@ -429,7 +443,7 @@ export class Runner {
           'partial',
           run.mode === 'offline'
             ? 'Offline saved-response demonstration finished. AI quality, SAM output and full VoiceOver coverage have not been established.'
-            : 'Journey stopped. Required tests and coverage remain explicitly scoped.',
+            : journeyEndReason(this.store.records(run.id)),
         );
     } catch (e) {
       if (this.store.run(run.id).state === 'running') {

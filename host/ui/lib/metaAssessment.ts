@@ -120,19 +120,31 @@ export function readMetaAssessment(
     );
   if (new Set(report.results.map((result) => result.id)).size !== 15)
     throw Error("Every one of the fifteen criteria must appear exactly once.");
+  // Owner, 1 Nov: checks are owed only on analysed screens, so a criterion lists one check per
+  // analysed screen rather than per screenshot; no screen an analyst read may be left out.
+  const analysed = new Set(
+    (snapshot.analysis?.completed ?? [])
+      .filter((row) => row.role === "analyst")
+      .flatMap((row) => row.captureIds),
+  );
+  // Every criterion lists the same screens: the engine builds them all from one list.
+  const screens = JSON.stringify(
+    [...new Set(report.results[0]!.checks.map((entry) => entry.captureId))].sort(),
+  );
   for (const result of report.results) {
     const settled = result.checks.filter((entry) => entry.complete).length;
+    const checked = new Set(result.checks.map((entry) => entry.captureId));
     if (
+      JSON.stringify([...checked].sort()) !== screens ||
       result.requiredChecks !== result.checks.length ||
-      result.checks.length !== captures.size ||
+      [...analysed].some((captureId) => !checked.has(captureId)) ||
       result.assessedChecks !== settled ||
       result.coverageComplete !==
         (result.checks.length > 0 && settled === result.checks.length) ||
       result.reviewed !==
         (result.checks.length > 0 &&
           result.checks.every((entry) => entry.reviewed)) ||
-      new Set(result.checks.map((entry) => entry.captureId)).size !==
-        captures.size ||
+      checked.size !== result.checks.length ||
       result.checks.some(
         (entry) =>
           !captures.has(entry.captureId) ||
@@ -268,12 +280,20 @@ const labels = {
   NOT_APPLICABLE: "Not applicable",
 };
 export function metaAssessmentNote(data: MetaAssessment, captureId?: string) {
+  const checks = (criterionId: string) =>
+    data.criteria.results.find((entry) => entry.id === criterionId)!;
+  // A screen nobody analysed owes no checks (owner, 1 Nov); it may still show while pending.
+  if (
+    captureId &&
+    !META_CRITERIA.some((criterionId) =>
+      checks(criterionId).checks.some((entry) => entry.captureId === captureId),
+    )
+  )
+    return "This screen has not been analysed (or its analysis is still pending), so none of the fifteen checks are counted for it.";
   const rows = META_CRITERIA.map((criterionId) => {
-    const result = data.criteria.results.find(
-      (entry) => entry.id === criterionId,
-    )!;
+    const result = checks(criterionId);
     const status = captureId
-      ? result.checks.find((entry) => entry.captureId === captureId)!.verdict
+      ? (result.checks.find((entry) => entry.captureId === captureId)?.verdict ?? "NOT_TESTED")
       : result.verdict;
     return `${criterionId}: ${labels[status]}`;
   }).join("; ");

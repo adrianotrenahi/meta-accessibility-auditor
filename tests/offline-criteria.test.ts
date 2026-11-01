@@ -26,7 +26,9 @@ test(
       const naming = report.criteria.results.find((criterion) => criterion.id === 'C02')!;
       assert.equal(naming.verdict, 'FAIL', naming.reason);
       assert(naming.checks.some((check) => check.verdict === 'FAIL' && check.reviewed));
-      assert.equal(naming.coverageComplete, false, 'Later captured screens remain unassessed.');
+      // Owner, 1 Nov: later screenshots nobody analysed owe no checks; they are only noted.
+      assert.equal(naming.requiredChecks, 1, 'Only the saved example screen owes the check.');
+      assert(report.criteria.limits.some((l) => /original screenshots? (was|were) not analysed/.test(l)));
       assert.equal(report.criteria.results.length, 15);
       for (const criterion of report.criteria.results.filter((row) => row.id !== 'C02')) {
         assert.equal(criterion.verdict, 'NOT_TESTED', criterion.id);
