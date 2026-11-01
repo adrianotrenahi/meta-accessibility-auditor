@@ -111,10 +111,17 @@ export class MeasurementStateChanged extends Error {
 export class ActionStateChanged extends Error {}
 export class ObservationUnsettled extends Error {}
 /** After an input, how long a page slow to become readable is retried before navigation stops
- * cleanly (owner, 31 Oct: Booking.com's results page took longer than one read allows). */
-export const SLOW_PAGE_WAIT_MS = 30_000;
+ * cleanly, counted from the first read that ran out of time (owner, 1 Nov: 90 seconds; the
+ * 30 seconds counted from the first read were already spent when Booking.com's results page
+ * failed its first read, so it never had a second look). */
+export const SLOW_PAGE_WAIT_MS = 90_000;
+/** Each screenshot's own time limit (owner, 1 Nov: Booking.com's results page took longer than
+ * the browser's usual 8 seconds to photograph). */
+export const SCREENSHOT_WAIT_MS = 20_000;
 /** The page stayed unreadable for SLOW_PAGE_WAIT_MS; no input was repeated. */
 export class PageUnreadable extends Error {}
+/** One page reading's slow-page wait; it starts at the first read that runs out of time. */
+export type SlowPageWait = { since?: number; deadline?: number };
 export function publicSearchInput(
   focus: {
     tag: string;
@@ -423,30 +430,45 @@ export class BrowserWalk {
     };
   }
   slowPageWaitMs = SLOW_PAGE_WAIT_MS;
-  /** One read always runs; a read that ran out of time is tried again while `deadline` allows.
-   * captureSettled shares one deadline across its readings, so a slow page costs it about
-   * `slowPageWaitMs` in all, plus at most the read already under way. */
-  async capture(deadline = performance.now() + this.slowPageWaitMs): Promise<RecordEntry> {
-    let waited = false;
+  /** One read always runs; a read that ran out of time is tried again for `slowPageWaitMs`,
+   * counted from that first failure. captureSettled shares one wait across its readings, so a
+   * slow page costs it the first read, `slowPageWaitMs` and at most the read under way. */
+  async capture(wait: SlowPageWait = {}): Promise<RecordEntry> {
+    let failed = false;
     for (;;) {
       let timedOut: Error;
       try {
-        return await this.captureOrWait();
+        const capture = await this.captureOrWait();
+        if (failed && wait.since !== undefined)
+          // How long the page really took, so the wait can be set from evidence later.
+          this.store.append(
+            this.runId,
+            'limit',
+            'browser',
+            {
+              method: 'slow_page_readable',
+              reason: 'The slow page became readable on a later read. No input was repeated.',
+              waitedMs: Math.round(performance.now() - wait.since),
+            },
+            [capture.id],
+          );
+        return capture;
       } catch (error) {
         // A stop takes precedence; only a read that ran out of time is tried again.
         this.assertActive();
         if (!(error instanceof errors.TimeoutError) || this.page.isClosed()) throw error;
         timedOut = error;
+        failed = true;
       }
       const unreadable = () =>
         new PageUnreadable(
-          `The page did not become readable within about ${this.slowPageWaitMs / 1000} seconds of waiting (${
-            timedOut.message.split('\n')[0]
-          }). No input was repeated.`,
+          `The page did not become readable within about ${Math.round(
+            (performance.now() - wait.since!) / 1000,
+          )} seconds of waiting (${timedOut.message.split('\n')[0]}). No input was repeated.`,
         );
-      if (performance.now() >= deadline) throw unreadable();
-      if (!waited) {
-        waited = true;
+      if (wait.deadline === undefined) {
+        wait.since = performance.now();
+        wait.deadline = wait.since + this.slowPageWaitMs;
         this.store.append(
           this.runId,
           'limit',
@@ -455,18 +477,22 @@ export class BrowserWalk {
             method: 'slow_page_wait',
             reason:
               'The page is slow to become readable. The robot waits and reads it again; no input is repeated.',
-            maximumWaitMs: Math.max(0, Math.round(deadline - performance.now())),
+            maximumWaitMs: this.slowPageWaitMs,
           },
           this.lastOriginal ? [this.lastOriginal.id] : [],
         );
       }
+      const deadline = wait.deadline;
+      if (performance.now() >= deadline) throw unreadable();
+      // Short waits, so a Stop is noticed within seconds rather than at the end of the wait.
       await this.page
         .waitForLoadState('domcontentloaded', {
-          timeout: Math.max(1, Math.floor(deadline - performance.now())),
+          timeout: Math.max(1, Math.floor(Math.min(2000, deadline - performance.now()))),
         })
         .catch(() => undefined);
       this.assertActive();
       await this.page.waitForTimeout(Math.max(0, Math.min(1000, deadline - performance.now())));
+      this.assertActive();
       // No new read starts once the wait is used up.
       if (performance.now() >= deadline) throw unreadable();
     }
@@ -508,8 +534,8 @@ export class BrowserWalk {
     )
       throw Error('Observation recovery needs an intact original capture from this run.');
     const attempts: RecordEntry[] = [];
-    const deadline = performance.now() + this.slowPageWaitMs;
-    let current = first ?? (await this.capture(deadline));
+    const wait: SlowPageWait = {};
+    let current = first ?? (await this.capture(wait));
     for (let attempt = 0; attempt < 3; attempt++) {
       this.assertActive();
       attempts.push(current);
@@ -517,7 +543,7 @@ export class BrowserWalk {
         return current;
       if (attempt < 2) {
         await this.page.waitForTimeout(400);
-        current = await this.capture(deadline);
+        current = await this.capture(wait);
       }
     }
     // Same page, focus and popups, but its copy kept changing (a live ticker, a
@@ -694,7 +720,11 @@ export class BrowserWalk {
         box,
       });
     }
-    const image = await this.page.screenshot({ type: 'png', animations: 'disabled' });
+    const image = await this.page.screenshot({
+      type: 'png',
+      animations: 'disabled',
+      timeout: SCREENSHOT_WAIT_MS,
+    });
     const visibleText = await this.page.locator('body').innerText();
     let identitiesStable = true;
     const identified = elements.filter((element) => element.controlFingerprint);
