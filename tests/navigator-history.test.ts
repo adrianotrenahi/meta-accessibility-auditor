@@ -236,3 +236,25 @@ test("The navigator takes a site's own accessible way through, never to sign in 
   assert.match(jobInstructions.driver, /reach search fields such as dates is fine/);
   assert.match(jobInstructions.driver, /never use it to sign in, create an account, pay/);
 });
+
+// Owner, 1 Nov: the navigator was told only how to move and what not to claim, so its notes
+// said little about what a keyboard user met. It now records what it sees on every decision,
+// without inventing screen-reader speech, and its examples are not tied to one flight site.
+test('The navigator records what a keyboard user meets, without inventing speech', async () => {
+  const { jobInstructions } = await import('../src/models.js');
+  const text = jobInstructions.driver;
+  assert.match(text, /Be the witness/);
+  assert.match(text, /"Did:" what you did and why/);
+  assert.match(text, /"Saw:" what the keyboard user met on this screen/);
+  assert.match(text, /Write "Saw: nothing new" when nothing new appeared/);
+  assert.match(
+    text,
+    /Never say what a screen reader announces, says or reads unless a voiceover check in this run recorded that speech/,
+  );
+  assert.match(text, /Never purchase, pay, subscribe, register, create an account, sign in/);
+  assert.match(text, /scroll moves the view with the mouse wheel, not the keyboard/);
+  assert.match(text, /the whole audit has two such checks/);
+  // The no-commitment rule is stated once, not repeated in several places.
+  assert.equal(text.match(/Never purchase/g)?.length, 1);
+  assert.doesNotMatch(text, /London|airport/i);
+});
