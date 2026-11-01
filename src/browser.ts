@@ -1031,12 +1031,14 @@ export class BrowserWalk {
     if (saved.url !== now.url) parts.push('address');
     if (!saved.stable) parts.push('screenshot was not stable');
     if (saved.limits?.controlIdentityChanged) parts.push('control identity');
-    if (JSON.stringify(saved.dialogs ?? []) !== JSON.stringify(now.dialogs)) parts.push('popups');
+    // Only a screenshot records its popups; a focus note leaves them to the page stamp.
+    if (Array.isArray(saved.dialogs) && JSON.stringify(saved.dialogs) !== JSON.stringify(now.dialogs))
+      parts.push('popups');
     if (JSON.stringify(saved.focusHelp ?? []) !== JSON.stringify(now.focusHelp)) parts.push('focus help');
     if (JSON.stringify({ ...saved.focus, text: undefined }) !== JSON.stringify({ ...now.focus, text: undefined }))
       parts.push('focus');
     if (typeof saved.pageStamp === 'string' && !parts.length && saved.pageStamp !== pageStamp(now))
-      parts.push('scroll or document');
+      parts.push(Array.isArray(saved.dialogs) ? 'scroll or document' : 'scroll, document or popups');
     return parts.length ? parts : ['nothing visible'];
   }
   /** Completing an instruction claims what its original shows, so a page whose

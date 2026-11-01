@@ -123,6 +123,12 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
         assert.match(body.instructions, /spent the whole decision allowance of a journey step/);
         assert.match(body.instructions, /do not call it a keyboard failure or settle C05 from it/);
       }
+      if (role === 'reviewer') {
+        // Loca, PR 78: the reviewer keeps such a finding when the records support it.
+        assert.match(body.instructions, /is not a robot-caused misunderstanding: keep it/);
+        assert.match(body.instructions, /rewrite it down to what happened instead of rejecting it/);
+        assert.match(body.instructions, /Reject robot-caused misunderstandings/);
+      }
       assert.equal(body.max_output_tokens, 32768);
       assert.equal(body.store, false);
       assert.match(body.instructions, /Return only the schema-constrained JSON result/);
