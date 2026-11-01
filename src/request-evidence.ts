@@ -282,17 +282,23 @@ export function requestEvidence(
         [current.id],
       );
     };
-    let selectedProposals = 0;
+    // Owner, 1 Nov: the reviewer saw only the five newest proposals, counting ones it had
+    // already judged, so 43 times in a Booking.com audit a proposal waited unreviewed. Every
+    // proposal still owed a review is now supplied: one already reviewed keeps that review,
+    // and one replaced by a newer proposal for the same check no longer counts in the report.
+    const reviewed = new Set(
+      records
+        .filter((record) => record.kind === 'criterion_review')
+        .map((record) => `${record.payload?.proposalId}:${record.payload?.proposalHash}`),
+    );
+    const newer = new Set<string>();
     for (const proposal of records
       .filter((record) => record.kind === 'criterion_proposal')
       .reverse()) {
-      if (selectedProposals === 5) {
-        omit(
-          proposal,
-          'This checkpoint already supplies five newer criterion proposals. This exact proposal remains unassessed here.',
-        );
-        continue;
-      }
+      const check = `${proposal.payload?.scopeId}:${proposal.payload?.checkId}`;
+      const replaced = newer.has(check);
+      newer.add(check);
+      if (replaced || reviewed.has(`${proposal.id}:${proposal.hash}`)) continue;
       let closure: RecordEntry[];
       try {
         closure = originalClosure(records, [proposal.id]);
@@ -344,7 +350,6 @@ export function requestEvidence(
           originals.push(record);
         }
       for (const id of addedCaptures) captureIds.add(id);
-      selectedProposals++;
     }
   }
   roots = originals.map((r) => r.id);

@@ -171,30 +171,35 @@ test('A fitting criterion carries its exact complete source closure into the rev
   }
 });
 
-test('Fitting optional criteria are selected newest first and never exceed five proposals', () => {
+// Owner, 1 Nov: the reviewer saw only the five newest proposals, including ones it had already
+// judged, so in a Booking.com audit a proposal was left unreviewed 43 times.
+test('Every proposal still owed a review is supplied; judged and replaced ones are not', () => {
   const x = fixture(9);
   try {
     x.candidate(x.captures.slice(1, 7).map((capture) => capture.id));
-    const many = Array.from({ length: 6 }, (_, i) => x.proposal(x.captures[i]));
-    const extraCapture = x.proposal(x.captures[8]);
-    const bounded = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[0]);
-    const selected = bounded.records.filter((record) => record.kind === 'criterion_proposal');
-    assert.equal(selected.length, 5);
-    assert(selected.some((record) => record.id === extraCapture.id));
-    assert(bounded.records.some((record) => record.id === x.captures[8].id));
-    assert(
-      many.slice(0, 2).every((proposal) => !selected.some((record) => record.id === proposal.id)),
+    const many = Array.from({ length: 7 }, (_, i) => x.proposal(x.captures[i + 1]));
+    // One was already judged at an earlier checkpoint; another check got a newer proposal.
+    const judged = many[0]!;
+    x.store.append(
+      x.run.id,
+      'criterion_review',
+      'reviewer',
+      { proposalId: judged.id, proposalHash: judged.hash, verdict: 'keep' },
+      [judged.id],
     );
-    assert(many.slice(2).every((proposal) => selected.some((record) => record.id === proposal.id)));
-    for (const omitted of many.slice(0, 2))
-      assert(
-        bounded.records.some(
-          (record) =>
-            record.kind === 'limit' &&
-            record.payload.proposalId === omitted.id &&
-            /five newer/.test(record.payload.reason),
-        ),
-      );
+    const replaced = many[1]!;
+    const replacement = x.proposal(x.captures[2]);
+    const read = requestEvidence(x.store, x.run.id, 'reviewer', x.captures[0]);
+    const selected = new Set(
+      read.records.filter((record) => record.kind === 'criterion_proposal').map((r) => r.id),
+    );
+    assert.deepEqual(
+      [...selected].sort(),
+      [...many.slice(2), replacement].map((p) => p.id).sort(),
+      'six owed proposals, more than the old five',
+    );
+    assert(!selected.has(judged.id) && !selected.has(replaced.id));
+    assert(read.records.some((record) => record.id === x.captures[7]!.id));
   } finally {
     x.close();
   }
