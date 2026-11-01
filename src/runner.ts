@@ -868,6 +868,10 @@ export class Runner {
               {
                 reason:
                   'The page changed before target traversal. No stale target input was performed; navigation resumes from a fresh observation and decision.',
+                // Owner, 1 Nov: eDreams refused 23 walks this way and the cause could not be
+                // reproduced, so the record now says which part of the page no longer matched.
+                changed: await walk.unmatchedParts(current).catch(() => ['unknown']),
+                detail: safeError(error),
               },
               [current.id],
             );

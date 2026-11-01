@@ -375,6 +375,11 @@ export async function walkToKeyboardTarget(
         'A previously recorded description changed during traversal. Its full original remains saved; a fresh decision is needed before further input.',
       );
     const shape = shapeOf(start);
+    // Owner, 1 Nov: eDreams' banner behind the search form keeps swapping its promotions, so
+    // over a long Tab walk the copy drifted past the bound against the starting screen and
+    // the walk stopped before its full loop. A Tab walk now compares each step with the one
+    // before it: a swap is small; a popup, a new page or a changed target still stops it.
+    let previousShape = shape;
     const memory = keyboardCycleMemory(walk);
     if (memory.isClosed)
       return stop('unavailable', 'Focus-cycle memory is closed. No traversal input was sent.');
@@ -759,12 +764,13 @@ export async function walkToKeyboardTarget(
         (arrow || rovingTarget
           ? shapeOf(current) !== shape
           : dialogLines(shapeOf(current)) !== dialogLines(shape) ||
-            !contentSettled(shape, shapeOf(current)))
+            !contentSettled(previousShape, shapeOf(current)))
       )
         return stop(
           'changed',
           'The page changed during keyboard traversal. A fresh decision is needed; no target was activated.',
         );
+      previousShape = shapeOf(current);
     }
     throw Error('Keyboard traversal did not return its bounded result.');
   } catch (error) {

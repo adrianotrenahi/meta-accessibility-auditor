@@ -1933,6 +1933,103 @@ test('Runner ends navigation after two walks in a row that stop at their bound',
   }
 });
 
+// Owner, 1 Nov: eDreams' banner behind the search form keeps swapping promotions. Each Tab here
+// rewrites one of four promotions; one step changes little, but against the starting screen
+// the changes add up past the bound, which stopped every long walk before its full loop.
+test('A Tab walk carries on while promotions keep rotating, a step at a time', async () => {
+  const promos = Array.from(
+    { length: 4 },
+    (_, r) => `<div id="promo${r}">${[0, 1, 2].map((l) => `<p>Promo ${r} line ${l} v0</p>`).join('')}</div>`,
+  ).join('');
+  const statics = Array.from({ length: 40 }, (_, i) => `<p>Static ${i}</p>`).join('');
+  const buttons = Array.from({ length: 30 }, (_, i) => `<button>Stop ${i + 1}</button>`).join('');
+  const x = await setup(
+    'chromium',
+    `${statics}${promos}${buttons}<button>Target</button><script>let n=0;document.addEventListener('focusin',()=>{n++;const r=n%4;document.querySelector('#promo'+r).innerHTML=[0,1,2].map(l=>'<p>Promo '+r+' line '+l+' v'+n+'</p>').join('');});</script>`,
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'reached', 'rotating copy no longer stops the walk');
+  } finally {
+    await x.close();
+  }
+});
+
+// Owner, 1 Nov: on eDreams a promotion swapped between two Tabs, after the robot's focus note
+// was saved, and the next key was refused; most long walks stopped before their full loop.
+test('After a same-screen focus note, a promotion swap does not block the next Tab', async () => {
+  const x = await setup(
+    'chromium',
+    '<div id="promo"><p>Promo v0</p></div><button>A</button><button>B</button><button>C</button>',
+  );
+  const runner = new Runner(x.app.store, x.app.origin) as any;
+  try {
+    const first = await runner.targetKeyboardStep(x.run, x.walk, x.current, {
+      kind: 'press',
+      key: 'Tab',
+      note: 'First stop',
+    });
+    const note = first.current;
+    assert.equal(note.payload.method, 'keyboard_focus/1');
+    assert.equal(typeof note.payload.screenStateFingerprint, 'string', 'a same-screen note');
+    await x.walk.page.evaluate(() => {
+      document.querySelector('#promo')!.innerHTML = '<p>Promo v1</p>';
+    });
+    const performed = await x.walk.act({ kind: 'press', key: 'Tab', note: 'Next stop' }, note);
+    assert.equal(performed.payload.outcome, 'performed');
+  } finally {
+    await x.close();
+  }
+});
+
+test('A popup opening during a Tab walk still stops it', async () => {
+  const buttons = Array.from({ length: 6 }, (_, i) => `<button>Stop ${i + 1}</button>`).join('');
+  const x = await setup(
+    'chromium',
+    `${buttons}<button>Target</button><script>let n=0;document.addEventListener('focusin',()=>{if(++n===3){const d=document.createElement('div');d.setAttribute('role','dialog');d.setAttribute('aria-label','Sign in');d.textContent='Sign in to save';document.body.appendChild(d);}});</script>`,
+  );
+  try {
+    const result = await walkToKeyboardTarget(
+      x.walk,
+      x.app.store,
+      x.run.id,
+      x.current,
+      seek,
+      x.signal.signal,
+      x.step,
+    );
+    assert.equal(result.outcome, 'changed');
+  } finally {
+    await x.close();
+  }
+});
+
+// Owner, 1 Nov: 23 eDreams walks were refused before any key with no recorded reason.
+test('A refusal before a walk records which part of the page no longer matched', async () => {
+  const x = await setup('chromium', '<button>A</button><button>Target</button>');
+  try {
+    assert.deepEqual(await x.walk.unmatchedParts(x.current), ['nothing visible']);
+    await x.walk.page.evaluate(() => {
+      const d = document.createElement('div');
+      d.setAttribute('role', 'dialog');
+      d.setAttribute('aria-label', 'Offer');
+      d.textContent = 'Special offer';
+      document.body.appendChild(d);
+    });
+    assert((await x.walk.unmatchedParts(x.current)).includes('popups'));
+  } finally {
+    await x.close();
+  }
+});
+
 test('Runner ends navigation after two requested controls in a row cannot be reached', async () => {
   const x = await setup(
     'chromium',

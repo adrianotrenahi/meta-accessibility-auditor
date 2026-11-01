@@ -119,6 +119,9 @@ test('Analyst and reviewer send constrained JSON and pin the exact transmitted i
         // Codex, PR 75: a try that ran out of presses is not keyboard-failure evidence.
         assert.match(body.instructions, /fullCycle false .*not keyboard-failure evidence/);
         assert.match(body.instructions, /must not settle C05 for that screen/);
+        // Owner, 1 Nov: the robot's repeated failure to reach a needed control is reportable.
+        assert.match(body.instructions, /spent the whole decision allowance of a journey step/);
+        assert.match(body.instructions, /do not call it a keyboard failure or settle C05 from it/);
       }
       assert.equal(body.max_output_tokens, 32768);
       assert.equal(body.store, false);
