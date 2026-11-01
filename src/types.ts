@@ -196,16 +196,19 @@ export const CAPS = {
     output: 4096,
     effort: 'low',
   },
+  // Owner, 1 Nov: a Booking.com review ran out of its 8,192 answer space mid-answer and returned
+  // nothing usable. The analyst now settles every check on each screen, and the reviewer
+  // judges each of those answers, so both need more room. Unused space costs nothing.
   analyst: {
     model: 'muse-spark-1.3-contributor',
-    input: MODEL_CONTEXT_TOKENS - 8192,
-    output: 8192,
+    input: MODEL_CONTEXT_TOKENS - 16384,
+    output: 16384,
     effort: 'low',
   },
   reviewer: {
     model: 'muse-spark-1.3-contributor',
-    input: MODEL_CONTEXT_TOKENS - 8192,
-    output: 8192,
+    input: MODEL_CONTEXT_TOKENS - 32768,
+    output: 32768,
     effort: 'medium',
   },
 } as const satisfies Record<
