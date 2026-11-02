@@ -214,3 +214,5 @@ contains every key press, note and check recorded before it (a check-up on the a
 the walk only up to its hand-over). It compares positions and record ids, so an audit copied from
 shared storage, whose records are renumbered, is judged the same way. Their request counts are only backstops (60 and 61, with
 one final review always kept back); the audit's money shares remain the real limit.
+
+When the robot spends a step's whole decision allowance, or several tries, without reaching a control the task needs, the analyst may report what happened as a finding (owner, 1 November: eDreams' date field), for example "the Departure date field was not reached in 32 navigation decisions", with no criterion and without calling it a keyboard failure; only a full Tab loop that never reaches the control proves that. A walk refused before its first key now records which part of the page no longer matched its screenshot (address, popups, focus, focus help, or scroll and document).

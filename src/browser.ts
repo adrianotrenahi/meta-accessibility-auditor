@@ -972,7 +972,7 @@ export class BrowserWalk {
         focusHelp: after.focusHelp,
         stateStamp: digest(JSON.stringify(after)),
         ...(sameScreen
-          ? { screenStateFingerprint: fingerprint }
+          ? { screenStateFingerprint: fingerprint, pageStamp: pageStamp(after) }
           : {
               pageStamp: pageStamp(after),
               comparison: 'page-state-and-bounded-content-drift',
@@ -1013,11 +1013,22 @@ export class BrowserWalk {
     )
       throw Error('Keyboard input needs an intact focus observation and original screen.');
     const state = await this.observedState();
+    // Owner, 1 Nov: on eDreams a promotion swapped behind the search form between two Tabs, so
+    // an exact same-screen note refused the next key and every long walk stopped early. The
+    // next key may still go when only page copy drifted within the bound: same document,
+    // address, scroll, popups and focus (the rule the next key already follows otherwise).
+    const exactScreen =
+      typeof source.payload.screenStateFingerprint === 'string' &&
+      source.payload.stateStamp === digest(JSON.stringify(state)) &&
+      source.payload.screenStateFingerprint ===
+        meaningfulScreenFingerprint(await this.meaningfulObservation(state));
+    const boundedDrift =
+      typeof source.payload.pageStamp === 'string' &&
+      sameForInput(source.payload, state) &&
+      contentSettled(source.payload.aria, state.aria);
     if (
       typeof source.payload.screenStateFingerprint === 'string'
-        ? source.payload.stateStamp !== digest(JSON.stringify(state)) ||
-          source.payload.screenStateFingerprint !==
-            meaningfulScreenFingerprint(await this.meaningfulObservation(state))
+        ? !exactScreen && !boundedDrift
         : !sameForInput(source.payload, state)
     )
       throw new ActionStateChanged('The recorded focus changed before input; refresh first.');
@@ -1043,6 +1054,24 @@ export class BrowserWalk {
       throw new ActionStateChanged(
         'Page state changed; capture a fresh observation before acting.',
       );
+  }
+  /** Which parts of the page no longer match a saved screenshot, for a refusal's record. */
+  async unmatchedParts(source: RecordEntry) {
+    const now = await this.observedState();
+    const saved = source.payload;
+    const parts: string[] = [];
+    if (saved.url !== now.url) parts.push('address');
+    if (!saved.stable) parts.push('screenshot was not stable');
+    if (saved.limits?.controlIdentityChanged) parts.push('control identity');
+    // Only a screenshot records its popups; a focus note leaves them to the page stamp.
+    if (Array.isArray(saved.dialogs) && JSON.stringify(saved.dialogs) !== JSON.stringify(now.dialogs))
+      parts.push('popups');
+    if (JSON.stringify(saved.focusHelp ?? []) !== JSON.stringify(now.focusHelp)) parts.push('focus help');
+    if (JSON.stringify({ ...saved.focus, text: undefined }) !== JSON.stringify({ ...now.focus, text: undefined }))
+      parts.push('focus');
+    if (typeof saved.pageStamp === 'string' && !parts.length && saved.pageStamp !== pageStamp(now))
+      parts.push(Array.isArray(saved.dialogs) ? 'scroll or document' : 'scroll, document or popups');
+    return parts.length ? parts : ['nothing visible'];
   }
   /** Completing an instruction claims what its original shows, so a page whose
    * content was replaced since (same address, scroll, popups and focus) refuses it.
