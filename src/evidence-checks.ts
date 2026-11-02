@@ -51,22 +51,18 @@ export function normalizeMissingEvidence(value: unknown) {
 }
 export type FocusedMethod = MissingEvidenceRequest['method'];
 
-/** Claims a slot before execution, so a failed check is not a free retry. */
+/** Claims a slot before execution, so a failed check is not a free retry. A real screen-reader
+ * check takes no slot: owner, 1 Nov, the screen reader has no limit per audit. It is held to one
+ * check per screen instead (`performFocusedCheck`). The other methods share two slots. */
 export class FocusedCheckBudget {
   private methods: FocusedMethod[];
-  private reserved: number;
-  constructor(options: { reserveVoiceOver?: number; usedMethods?: FocusedMethod[] } = {}) {
-    this.methods = [...(options.usedMethods ?? [])];
-    this.reserved = options.reserveVoiceOver ?? 0;
-    if (
-      !Number.isInteger(this.reserved) ||
-      this.reserved < 0 ||
-      this.reserved > 2 ||
-      this.methods.length > 2 ||
-      this.methods.some((m) => !missingEvidenceSchema.shape.method.safeParse(m).success)
-    )
+  constructor(options: { usedMethods?: FocusedMethod[] } = {}) {
+    const used = options.usedMethods ?? [];
+    if (used.some((m) => !missingEvidenceSchema.shape.method.safeParse(m).success))
+      throw Error('Focused checks must use a supported method.');
+    this.methods = used.filter((m) => m !== 'voiceover');
+    if (this.methods.length > 2)
       throw Error('Focused checks must fit the existing two-check allowance.');
-    this.reserved = Math.min(this.reserved, this.remaining);
   }
   get used() {
     return this.methods.length;
@@ -81,20 +77,19 @@ export class FocusedCheckBudget {
         reason: 'The requested focused method is unsupported.',
         remaining: this.remaining,
       };
+    if (method === 'voiceover')
+      return {
+        allowed: true,
+        reason: 'A real screen-reader check has no limit per audit; it is held to one per screen.',
+        remaining: this.remaining,
+      };
     if (this.remaining === 0)
       return {
         allowed: false,
         reason: 'The two focused checks have already been attempted.',
         remaining: 0,
       };
-    if (method !== 'voiceover' && this.remaining <= this.reserved)
-      return {
-        allowed: false,
-        reason: 'The remaining focused checks are reserved for real VoiceOver.',
-        remaining: this.remaining,
-      };
     this.methods.push(method);
-    if (method === 'voiceover' && this.reserved) this.reserved--;
     return {
       allowed: true,
       reason: 'One existing focused-check slot was reserved before execution.',

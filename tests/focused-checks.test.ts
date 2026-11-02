@@ -159,36 +159,46 @@ function setup(
   };
 }
 
-test('Initial, driver and analyst requests share the same two native-reserved slots', async () => {
+// Owner, 1 Nov: no limit per audit on the real screen reader; one check per screen instead.
+test('Screen-reader checks take no slot and are held to one per screen', async () => {
   const x = setup();
   try {
-    const budget = new FocusedCheckBudget({ reserveVoiceOver: 2 });
-    assert.equal((await x.perform(budget, x.original, x.request('measurement'))).id, x.original.id);
-    assert.equal(budget.used, 0);
-    assert.equal(x.calls.measurement, 0);
+    const budget = new FocusedCheckBudget();
     let current = await x.perform(
       budget,
       x.original,
       x.request('voiceover', x.original, 'Initial native checkpoint.'),
     );
+    // The same screen again (same address, same picture): refused, nothing is read.
     current = await x.perform(
       budget,
       current,
-      x.request('voiceover', current, 'Driver native checkpoint.'),
+      x.request('voiceover', current, 'Driver checkpoint on the unchanged screen.'),
     );
-    await x.perform(
+    assert.equal(x.calls.reader, 1);
+    assert.match(x.checks().at(-1)!.payload.reason, /already read this same screen/);
+    // Focus moved, so the picture differs: a new screen, read again, with no slot spent.
+    const moved = x.store.append(x.run.id, 'capture', 'browser', {
+      ...current.payload,
+      imageHash: 'd'.repeat(64),
+    });
+    current = await x.perform(
       budget,
-      current,
-      x.request('keyboard_focus', current, 'Analyst follow-up request.'),
+      moved,
+      x.request('voiceover', moved, 'Driver checkpoint after focus moved.'),
     );
-    assert.equal(budget.used, 2);
-    assert.equal(budget.remaining, 0);
     assert.equal(x.calls.reader, 2);
-    assert.equal(x.calls.input, 0);
-    assert.equal(x.calls.capture, 2);
-    const refused = x.checks().filter((r) => r.payload.attempted === false);
-    assert.equal(refused.length, 2);
-    assert(refused.every((r) => r.payload.state === 'NOT_TESTED'));
+    assert.equal(budget.used, 0);
+    // The analyst's other checks still share two slots.
+    current = await x.perform(budget, current, x.request('measurement', current));
+    current = await x.perform(budget, current, x.request('keyboard_focus', current));
+    assert.equal(budget.used, 2);
+    await x.perform(budget, current, x.request('measurement', current));
+    assert.equal(x.calls.measurement, 1);
+    assert.match(
+      x.checks().at(-1)!.payload.reason,
+      /two focused checks have already been attempted/,
+    );
     assert.equal(x.store.usage(x.run.id).requests.length, 0);
   } finally {
     x.close();
@@ -224,10 +234,11 @@ test('Failed execution consumes its slot; unavailable VoiceOver never becomes ob
     assert.equal(budget.used, 1);
     let current = await x.perform(budget, x.original, x.request('voiceover'));
     await x.perform(budget, current, x.request('keyboard_focus', current));
+    // The screen-reader check took no slot, so the keyboard check takes the second one.
     assert.equal(budget.used, 2);
     assert.equal(x.calls.measurement, 1);
     assert.equal(x.calls.reader, 1);
-    assert.equal(x.calls.input, 0);
+    assert.equal(x.calls.input, 1);
     const result = x
       .checks()
       .findLast((r) => r.payload.method === 'voiceover' && r.payload.state !== 'attempted')!;
@@ -241,10 +252,10 @@ test('Failed execution consumes its slot; unavailable VoiceOver never becomes ob
   }
 });
 
-test('A reader unavailable before execution preserves its reserved slot', async () => {
+test('A reader unavailable before execution reads nothing and spends nothing', async () => {
   const x = setup();
   try {
-    const budget = new FocusedCheckBudget({ reserveVoiceOver: 2 });
+    const budget = new FocusedCheckBudget();
     await x.perform(budget, x.original, x.request('voiceover'), false);
     assert.equal(budget.used, 0);
     assert.equal(x.calls.reader, 0);
